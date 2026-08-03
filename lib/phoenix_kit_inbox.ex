@@ -1,0 +1,296 @@
+defmodule PhoenixKitInbox do
+  @moduledoc """
+  Internal mailbox for PhoenixKit — an in-app email client for messages between
+  the users of your application.
+
+  The UI is the familiar three-pane webmail layout (folders, message list,
+  reading pane) and the data model is the familiar one too: a message is stored
+  once and delivered as one row per recipient mailbox, so read/starred/foldered
+  state is per-person.
+
+  ## What it is, and isn't
+
+  Inbox is **internal**. Messages are addressed to mailboxes inside this
+  application; nothing is fetched over IMAP and nothing is relayed to the
+  outside world. What it *can* do, when the host also runs
+  `phoenix_kit_emails`, is send a short "you have a new message" nudge to a
+  recipient's real email address — a soft, `Code.ensure_loaded?/1`-guarded
+  integration with no dependency in `mix.exs`, off by default behind the
+  `inbox_email_nudges_enabled` setting. See `PhoenixKitInbox.Notify`.
+
+  If you want outbound campaign email, that's `phoenix_kit_newsletters`; for
+  delivery tracking and SES integration, `phoenix_kit_emails`; for customer
+  ticketing, `phoenix_kit_customer_support`. Inbox is the messages your users
+  send each other.
+
+  ## Mailboxes
+
+  Every user gets one **personal** mailbox, created lazily on first visit.
+  Admins can also create **shared** mailboxes (`support`, `sales`, …) and grant
+  other users `read` / `write` / `admin` access to them — the same
+  own-it-or-be-granted-it model `phoenix_kit_calendar` uses for calendars. The
+  module-level `"inbox"` permission decides who can open Inbox at all; grants
+  decide which mailboxes they see inside it.
+
+  ## Database
+
+  Unlike older PhoenixKit modules, Inbox **owns its migrations**. Tables are
+  created by `PhoenixKitInbox.Migrations` (returned from `migration_module/0`)
+  and applied by `mix phoenix_kit.update`, not by a versioned migration in core.
+  Nothing has to be released in `phoenix_kit` for this module's schema to
+  change.
+
+  ## Installation
+
+      # mix.exs
+      {:phoenix_kit_inbox, "~> 0.1"}
+
+  Then `mix deps.get` and `mix phoenix_kit.update`. PhoenixKit auto-discovers
+  the module at startup — the tab appears in the admin sidebar and the Modules
+  page with no config.
+  """
+
+  use PhoenixKit.Module
+
+  alias PhoenixKit.Dashboard.Tab
+  alias PhoenixKit.Settings
+
+  @settings_key "inbox_enabled"
+  @nudges_settings_key "inbox_email_nudges_enabled"
+
+  # ===========================================================================
+  # Required callbacks
+  # ===========================================================================
+
+  @impl PhoenixKit.Module
+  @doc "Unique key for this module. Used in settings, permissions, and PubSub events."
+  def module_key, do: "inbox"
+
+  @impl PhoenixKit.Module
+  @doc "Display name shown in the admin UI."
+  def module_name, do: "Inbox"
+
+  @impl PhoenixKit.Module
+  @doc """
+  Whether the module is currently enabled.
+
+  Defensive on purpose: `enabled?/0` is called during startup and route
+  compilation, before the DB is guaranteed to be up. Every failure mode
+  (missing table, dead pool, sandbox owner gone) returns `false` so callers
+  never have to special-case boot ordering.
+  """
+  def enabled? do
+    Settings.get_boolean_setting(@settings_key, false)
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  @impl PhoenixKit.Module
+  @doc "Enables the module."
+  def enable_system do
+    Settings.update_boolean_setting_with_module(@settings_key, true, module_key())
+  end
+
+  @impl PhoenixKit.Module
+  @doc "Disables the module."
+  def disable_system do
+    Settings.update_boolean_setting_with_module(@settings_key, false, module_key())
+  end
+
+  # ===========================================================================
+  # Optional callbacks
+  # ===========================================================================
+
+  @impl PhoenixKit.Module
+  @doc "Version string. Shown on the admin Modules page."
+  def version, do: "0.1.0"
+
+  @impl PhoenixKit.Module
+  @doc """
+  Module-owned versioned migrations.
+
+  This is the callback that keeps Inbox's DDL out of core. `mix
+  phoenix_kit.update` reads it, compares the installed version against
+  `PhoenixKitInbox.Migrations.current_version/0`, and generates a host
+  migration when behind.
+  """
+  def migration_module, do: PhoenixKitInbox.Migrations
+
+  @impl PhoenixKit.Module
+  @doc """
+  Permission metadata for the roles/permissions matrix.
+
+  The `:key` MUST match `module_key/0` — PhoenixKit validates this at startup.
+  """
+  def permission_metadata do
+    %{
+      key: module_key(),
+      label: "Inbox",
+      icon: "hero-inbox-arrow-down",
+      description: "Internal mailboxes — send and receive messages between users"
+    }
+  end
+
+  @impl PhoenixKit.Module
+  @doc """
+  Admin sidebar tabs.
+
+  Three visible pages plus one hidden route for the compose view. Folder
+  navigation is **not** a tab per folder — the mailbox is a single LiveView and
+  folders are query params, so switching folders is a `push_patch` rather than
+  a remount (see `PhoenixKitInbox.Paths.inbox/1`).
+  """
+  def admin_tabs do
+    [
+      %Tab{
+        id: :admin_inbox,
+        label: "Inbox",
+        icon: "hero-inbox-arrow-down",
+        path: "inbox",
+        priority: 645,
+        level: :admin,
+        permission: module_key(),
+        match: :prefix,
+        group: :admin_modules,
+        subtab_display: :when_active,
+        highlight_with_subtabs: false,
+        live_view: {PhoenixKitInbox.Web.InboxLive, :index}
+      },
+      %Tab{
+        id: :admin_inbox_messages,
+        label: "Messages",
+        icon: "hero-envelope",
+        path: "inbox",
+        priority: 646,
+        level: :admin,
+        permission: module_key(),
+        match: :exact,
+        parent: :admin_inbox,
+        live_view: {PhoenixKitInbox.Web.InboxLive, :index}
+      },
+      # Hidden: reachable from the "New message" button, not the sidebar.
+      %Tab{
+        id: :admin_inbox_compose,
+        label: "Compose",
+        icon: "hero-pencil-square",
+        path: "inbox/compose",
+        priority: 647,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_inbox,
+        visible: false,
+        live_view: {PhoenixKitInbox.Web.ComposeLive, :new}
+      },
+      %Tab{
+        id: :admin_inbox_mailboxes,
+        label: "Mailboxes",
+        icon: "hero-user-group",
+        path: "inbox/mailboxes",
+        priority: 648,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_inbox,
+        live_view: {PhoenixKitInbox.Web.MailboxesLive, :index}
+      }
+    ]
+  end
+
+  @impl PhoenixKit.Module
+  @doc "OTP apps whose templates Tailwind should scan for CSS classes."
+  def css_sources, do: [:phoenix_kit_inbox]
+
+  @impl PhoenixKit.Module
+  @doc """
+  Notification types this module contributes.
+
+  One toggle: a user who mutes "Inbox" stops getting in-app notifications for
+  new messages. The `actions` list must match the action strings
+  `PhoenixKitInbox.Notify` emits.
+  """
+  def notification_types do
+    [
+      %{
+        key: "inbox",
+        label: "Inbox",
+        description: "New messages in your mailboxes",
+        actions: ["inbox.message_received"],
+        default: true
+      }
+    ]
+  end
+
+  @impl PhoenixKit.Module
+  @doc "Stats shown on the admin Modules page."
+  def get_config do
+    %{
+      enabled: enabled?(),
+      email_nudges: email_nudges_enabled?(),
+      email_nudges_available: PhoenixKitInbox.Notify.email_nudges_available?()
+    }
+  rescue
+    _ -> %{enabled: false}
+  end
+
+  # ===========================================================================
+  # Settings
+  # ===========================================================================
+
+  @doc """
+  Whether new-message email nudges are on.
+
+  Off by default. The nudge only fires when it is on **and** the host also runs
+  `phoenix_kit_emails` — see `PhoenixKitInbox.Notify`.
+  """
+  @spec email_nudges_enabled?() :: boolean()
+  def email_nudges_enabled? do
+    Settings.get_boolean_setting(@nudges_settings_key, false)
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  @doc "Turns the new-message email nudge on or off."
+  @spec set_email_nudges(boolean()) :: term()
+  def set_email_nudges(enabled) when is_boolean(enabled) do
+    Settings.update_boolean_setting_with_module(@nudges_settings_key, enabled, module_key())
+  end
+
+  # ===========================================================================
+  # Cross-module integration
+  # ===========================================================================
+
+  @doc """
+  Resolves Inbox messages for `phoenix_kit_comments`' moderation admin, so a
+  comment attached to a message links back to it.
+
+  Registered by the host:
+
+      config :phoenix_kit, :comment_resource_handlers, %{
+        "inbox_message" => PhoenixKitInbox
+      }
+  """
+  @spec resolve_comment_resources([binary()]) :: %{binary() => map()}
+  def resolve_comment_resources(uuids) when is_list(uuids) do
+    import Ecto.Query
+
+    from(m in PhoenixKitInbox.Schemas.Message,
+      where: m.uuid in ^uuids,
+      select: {m.uuid, m.subject, m.sender_mailbox_uuid}
+    )
+    |> PhoenixKit.RepoHelper.repo().all()
+    |> Map.new(fn {uuid, subject, mailbox_uuid} ->
+      {uuid,
+       %{
+         title: subject || "(no subject)",
+         path: PhoenixKitInbox.Paths.raw_message_path(mailbox_uuid, uuid)
+       }}
+    end)
+  rescue
+    _ -> %{}
+  end
+
+  def resolve_comment_resources(_), do: %{}
+end
