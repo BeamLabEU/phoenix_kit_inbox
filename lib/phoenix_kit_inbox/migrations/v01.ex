@@ -258,8 +258,18 @@ defmodule PhoenixKitInbox.Migrations.V01 do
     end
 
     # The folder listing query: mailbox + folder, newest first.
+    #
+    # Explicit name: the derived one
+    # (`phoenix_kit_inbox_deliveries_mailbox_uuid_folder_inserted_at_index`) is
+    # 66 characters, past Postgres' 63-character identifier limit, so the
+    # server silently truncated it and logged a warning on every install.
+    # Truncation is applied consistently on CREATE and DROP so nothing broke —
+    # but the name it produced was neither predictable nor greppable.
     create_if_not_exists(
-      index(:phoenix_kit_inbox_deliveries, [:mailbox_uuid, :folder, :inserted_at], prefix: prefix)
+      index(:phoenix_kit_inbox_deliveries, [:mailbox_uuid, :folder, :inserted_at],
+        name: :phoenix_kit_inbox_deliveries_folder_index,
+        prefix: prefix
+      )
     )
 
     # Unseen counts for the sidebar badges.

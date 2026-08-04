@@ -92,6 +92,12 @@ defmodule PhoenixKitInbox.Migrations do
   Runtime-safe version of `migrated_version/1` — uses PhoenixKit's configured
   repo instead of the `Ecto.Migration` `repo()` helper, so it can be called
   from Mix tasks and other non-migration contexts (`mix phoenix_kit.update`).
+
+  Returns `0` on any failure. `catch :exit` matters as much as `rescue` here: a
+  dead or unstarted connection pool **exits** rather than raising, and this
+  function is called by `mix phoenix_kit.status` / `mix phoenix_kit.update`
+  across every installed module — an uncaught exit from one coordinator takes
+  the whole report down with it.
   """
   @spec migrated_version_runtime(keyword()) :: non_neg_integer()
   def migrated_version_runtime(opts \\ []) do
@@ -99,6 +105,8 @@ defmodule PhoenixKitInbox.Migrations do
     read_version(PhoenixKit.RepoHelper.repo(), opts.escaped_prefix)
   rescue
     _ -> 0
+  catch
+    :exit, _ -> 0
   end
 
   # ── internals ───────────────────────────────────────────────────────────────

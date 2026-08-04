@@ -38,4 +38,22 @@ Initial release.
   `mix phoenix_kit.update`. This module's schema does not live in core's
   versioned chain and does not require a core release to change.
 
+  `migrated_version_runtime/1` catches `:exit` as well as rescuing — a dead
+  connection pool exits rather than raising, and this function is called by
+  `mix phoenix_kit.status` across every installed module, so an uncaught exit
+  from one coordinator would take the whole report down.
+
+- **Identifier-length conformance test** (`test/identifier_length_conformance_test.exs`)
+  — fails the build when a migration would create a database identifier longer
+  than Postgres' 63-character limit. Postgres does not reject those, it
+  silently truncates and logs a notice, which leaves a name that is neither
+  what the code says nor stable across hosts.
+
+  The delivery folder index was the motivating case:
+  `phoenix_kit_inbox_deliveries_mailbox_uuid_folder_inserted_at_index` is 66
+  characters. It now has an explicit `name:`. The test checks explicit names
+  *and* reconstructs the `<table>_<cols>_index` names Ecto derives for unnamed
+  indexes, which is where the bug came from — nobody counts characters on a
+  composite index over a long table name.
+
 [0.1.0]: https://github.com/BeamLabEU/phoenix_kit_inbox/releases/tag/0.1.0
