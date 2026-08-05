@@ -23,6 +23,28 @@ Initial release.
   uuid stays stable for anything already linking to them.
 - **Search** — case-insensitive over subject and body, plus an unseen-only
   filter.
+- **Recipient resolution accepts usernames, emails, and shared mailbox names**,
+  and reaches users who have never opened Inbox.
+
+  Resolution originally matched a mailbox's `address` or `slug` only. A
+  personal mailbox's slug is `"u-" <> uuid` and the username lives on the user
+  record, never on the mailbox — so typing a colleague's username resolved to
+  nothing while their full email worked, with no hint which was expected.
+  Worse, personal mailboxes are created lazily on first visit, so a user who
+  had not yet clicked into Inbox had no mailbox row at all and was
+  unaddressable by *any* spelling.
+
+  `fetch_mailbox_by_recipient/1` now falls back to an active-user lookup by
+  username or email and creates that user's mailbox on demand, so an account is
+  reachable from the moment it exists. Shared mailboxes also resolve by display
+  name, not only by derived slug.
+
+- **Compose suggests recipients.** To/Cc/Bcc are backed by a `<datalist>`
+  populated from `Mailboxes.search_recipients/3`, which covers users *and*
+  shared mailboxes — including users with no mailbox yet, which is exactly when
+  a suggestion is most needed. A plain datalist rather than a JS picker: no
+  hook to register and it survives `navigate/2`, which an inline `<script>`
+  would not.
 - **Admin UI** — `Web.InboxLive` (three-pane mailbox, patched navigation),
   `Web.ComposeLive`, `Web.MailboxesLive` (shared mailboxes and grants).
 - **Notifications** — a delivered message raises an `inbox.message_received`

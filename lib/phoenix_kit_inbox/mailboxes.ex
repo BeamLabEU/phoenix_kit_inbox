@@ -87,50 +87,190 @@ defmodule PhoenixKitInbox.Mailboxes do
   end
 
   @doc """
-  Resolves a mailbox for an address or slug, for the compose recipient picker.
+  Resolves what someone typed in a To/Cc/Bcc field to a mailbox.
 
-  Accepts either form because users type both: `"support"` (the slug of a
-  shared mailbox) and `"alice@example.com"` (a personal mailbox's address).
+  Accepted, case-insensitively:
+
+    * a mailbox `address` — `"alice@example.com"`
+    * a shared mailbox `slug` or `name` — `"support"` or `"Customer Support"`
+    * a **username** — `"alice"`
+    * a user's login **email**, even if they have no mailbox yet
+
+  ## Why users are looked up, not just mailboxes
+
+  Two things were wrong when this only queried `phoenix_kit_inbox_mailboxes`
+  on `address`/`slug`:
+
+    1. A username matched nothing. It lives on the user record and was never
+       copied onto the mailbox, so `"alice"` was unresolvable while
+       `"alice@example.com"` worked — with no hint which was expected.
+    2. Personal mailboxes are created lazily on first visit to Inbox, so a user
+       who had never opened the page had no mailbox row and was unaddressable
+       by *any* spelling. You could not message a colleague until they happened
+       to click the tab.
+
+  Falling back to a user lookup fixes both: an account is reachable from the
+  moment it exists, and its mailbox is created here, on demand, when the first
+  message is addressed to it. That write happens outside the send transaction
+  (`Messages.send_message/3` resolves recipients before opening it), so a send
+  that later fails leaves behind only a mailbox the user would have got on
+  their next visit anyway.
   """
   @spec fetch_mailbox_by_recipient(String.t()) ::
           {:ok, Mailbox.t()} | {:error, :recipient_not_found}
   def fetch_mailbox_by_recipient(term) when is_binary(term) do
     normalized = term |> String.trim() |> String.downcase()
 
-    query =
-      from(m in Mailbox,
-        where: m.status == "active",
-        where: m.address == ^normalized or m.slug == ^normalized,
-        limit: 1
-      )
-
-    case repo().one(query) do
-      nil -> {:error, :recipient_not_found}
-      mailbox -> {:ok, mailbox}
+    if normalized == "" do
+      {:error, :recipient_not_found}
+    else
+      case existing_mailbox_for(normalized) do
+        nil -> mailbox_for_user(normalized)
+        mailbox -> {:ok, mailbox}
+      end
     end
   end
 
   def fetch_mailbox_by_recipient(_), do: {:error, :recipient_not_found}
 
-  @doc """
-  Suggests mailboxes matching a partial name/slug/address, for recipient
-  autocomplete. Capped — this runs on every keystroke.
-  """
-  @spec search_mailboxes(binary(), String.t(), keyword()) :: [Mailbox.t()]
-  def search_mailboxes(user_uuid, term, opts \\ [])
-
-  def search_mailboxes(user_uuid, term, opts) when is_binary(user_uuid) and is_binary(term) do
-    limit = Keyword.get(opts, :limit, 10)
-    pattern = "%#{term |> String.trim() |> String.downcase()}%"
-
+  # `name` is matched too so a shared mailbox can be addressed the way it is
+  # displayed ("Customer Support"), not only by its derived slug.
+  defp existing_mailbox_for(normalized) do
     from(m in Mailbox,
       where: m.status == "active",
-      where: m.owner_uuid != ^user_uuid or m.kind == "shared",
-      where: ilike(m.name, ^pattern) or ilike(m.slug, ^pattern) or ilike(m.address, ^pattern),
-      order_by: [asc: m.name],
-      limit: ^limit
+      where:
+        m.address == ^normalized or m.slug == ^normalized or
+          fragment("lower(?)", m.name) == ^normalized,
+      limit: 1
     )
+    |> repo().one()
+  end
+
+  defp mailbox_for_user(normalized) do
+    case find_active_user(normalized) do
+      nil ->
+        {:error, :recipient_not_found}
+
+      user ->
+        case ensure_user_mailbox(user) do
+          {:ok, mailbox} -> {:ok, mailbox}
+          # Creation failed (e.g. the address collides with a shared mailbox).
+          # Report it as unresolvable rather than leaking a changeset into a
+          # recipient list.
+          {:error, _reason} -> {:error, :recipient_not_found}
+        end
+    end
+  end
+
+  # `lower/1` on both sides rather than `ilike`: this is an equality match, and
+  # core stores emails as citext while `username` is a plain string.
+  defp find_active_user(normalized) do
+    from(u in User,
+      where: u.is_active == true,
+      where:
+        fragment("lower(?)", u.username) == ^normalized or
+          fragment("lower(?)", u.email) == ^normalized,
+      order_by: [asc: u.inserted_at],
+      limit: 1
+    )
+    |> repo().one()
+  end
+
+  @doc """
+  Addressable recipients, for the compose field's suggestion list.
+
+  Returns `%{handle: String.t(), label: String.t()}` — `handle` is what goes in
+  the To field and is guaranteed to resolve through
+  `fetch_mailbox_by_recipient/1`; `label` is the human description shown beside
+  it.
+
+  Covers **shared mailboxes and users**, not just existing mailboxes. Searching
+  only mailboxes is what made this useless: a colleague who had never opened
+  Inbox had no mailbox row and so never appeared, which is exactly the case
+  where a suggestion is most needed.
+
+  Usernames are preferred as the handle because they are what people know each
+  other by; the email is shown in the label so an ambiguous display name can
+  still be told apart.
+  """
+  @spec search_recipients(binary(), String.t(), keyword()) :: [
+          %{handle: String.t(), label: String.t()}
+        ]
+  def search_recipients(user_uuid, term \\ "", opts \\ [])
+
+  def search_recipients(user_uuid, term, opts) when is_binary(user_uuid) do
+    limit = Keyword.get(opts, :limit, 20)
+
+    shared = shared_mailbox_suggestions(term, limit)
+    users = user_suggestions(user_uuid, term, limit)
+
+    (shared ++ users) |> Enum.uniq_by(& &1.handle) |> Enum.take(limit)
+  end
+
+  def search_recipients(_, _, _), do: []
+
+  defp shared_mailbox_suggestions(term, limit) do
+    query =
+      from(m in Mailbox,
+        where: m.status == "active" and m.kind == "shared",
+        order_by: [asc: m.name],
+        limit: ^limit
+      )
+
+    query
+    |> filter_by_term(term, fn q, pattern ->
+      where(
+        q,
+        [m],
+        ilike(m.name, ^pattern) or ilike(m.slug, ^pattern) or ilike(m.address, ^pattern)
+      )
+    end)
     |> repo().all()
+    |> Enum.map(&%{handle: &1.slug, label: "#{&1.name} (shared mailbox)"})
+  end
+
+  # The sender is excluded — a To field offering you yourself is noise, and
+  # messaging yourself is still possible by typing the handle.
+  defp user_suggestions(user_uuid, term, limit) do
+    query =
+      from(u in User,
+        where: u.is_active == true and u.uuid != ^user_uuid,
+        order_by: [asc: u.username],
+        limit: ^limit
+      )
+
+    query
+    |> filter_by_term(term, fn q, pattern ->
+      where(
+        q,
+        [u],
+        ilike(u.username, ^pattern) or ilike(u.email, ^pattern) or
+          ilike(u.first_name, ^pattern) or ilike(u.last_name, ^pattern)
+      )
+    end)
+    |> repo().all()
+    |> Enum.map(fn user ->
+      %{handle: user.username || user.email, label: suggestion_label(user)}
+    end)
+    |> Enum.reject(&is_nil(&1.handle))
+  end
+
+  defp suggestion_label(user) do
+    name = user_display_name(user)
+
+    case user.email do
+      nil -> name
+      email -> if name == email, do: email, else: "#{name} — #{email}"
+    end
+  end
+
+  # A blank term lists everything (up to the cap) rather than nothing, so the
+  # suggestion list is useful before the first keystroke.
+  defp filter_by_term(query, term, apply_filter) do
+    case String.trim(to_string(term)) do
+      "" -> query
+      trimmed -> apply_filter.(query, "%#{trimmed}%")
+    end
   end
 
   def search_mailboxes(_, _, _), do: []

@@ -30,8 +30,15 @@ defmodule PhoenixKitInbox.Errors do
   def message(:cannot_archive_personal_mailbox),
     do: gettext("Personal mailboxes can't be archived.")
 
+  # Names the accepted forms. The bare "No mailbox matches: fotkin" left the
+  # sender guessing whether the name was wrong, the person had no account, or
+  # some other spelling was expected — and a username was in fact the one form
+  # that never resolved.
   def message({:unknown_recipients, recipients}) do
-    gettext("No mailbox matches: %{recipients}", recipients: Enum.join(recipients, ", "))
+    gettext(
+      "No recipient matches: %{recipients}. Use a username, an email address, or a shared mailbox name.",
+      recipients: Enum.join(recipients, ", ")
+    )
   end
 
   def message(%Ecto.Changeset{} = changeset) do

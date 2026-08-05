@@ -187,6 +187,149 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
       assert {:error, :recipient_not_found} = Mailboxes.fetch_mailbox_by_recipient("old-desk")
     end
+
+    test "a shared mailbox resolves by its display name, not only its slug" do
+      owner = user_fixture()
+      {:ok, shared} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Customer Support"})
+
+      assert {:ok, %{uuid: uuid}} = Mailboxes.fetch_mailbox_by_recipient("Customer Support")
+      assert uuid == shared.uuid
+      assert {:ok, %{uuid: ^uuid}} = Mailboxes.fetch_mailbox_by_recipient("customer support")
+    end
+
+    test "a username resolves — the case that reported 'no mailbox matches'" do
+      user = user_fixture(%{username: "fotkin", email: "fotkin@example.com"})
+      {:ok, mailbox} = Mailboxes.ensure_user_mailbox(user)
+
+      assert {:ok, %{uuid: uuid}} = Mailboxes.fetch_mailbox_by_recipient("fotkin")
+      assert uuid == mailbox.uuid
+    end
+
+    test "a username resolves case-insensitively and ignores surrounding space" do
+      user = user_fixture(%{username: "fotkin", email: "fotkin@example.com"})
+      {:ok, mailbox} = Mailboxes.ensure_user_mailbox(user)
+
+      for typed <- ["FOTKIN", "Fotkin", "  fotkin  "] do
+        assert {:ok, %{uuid: uuid}} = Mailboxes.fetch_mailbox_by_recipient(typed),
+               "#{inspect(typed)} did not resolve"
+
+        assert uuid == mailbox.uuid
+      end
+    end
+
+    test "a user who has never opened Inbox is still addressable" do
+      # The mailbox is created lazily on first visit, so before this fix a
+      # colleague who had not clicked the tab was unreachable by ANY spelling.
+      user = user_fixture(%{username: "newcomer", email: "newcomer@example.com"})
+
+      assert Mailboxes.list_accessible_mailboxes(user.uuid) == []
+
+      assert {:ok, mailbox} = Mailboxes.fetch_mailbox_by_recipient("newcomer")
+      assert mailbox.owner_uuid == user.uuid
+      assert mailbox.kind == "user"
+    end
+
+    test "resolving the same absent user twice returns one mailbox, not two" do
+      user = user_fixture(%{username: "newcomer2", email: "newcomer2@example.com"})
+
+      assert {:ok, first} = Mailboxes.fetch_mailbox_by_recipient("newcomer2")
+      assert {:ok, second} = Mailboxes.fetch_mailbox_by_recipient("newcomer2@example.com")
+
+      assert first.uuid == second.uuid
+    end
+
+    test "an email resolves for a user with no mailbox yet" do
+      user = user_fixture(%{username: "byemail", email: "byemail@example.com"})
+
+      assert {:ok, mailbox} = Mailboxes.fetch_mailbox_by_recipient("ByEmail@example.com")
+      assert mailbox.owner_uuid == user.uuid
+    end
+
+    test "an inactive user is not addressable" do
+      user_fixture(%{username: "retired", email: "retired@example.com", is_active: false})
+
+      assert {:error, :recipient_not_found} = Mailboxes.fetch_mailbox_by_recipient("retired")
+    end
+
+    test "a blank term never resolves" do
+      for typed <- ["", "   "] do
+        assert {:error, :recipient_not_found} = Mailboxes.fetch_mailbox_by_recipient(typed)
+      end
+    end
+  end
+
+  describe "search_recipients/3 (compose suggestions)" do
+    test "offers users who have no mailbox yet" do
+      me = user_fixture()
+      them = user_fixture(%{username: "suggestme", email: "suggestme@example.com"})
+
+      handles = me.uuid |> Mailboxes.search_recipients() |> Enum.map(& &1.handle)
+
+      assert "suggestme" in handles
+      assert Mailboxes.list_accessible_mailboxes(them.uuid) == []
+    end
+
+    test "every suggested handle actually resolves" do
+      me = user_fixture()
+      user_fixture(%{username: "resolvable", email: "resolvable@example.com"})
+      {:ok, _} = Mailboxes.create_shared_mailbox(me.uuid, %{name: "Helpdesk"})
+
+      for %{handle: handle} <- Mailboxes.search_recipients(me.uuid) do
+        assert {:ok, _mailbox} = Mailboxes.fetch_mailbox_by_recipient(handle),
+               "suggested handle #{inspect(handle)} does not resolve"
+      end
+    end
+
+    test "does not suggest the sender to themselves" do
+      me = user_fixture(%{username: "myself", email: "myself@example.com"})
+
+      handles = me.uuid |> Mailboxes.search_recipients() |> Enum.map(& &1.handle)
+
+      refute "myself" in handles
+    end
+
+    test "filters on username, email and name" do
+      me = user_fixture()
+
+      user_fixture(%{
+        username: "zzfindme",
+        email: "zzfindme@example.com",
+        first_name: "Zaphod",
+        last_name: "Beeblebrox"
+      })
+
+      for term <- ["zzfindme", "zzfindme@exam", "Zaphod", "Beeblebrox"] do
+        handles = me.uuid |> Mailboxes.search_recipients(term) |> Enum.map(& &1.handle)
+        assert "zzfindme" in handles, "term #{inspect(term)} did not surface the user"
+      end
+    end
+
+    test "shared mailboxes are offered by slug and labelled as shared" do
+      me = user_fixture()
+      {:ok, _} = Mailboxes.create_shared_mailbox(me.uuid, %{name: "Night Desk"})
+
+      suggestion =
+        me.uuid
+        |> Mailboxes.search_recipients("night")
+        |> Enum.find(&(&1.handle == "night-desk"))
+
+      assert suggestion
+      assert suggestion.label =~ "shared mailbox"
+    end
+
+    test "a blank term lists candidates rather than nothing" do
+      me = user_fixture()
+      user_fixture(%{username: "listed", email: "listed@example.com"})
+
+      assert me.uuid |> Mailboxes.search_recipients("") |> length() > 0
+    end
+
+    test "respects the limit" do
+      me = user_fixture()
+      for _ <- 1..5, do: user_fixture()
+
+      assert me.uuid |> Mailboxes.search_recipients("", limit: 2) |> length() <= 2
+    end
   end
 
   describe "user_display_name/1" do

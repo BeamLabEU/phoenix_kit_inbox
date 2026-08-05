@@ -44,10 +44,24 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       |> assign(:draft_uuid, nil)
       |> assign(:parent_uuid, nil)
       |> assign(:saving, false)
+      |> assign(:recipients, recipient_suggestions(user))
       |> assign(:form, to_form(blank_params()))
 
     {:ok, socket}
   end
+
+  # Loaded once at mount, not per keystroke. The list is every addressable user
+  # plus every shared mailbox, which is small enough to hand to the browser
+  # whole — a <datalist> then filters client-side with no round trip. If an
+  # installation ever grows past the cap, this becomes a phx-change lookup
+  # against the same `Mailboxes.search_recipients/3`.
+  defp recipient_suggestions(%{uuid: uuid}) when is_binary(uuid) do
+    Mailboxes.search_recipients(uuid, "", limit: 200)
+  rescue
+    _ -> []
+  end
+
+  defp recipient_suggestions(_), do: []
 
   # Only mailboxes the user can actually send as show up in the From picker —
   # listing a read-only shared mailbox there would produce a send that fails
@@ -288,6 +302,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         form={@form}
         mailbox={@mailbox}
         mailboxes={@mailboxes}
+        recipients={@recipients}
         draft_uuid={@draft_uuid}
         back={back_path(assigns)}
       />
@@ -298,6 +313,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   attr(:form, :any, required: true)
   attr(:mailbox, :any, required: true)
   attr(:mailboxes, :list, required: true)
+  attr(:recipients, :list, required: true)
   attr(:draft_uuid, :any, required: true)
   attr(:back, :string, required: true)
 
@@ -321,10 +337,30 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
             field={@form[:to]}
             type="text"
             label={gettext_str("To")}
-            placeholder={gettext_str("Mailbox name or address, comma separated")}
+            placeholder={gettext_str("Username, email or shared mailbox — comma separated")}
+            list="phoenix-kit-inbox-recipients"
           />
-          <.input field={@form[:cc]} type="text" label={gettext_str("Cc")} />
-          <.input field={@form[:bcc]} type="text" label={gettext_str("Bcc")} />
+          <.input
+            field={@form[:cc]}
+            type="text"
+            label={gettext_str("Cc")}
+            list="phoenix-kit-inbox-recipients"
+          />
+          <.input
+            field={@form[:bcc]}
+            type="text"
+            label={gettext_str("Bcc")}
+            list="phoenix-kit-inbox-recipients"
+          />
+
+          <%!-- A plain <datalist> rather than a JS-driven picker: no hook to
+                register, works when the page is reached via navigate/2, and the
+                browser handles filtering. One list serves all three fields. --%>
+          <datalist id="phoenix-kit-inbox-recipients">
+            <option :for={recipient <- @recipients} value={recipient.handle}>
+              {recipient.label}
+            </option>
+          </datalist>
           <.input field={@form[:subject]} type="text" label={gettext_str("Subject")} />
           <.textarea field={@form[:body]} label={gettext_str("Message")} rows="14" />
 
