@@ -1,7 +1,7 @@
 defmodule PhoenixKitInbox.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_inbox"
 
   def project do
@@ -82,7 +82,7 @@ defmodule PhoenixKitInbox.MixProject do
       # PhoenixKit provides the Module behaviour, Settings API, RepoHelper, and
       # the migration helpers this module's own versioned migrations call into
       # (PhoenixKit.Migrations.Postgres.Helpers).
-      pk_dep(:phoenix_kit, "~> 1.7.214"),
+      pk_dep(:phoenix_kit, "~> 2.0"),
 
       # LiveView for the admin mailbox UI.
       {:phoenix_live_view, "~> 1.1"},

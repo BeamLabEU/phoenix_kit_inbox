@@ -39,7 +39,7 @@ Neighbouring modules, so you pick the right one:
 ```elixir
 def deps do
   [
-    {:phoenix_kit_inbox, "~> 0.1"}
+    {:phoenix_kit_inbox, "~> 0.2"}
   ]
 end
 ```

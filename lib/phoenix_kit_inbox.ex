@@ -43,7 +43,7 @@ defmodule PhoenixKitInbox do
   ## Installation
 
       # mix.exs
-      {:phoenix_kit_inbox, "~> 0.1"}
+      {:phoenix_kit_inbox, "~> 0.2"}
 
   Then `mix deps.get` and `mix phoenix_kit.update`. PhoenixKit auto-discovers
   the module at startup — the tab appears in the admin sidebar and the Modules
@@ -105,7 +105,7 @@ defmodule PhoenixKitInbox do
 
   @impl PhoenixKit.Module
   @doc "Version string. Shown on the admin Modules page."
-  def version, do: "0.1.0"
+  def version, do: "0.2.0"
 
   @impl PhoenixKit.Module
   @doc """

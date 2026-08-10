@@ -18,7 +18,7 @@ defmodule PhoenixKitInboxTest do
   end
 
   test "version matches mix.exs" do
-    assert PhoenixKitInbox.version() == "0.1.0"
+    assert PhoenixKitInbox.version() == "0.2.0"
   end
 
   test "permission_metadata key matches module_key (validated by core at startup)" do
