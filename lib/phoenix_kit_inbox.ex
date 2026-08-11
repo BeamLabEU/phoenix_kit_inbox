@@ -105,7 +105,7 @@ defmodule PhoenixKitInbox do
 
   @impl PhoenixKit.Module
   @doc "Version string. Shown on the admin Modules page."
-  def version, do: "0.2.0"
+  def version, do: "0.2.1"
 
   @impl PhoenixKit.Module
   @doc """
