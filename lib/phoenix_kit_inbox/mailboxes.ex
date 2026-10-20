@@ -22,12 +22,15 @@ defmodule PhoenixKitInbox.Mailboxes do
 
   import Ecto.Query
 
+  alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Users.Auth.User
   alias PhoenixKitInbox.Schemas.Delivery
   alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.MailboxGrant
 
   @type access :: String.t()
+
+  @manage_shared "inbox.manage_shared"
 
   defp repo, do: PhoenixKit.RepoHelper.repo()
 
@@ -351,31 +354,100 @@ defmodule PhoenixKitInbox.Mailboxes do
   # ── shared mailboxes ────────────────────────────────────────────────────────
 
   @doc """
-  Creates a shared mailbox owned by `owner_uuid`.
+  Whether `scope` may create shared mailboxes and set their addresses — the
+  `inbox.manage_shared` sub-permission, while the module is enabled.
+  """
+  @spec can_manage_shared?(Scope.t() | nil) :: boolean()
+  def can_manage_shared?(scope), do: Scope.can?(scope, @manage_shared)
+
+  @doc """
+  Creates a shared mailbox owned by the scope's user.
+
+  Requires `inbox.manage_shared` (`{:error, :forbidden}` otherwise) — checked
+  here rather than only in the UI, so a forged form submit or a host call
+  can't create one either. There is deliberately no variant taking a bare
+  owner uuid.
 
   `attrs` needs at least `:name`; `:slug` is derived from the name when absent.
+  An `:address` must be unique among shared mailboxes (regardless of case) and
+  may not be a user's login email.
   """
-  @spec create_shared_mailbox(binary(), map()) ::
-          {:ok, Mailbox.t()} | {:error, Ecto.Changeset.t()}
-  def create_shared_mailbox(owner_uuid, attrs) when is_binary(owner_uuid) do
-    attrs =
-      attrs
-      |> normalize_attrs()
-      |> Map.put("kind", "shared")
-      |> Map.put("owner_uuid", owner_uuid)
-      |> put_default_slug()
+  @spec create_shared_mailbox(Scope.t(), map()) ::
+          {:ok, Mailbox.t()} | {:error, :forbidden | Ecto.Changeset.t()}
+  def create_shared_mailbox(%Scope{} = scope, attrs) when is_map(attrs) do
+    with {:ok, owner_uuid} <- scope_user_uuid(scope),
+         :ok <- authorize_manage_shared(scope) do
+      attrs =
+        attrs
+        |> normalize_attrs()
+        |> Map.put("kind", "shared")
+        |> Map.put("owner_uuid", owner_uuid)
+        |> put_default_slug()
 
-    %Mailbox{}
-    |> Mailbox.changeset(attrs)
-    |> repo().insert()
+      %Mailbox{}
+      |> Mailbox.changeset(attrs)
+      |> validate_address_not_a_user_email()
+      |> repo().insert()
+    end
   end
 
-  @doc "Updates a mailbox's name/address/settings."
-  @spec update_mailbox(Mailbox.t(), map()) :: {:ok, Mailbox.t()} | {:error, Ecto.Changeset.t()}
-  def update_mailbox(%Mailbox{} = mailbox, attrs) do
-    mailbox
-    |> Mailbox.changeset(normalize_attrs(attrs))
-    |> repo().update()
+  @doc """
+  Updates a mailbox's `name`, `address` or `settings` — nothing else
+  (ownership, kind and status have their own paths).
+
+  The scope's user needs `"admin"` on the mailbox
+  (`{:error, :mailbox_access_denied}`), and changing the `address` also needs
+  `inbox.manage_shared` (`{:error, :forbidden}`).
+  """
+  @spec update_mailbox(Scope.t(), Mailbox.t(), map()) ::
+          {:ok, Mailbox.t()}
+          | {:error, :forbidden | :mailbox_access_denied | Ecto.Changeset.t()}
+  def update_mailbox(%Scope{} = scope, %Mailbox{} = mailbox, attrs) when is_map(attrs) do
+    changeset =
+      Mailbox.changeset(
+        mailbox,
+        attrs |> normalize_attrs() |> Map.take(~w(name address settings))
+      )
+
+    with {:ok, user_uuid} <- scope_user_uuid(scope),
+         :ok <- authorize(mailbox, user_uuid, "admin"),
+         :ok <- authorize_address_change(scope, changeset) do
+      changeset
+      |> validate_address_not_a_user_email()
+      |> repo().update()
+    end
+  end
+
+  defp authorize_manage_shared(scope) do
+    if can_manage_shared?(scope), do: :ok, else: {:error, :forbidden}
+  end
+
+  defp authorize_address_change(scope, changeset) do
+    if Ecto.Changeset.changed?(changeset, :address),
+      do: authorize_manage_shared(scope),
+      else: :ok
+  end
+
+  defp scope_user_uuid(%Scope{user: %{uuid: uuid}}) when is_binary(uuid), do: {:ok, uuid}
+  defp scope_user_uuid(_), do: {:error, :forbidden}
+
+  # A shared address equal to someone's login email would make that string
+  # mean two different recipients. Personal mailboxes are exempt — their
+  # address *is* their owner's email.
+  defp validate_address_not_a_user_email(changeset) do
+    address = Ecto.Changeset.get_change(changeset, :address)
+
+    if Ecto.Changeset.get_field(changeset, :kind) == "shared" and is_binary(address) and
+         user_email_taken?(address) do
+      Ecto.Changeset.add_error(changeset, :address, "is a user's login email")
+    else
+      changeset
+    end
+  end
+
+  defp user_email_taken?(address) do
+    from(u in User, where: fragment("lower(?)", u.email) == ^String.downcase(address))
+    |> repo().exists?()
   end
 
   @doc """

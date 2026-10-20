@@ -13,6 +13,10 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
   are then filtered to those the viewer holds `"admin"` on (which their own
   created mailboxes always are), so a `"write"` grantee on `support@` can send
   as it but can't hand access to someone else.
+
+  Creating a shared mailbox needs `inbox.manage_shared`. Without it the form
+  is not rendered — and `Mailboxes.create_shared_mailbox/2` refuses a forged
+  submit anyway, since the check lives there.
   """
 
   use PhoenixKitWeb, :live_view
@@ -33,6 +37,8 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
       |> assign(:page_title, gettext_str("Mailboxes"))
       |> assign(:page_subtitle, gettext_str("Shared mailboxes and who can use them"))
       |> assign(:module_access, scope && Scope.has_module_access?(scope, "inbox"))
+      |> assign(:scope, scope)
+      |> assign(:can_manage_shared, Mailboxes.can_manage_shared?(scope))
       |> assign(:current_user, user)
       |> assign(:form, to_form(Mailboxes.change_mailbox(%Mailbox{})))
       |> assign(:expanded, nil)
@@ -62,7 +68,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
   end
 
   def handle_event("create", %{"mailbox" => params}, socket) do
-    case Mailboxes.create_shared_mailbox(user_uuid(socket), params) do
+    case Mailboxes.create_shared_mailbox(socket.assigns.scope, params) do
       {:ok, mailbox} ->
         {:noreply,
          socket
@@ -70,8 +76,11 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
          |> load_mailboxes()
          |> put_flash(:info, gettext_str("Mailbox “%{name}” created.", name: mailbox.name))}
 
-      {:error, changeset} ->
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, Errors.message(reason))}
     end
   end
 
@@ -153,7 +162,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
           {gettext_str("Back to mailbox")}
         </.link>
 
-        <.create_form form={@form} />
+        <.create_form :if={@can_manage_shared} form={@form} />
         <.mailbox_table
           mailboxes={@mailboxes}
           expanded={@expanded}
@@ -173,7 +182,13 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
       <div class="card-body gap-3">
         <h2 class="card-title text-base">{gettext_str("New shared mailbox")}</h2>
 
-        <.form for={@form} phx-change="validate" phx-submit="create" class="flex flex-col gap-3">
+        <.form
+          for={@form}
+          id="new-shared-mailbox-form"
+          phx-change="validate"
+          phx-submit="create"
+          class="flex flex-col gap-3"
+        >
           <.input
             field={@form[:name]}
             type="text"

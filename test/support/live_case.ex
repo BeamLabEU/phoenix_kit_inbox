@@ -40,7 +40,7 @@ defmodule PhoenixKitInbox.LiveCase do
       import Phoenix.ConnTest
       import Phoenix.LiveViewTest
       import PhoenixKitInbox.ActivityLogAssertions
-      import PhoenixKitInbox.DataCase, only: [user_fixture: 0, user_fixture: 1]
+      import PhoenixKitInbox.DataCase, only: [user_fixture: 0, user_fixture: 1, enable_inbox!: 0]
       import PhoenixKitInbox.LiveCase
     end
   end

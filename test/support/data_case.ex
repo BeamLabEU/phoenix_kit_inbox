@@ -68,6 +68,47 @@ defmodule PhoenixKitInbox.DataCase do
   end
 
   @doc """
+  A real `PhoenixKit.Users.Auth.Scope` for `user` holding exactly
+  `permissions` — what the context functions that take a scope check with
+  `Scope.can?/2`. Pair with `enable_inbox!/0`: `can?/2` also requires the
+  module to be enabled.
+  """
+  def scope_for(user, permissions \\ ["inbox"]) do
+    %PhoenixKit.Users.Auth.Scope{
+      user: user,
+      authenticated?: true,
+      cached_roles: [],
+      cached_permissions: MapSet.new(permissions)
+    }
+  end
+
+  @doc "Enables the module, which `Scope.can?/2` requires for every inbox key."
+  def enable_inbox! do
+    PhoenixKitInbox.enable_system()
+    true = PhoenixKitInbox.enabled?()
+    :ok
+  end
+
+  @doc """
+  Inserts a shared mailbox owned by `owner` directly, bypassing the
+  `inbox.manage_shared` check of `Mailboxes.create_shared_mailbox/2` — for
+  tests about something else. Tests about creation go through the context.
+  """
+  def shared_mailbox_fixture(owner, attrs \\ %{}) do
+    name = Map.get(attrs, :name, "Shared #{System.unique_integer([:positive])}")
+
+    attrs =
+      attrs
+      |> Map.put(:name, name)
+      |> Map.put_new(:slug, name)
+      |> Map.merge(%{kind: "shared", owner_uuid: owner.uuid})
+
+    %PhoenixKitInbox.Schemas.Mailbox{}
+    |> PhoenixKitInbox.Schemas.Mailbox.changeset(attrs)
+    |> TestRepo.insert!()
+  end
+
+  @doc """
   Translates changeset errors into a `%{field => [message]}` map. Used
   by tests that assert on changeset error messages.
   """

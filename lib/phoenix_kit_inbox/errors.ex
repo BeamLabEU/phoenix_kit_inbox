@@ -24,6 +24,8 @@ defmodule PhoenixKitInbox.Errors do
   def message(:no_recipients), do: gettext("Add at least one recipient.")
   def message(:invalid_user), do: gettext("Could not identify the current user.")
 
+  def message(:forbidden), do: gettext("You don't have permission to do that.")
+
   def message(:mailbox_access_denied),
     do: gettext("You don't have access to this mailbox.")
 

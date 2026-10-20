@@ -44,11 +44,16 @@ defmodule PhoenixKitInbox.MailboxesTest do
   end
 
   describe "shared mailboxes" do
-    test "create_shared_mailbox/2 derives a slug from the name" do
+    setup do
+      enable_inbox!()
       owner = user_fixture()
 
+      %{owner: owner, manager: scope_for(owner, ["inbox", "inbox.manage_shared"])}
+    end
+
+    test "create_shared_mailbox/2 derives a slug from the name", %{owner: owner, manager: manager} do
       assert {:ok, mailbox} =
-               Mailboxes.create_shared_mailbox(owner.uuid, %{
+               Mailboxes.create_shared_mailbox(manager, %{
                  name: "Customer Support",
                  address: "support@example.com"
                })
@@ -58,19 +63,103 @@ defmodule PhoenixKitInbox.MailboxesTest do
       assert mailbox.owner_uuid == owner.uuid
     end
 
-    test "slugs are globally unique" do
-      owner = user_fixture()
-      {:ok, _} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Sales"})
+    test "slugs are globally unique", %{manager: manager} do
+      {:ok, _} = Mailboxes.create_shared_mailbox(manager, %{name: "Sales"})
 
-      assert {:error, changeset} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Sales"})
+      assert {:error, changeset} = Mailboxes.create_shared_mailbox(manager, %{name: "Sales"})
       assert %{slug: _} = errors_on(changeset)
     end
 
-    test "a user may own many shared mailboxes" do
-      owner = user_fixture()
+    test "a user may own many shared mailboxes", %{manager: manager} do
+      assert {:ok, _} = Mailboxes.create_shared_mailbox(manager, %{name: "One"})
+      assert {:ok, _} = Mailboxes.create_shared_mailbox(manager, %{name: "Two"})
+    end
 
-      assert {:ok, _} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "One"})
-      assert {:ok, _} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Two"})
+    test "creating one needs inbox.manage_shared, not just inbox", %{owner: owner} do
+      assert {:error, :forbidden} =
+               Mailboxes.create_shared_mailbox(scope_for(owner), %{name: "Rogue"})
+
+      assert Mailboxes.list_shared_mailboxes() == []
+    end
+
+    test "an anonymous scope can't create one" do
+      assert {:error, :forbidden} =
+               Mailboxes.create_shared_mailbox(PhoenixKit.Users.Auth.Scope.for_user(nil), %{
+                 name: "Nobody's"
+               })
+    end
+
+    test "there is no unchecked creation path taking a bare owner uuid", %{owner: owner} do
+      assert_raise FunctionClauseError, fn ->
+        Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Backdoor"})
+      end
+    end
+
+    test "an address is unique regardless of case", %{manager: manager} do
+      {:ok, _} =
+        Mailboxes.create_shared_mailbox(manager, %{name: "A", address: "desk@example.com"})
+
+      assert {:error, changeset} =
+               Mailboxes.create_shared_mailbox(manager, %{name: "B", address: "Desk@Example.COM"})
+
+      assert %{address: [_]} = errors_on(changeset)
+    end
+
+    test "an address can't be a user's login email", %{manager: manager} do
+      user_fixture(%{email: "taken@example.com"})
+
+      assert {:error, changeset} =
+               Mailboxes.create_shared_mailbox(manager, %{
+                 name: "Taken",
+                 address: "TAKEN@example.com"
+               })
+
+      assert %{address: [_]} = errors_on(changeset)
+    end
+
+    test "update_mailbox/3 lets a mailbox admin rename it", %{owner: owner, manager: manager} do
+      {:ok, shared} = Mailboxes.create_shared_mailbox(manager, %{name: "Old name"})
+
+      assert {:ok, renamed} =
+               Mailboxes.update_mailbox(scope_for(owner), shared, %{name: "New name"})
+
+      assert renamed.name == "New name"
+    end
+
+    test "update_mailbox/3 refuses an address change without inbox.manage_shared", ctx do
+      {:ok, shared} = Mailboxes.create_shared_mailbox(ctx.manager, %{name: "Front"})
+
+      assert {:error, :forbidden} =
+               Mailboxes.update_mailbox(scope_for(ctx.owner), shared, %{
+                 address: "front@example.com"
+               })
+
+      assert {:ok, updated} =
+               Mailboxes.update_mailbox(ctx.manager, shared, %{address: "front@example.com"})
+
+      assert updated.address == "front@example.com"
+    end
+
+    test "update_mailbox/3 refuses someone without admin on the mailbox", %{manager: manager} do
+      {:ok, shared} = Mailboxes.create_shared_mailbox(manager, %{name: "Locked"})
+      stranger = scope_for(user_fixture(), ["inbox", "inbox.manage_shared"])
+
+      assert {:error, :mailbox_access_denied} =
+               Mailboxes.update_mailbox(stranger, shared, %{name: "Mine now"})
+    end
+
+    test "update_mailbox/3 can't move ownership or change the kind", ctx do
+      {:ok, shared} = Mailboxes.create_shared_mailbox(ctx.manager, %{name: "Kept"})
+      other = user_fixture()
+
+      assert {:ok, updated} =
+               Mailboxes.update_mailbox(ctx.manager, shared, %{
+                 owner_uuid: other.uuid,
+                 kind: "user"
+               })
+
+      assert updated.owner_uuid == ctx.owner.uuid
+      assert updated.kind == "shared"
     end
 
     test "personal mailboxes can't be archived — mail must have somewhere to land" do
@@ -80,9 +169,8 @@ defmodule PhoenixKitInbox.MailboxesTest do
       assert {:error, :cannot_archive_personal_mailbox} = Mailboxes.archive_mailbox(personal)
     end
 
-    test "archiving a shared mailbox removes it from the accessible list" do
-      owner = user_fixture()
-      {:ok, shared} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Temp"})
+    test "archiving a shared mailbox removes it from the accessible list", %{owner: owner} do
+      shared = shared_mailbox_fixture(owner, %{name: "Temp"})
 
       assert shared.uuid in mailbox_uuids(owner)
       assert {:ok, _} = Mailboxes.archive_mailbox(shared)
@@ -94,7 +182,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
     setup do
       owner = user_fixture()
       other = user_fixture()
-      {:ok, shared} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Support Desk"})
+      shared = shared_mailbox_fixture(owner, %{name: "Support Desk"})
 
       %{owner: owner, other: other, shared: shared}
     end
@@ -163,8 +251,8 @@ defmodule PhoenixKitInbox.MailboxesTest do
     test "matches on address or slug, case-insensitively" do
       owner = user_fixture()
 
-      {:ok, shared} =
-        Mailboxes.create_shared_mailbox(owner.uuid, %{
+      shared =
+        shared_mailbox_fixture(owner, %{
           name: "Billing",
           address: "billing@example.com"
         })
@@ -182,7 +270,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
     test "archived mailboxes stop resolving" do
       owner = user_fixture()
-      {:ok, shared} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Old Desk"})
+      shared = shared_mailbox_fixture(owner, %{name: "Old Desk"})
       {:ok, _} = Mailboxes.archive_mailbox(shared)
 
       assert {:error, :recipient_not_found} = Mailboxes.fetch_mailbox_by_recipient("old-desk")
@@ -190,7 +278,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
     test "a shared mailbox resolves by its display name, not only its slug" do
       owner = user_fixture()
-      {:ok, shared} = Mailboxes.create_shared_mailbox(owner.uuid, %{name: "Customer Support"})
+      shared = shared_mailbox_fixture(owner, %{name: "Customer Support"})
 
       assert {:ok, %{uuid: uuid}} = Mailboxes.fetch_mailbox_by_recipient("Customer Support")
       assert uuid == shared.uuid
@@ -272,7 +360,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
     test "every suggested handle actually resolves" do
       me = user_fixture()
       user_fixture(%{username: "resolvable", email: "resolvable@example.com"})
-      {:ok, _} = Mailboxes.create_shared_mailbox(me.uuid, %{name: "Helpdesk"})
+      _ = shared_mailbox_fixture(me, %{name: "Helpdesk"})
 
       for %{handle: handle} <- Mailboxes.search_recipients(me.uuid) do
         assert {:ok, _mailbox} = Mailboxes.fetch_mailbox_by_recipient(handle),
@@ -306,7 +394,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
     test "shared mailboxes are offered by slug and labelled as shared" do
       me = user_fixture()
-      {:ok, _} = Mailboxes.create_shared_mailbox(me.uuid, %{name: "Night Desk"})
+      _ = shared_mailbox_fixture(me, %{name: "Night Desk"})
 
       suggestion =
         me.uuid
