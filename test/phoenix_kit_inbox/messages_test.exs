@@ -217,7 +217,7 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert Messages.list_folder(ctx.bob_mb.uuid, "inbox") == []
     end
 
-    test "a reply must name a message the sending mailbox holds", ctx do
+    test "a parent the sender can't read is dropped: the message starts its own thread", ctx do
       {:ok, private} =
         Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
           "to" => ctx.carol.email,
@@ -226,22 +226,107 @@ defmodule PhoenixKitInbox.MessagesTest do
 
       attrs = %{"to" => ctx.carol.email, "subject" => "Me too", "parent_uuid" => private.uuid}
 
-      assert {:error, :message_not_found} =
-               Messages.send_message(ctx.alice_scope, ctx.alice_mb, attrs)
+      {:ok, scoped} = Messages.send_message(ctx.alice_scope, ctx.alice_mb, attrs)
+      {:ok, legacy} = Messages.send_message(ctx.alice_mb, ctx.alice.uuid, attrs)
 
-      assert {:error, :message_not_found} =
-               Messages.send_message(ctx.alice_mb, ctx.alice.uuid, attrs)
+      {:ok, junk} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{attrs | "parent_uuid" => "junk"})
 
-      assert {:error, :message_not_found} =
-               Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"parent_uuid" => private.uuid})
+      {:ok, draft} =
+        Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"parent_uuid" => private.uuid})
 
-      assert {:error, :message_not_found} =
-               Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
-                 attrs
-                 | "parent_uuid" => "junk"
-               })
+      for message <- [scoped, legacy, junk, draft] do
+        assert message.parent_uuid == nil
+        assert message.thread_uuid == message.uuid
+      end
 
       assert Messages.list_thread(private.thread_uuid) |> length() == 1
+    end
+
+    test "a caller-supplied thread_uuid doesn't put a draft in someone else's thread", ctx do
+      {:ok, private} =
+        Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+          "to" => ctx.carol.email,
+          "subject" => "x"
+        })
+
+      {:ok, draft} =
+        Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"thread_uuid" => private.thread_uuid})
+
+      assert draft.thread_uuid == draft.uuid
+    end
+
+    test "a parent held in another of the sender's mailboxes keeps the thread", ctx do
+      shared = shared_mailbox_fixture(ctx.alice, %{name: "Alice's desk"})
+
+      {:ok, original} =
+        Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+          "to" => ctx.alice.email,
+          "subject" => "Q"
+        })
+
+      {:ok, reply} =
+        Messages.send_message(ctx.alice_scope, shared, %{
+          "to" => ctx.bob.email,
+          "subject" => "A",
+          "parent_uuid" => original.uuid
+        })
+
+      assert reply.parent_uuid == original.uuid
+      assert reply.thread_uuid == original.thread_uuid
+    end
+
+    test "a draft whose parent copy was purged since can still be saved and sent", ctx do
+      {:ok, original} =
+        Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+          "to" => ctx.alice.email,
+          "subject" => "Q"
+        })
+
+      {:ok, draft} =
+        Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{
+          "parent_uuid" => original.uuid,
+          "subject" => "Re: Q"
+        })
+
+      assert draft.thread_uuid == original.thread_uuid
+      :ok = Messages.purge(ctx.alice_scope, ctx.alice_mb, original.uuid)
+
+      assert {:ok, resaved} =
+               Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{
+                 "uuid" => draft.uuid,
+                 "subject" => "Re: Q"
+               })
+
+      assert {:ok, sent} =
+               Messages.send_message(ctx.alice_scope, ctx.alice_mb, %{
+                 "uuid" => resaved.uuid,
+                 "to" => ctx.bob.email,
+                 "subject" => "Re: Q"
+               })
+
+      assert sent.uuid == draft.uuid
+      assert sent.parent_uuid == nil
+      assert sent.thread_uuid == sent.uuid
+    end
+
+    test "the sender's own message stays a valid parent after its sent copy is purged", ctx do
+      {:ok, mine} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "subject" => "1"
+        })
+
+      :ok = Messages.purge(ctx.alice_scope, ctx.alice_mb, mine.uuid)
+
+      {:ok, follow_up} =
+        Messages.send_message(ctx.alice_scope, ctx.alice_mb, %{
+          "to" => ctx.bob.email,
+          "subject" => "2",
+          "parent_uuid" => mine.uuid
+        })
+
+      assert follow_up.thread_uuid == mine.thread_uuid
     end
 
     test "a reply to a message the mailbox holds joins its thread", ctx do

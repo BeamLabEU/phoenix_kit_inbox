@@ -276,8 +276,9 @@ defmodule PhoenixKitInbox.Messages do
   reopened draft still has its recipients.
 
   Saving needs the `"inbox"` permission and `"write"` on the mailbox; the
-  draft's author is the scope's user. A `"parent_uuid"` must be a message the
-  mailbox holds (`{:error, :message_not_found}`).
+  draft's author is the scope's user. A `"parent_uuid"` is kept only when the
+  user can read that message (see `send_message/4`); otherwise the draft
+  starts its own thread.
   """
   @spec save_draft(Scope.t(), Mailbox.t(), map()) ::
           {:ok, Message.t()} | {:error, Ecto.Changeset.t() | atom()}
@@ -285,8 +286,7 @@ defmodule PhoenixKitInbox.Messages do
     attrs = normalize_attrs(attrs)
 
     with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
-         {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write"),
-         :ok <- validate_parent(fresh, attrs) do
+         {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write") do
       do_save_draft(fresh, user_uuid, attrs)
     end
   end
@@ -296,6 +296,9 @@ defmodule PhoenixKitInbox.Messages do
 
     base = existing || %Message{}
 
+    parent_uuid =
+      resolve_parent(sender_user_uuid, Map.get(attrs, "parent_uuid", base.parent_uuid))
+
     metadata =
       attrs
       |> caller_metadata(base)
@@ -303,8 +306,8 @@ defmodule PhoenixKitInbox.Messages do
 
     changeset =
       Message.changeset(base, %{
-        "thread_uuid" => base.thread_uuid || Map.get(attrs, "thread_uuid"),
-        "parent_uuid" => Map.get(attrs, "parent_uuid", base.parent_uuid),
+        "thread_uuid" => thread_for(base, parent_uuid),
+        "parent_uuid" => parent_uuid,
         "sender_mailbox_uuid" => mailbox.uuid,
         "sender_user_uuid" => sender_user_uuid,
         "subject" => Map.get(attrs, "subject"),
@@ -435,8 +438,8 @@ defmodule PhoenixKitInbox.Messages do
 
   def send_message(%Scope{} = scope, %Mailbox{} = mailbox, attrs, _opts) when is_map(attrs) do
     with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
-         {:ok, _fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write") do
-      deliver(mailbox, user_uuid, attrs)
+         {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write") do
+      deliver(fresh, user_uuid, attrs)
     end
   end
 
@@ -445,19 +448,20 @@ defmodule PhoenixKitInbox.Messages do
   def send_message(%Mailbox{}, _sender_user_uuid, _attrs, [_ | _]),
     do: {:error, :opts_need_scope}
 
+  # The mailbox is re-read so its stored status and owner decide, not the
+  # struct the caller handed in (the scope form re-reads in authorize_scope/3).
   def send_message(%Mailbox{} = mailbox, sender_user_uuid, attrs, []) when is_map(attrs) do
-    deliver(mailbox, sender_user_uuid, attrs)
+    with {:ok, fresh} <- Mailboxes.fetch_mailbox(mailbox.uuid),
+         :ok <- Mailboxes.authorize(fresh, sender_user_uuid, "write") do
+      deliver(fresh, sender_user_uuid, attrs)
+    end
   end
 
-  # The mailbox is re-read so its stored status and owner decide, not the
-  # struct the caller handed in.
+  # `mailbox` is the stored row, already authorized for `sender_user_uuid`.
   defp deliver(mailbox, sender_user_uuid, attrs) do
     attrs = normalize_attrs(attrs)
 
-    with {:ok, mailbox} <- Mailboxes.fetch_mailbox(mailbox.uuid),
-         :ok <- Mailboxes.authorize(mailbox, sender_user_uuid, "write"),
-         :ok <- ensure_active(mailbox),
-         :ok <- validate_parent(mailbox, attrs),
+    with :ok <- ensure_active(mailbox),
          {:ok, recipients} <- resolve_recipients(attrs),
          :ok <- ensure_any_recipient(recipients),
          {:ok, message} <- do_send(mailbox, sender_user_uuid, attrs, recipients) do
@@ -470,31 +474,55 @@ defmodule PhoenixKitInbox.Messages do
   defp ensure_active(%Mailbox{status: "active"}), do: :ok
   defp ensure_active(_), do: {:error, :mailbox_archived}
 
-  # A reply joins its parent's thread, so the parent must be a message this
-  # mailbox actually holds — otherwise any uuid would let a message attach
-  # itself to someone else's conversation.
-  defp validate_parent(mailbox, attrs) do
-    case Map.get(attrs, "parent_uuid") do
-      blank when blank in [nil, ""] ->
-        :ok
+  # A reply joins its parent's thread, so the parent must be a message the
+  # sender can read: one of the mailboxes they own or hold a grant on has an
+  # active copy of it, or sent it. That is wider than the sending mailbox —
+  # replying from a shared mailbox to something received personally is
+  # normal — but never someone else's conversation. A parent that fails the
+  # test (forged, or its only copy purged since a draft was saved) is dropped
+  # and the message starts its own thread; the send itself goes ahead.
+  defp resolve_parent(_user_uuid, blank) when blank in [nil, ""], do: nil
 
-      parent_uuid ->
-        case fetch_for_mailbox(mailbox.uuid, parent_uuid) do
-          {:ok, _} -> :ok
-          {:error, _} -> {:error, :message_not_found}
-        end
+  defp resolve_parent(user_uuid, candidate) do
+    with {:ok, parent_uuid} <- Ecto.UUID.cast(candidate),
+         true <- readable_by?(parent_uuid, user_uuid) do
+      parent_uuid
+    else
+      _ -> nil
     end
   end
+
+  defp readable_by?(message_uuid, user_uuid) do
+    readable = user_uuid |> Mailboxes.list_accessible_mailboxes() |> Enum.map(& &1.uuid)
+
+    from(m in Message,
+      left_join: d in Delivery,
+      on: d.message_uuid == m.uuid and d.status == "active" and d.mailbox_uuid in ^readable,
+      where: m.uuid == ^message_uuid and m.status == "sent",
+      where: m.sender_mailbox_uuid in ^readable or not is_nil(d.uuid)
+    )
+    |> repo().exists?()
+  end
+
+  # A reply lives in its parent's thread; anything else is its own thread —
+  # including a draft whose parent was dropped (its own uuid), or a new
+  # message (nil: minted on insert by ensure_thread_uuid/1).
+  defp thread_for(_base, parent_uuid) when is_binary(parent_uuid),
+    do: thread_uuid_for(parent_uuid)
+
+  defp thread_for(%Message{uuid: uuid}, nil), do: uuid
 
   defp do_send(mailbox, sender_user_uuid, attrs, recipients) do
     existing = draft_from_attrs(mailbox, attrs)
     base = existing || %Message{}
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    parent_uuid = Map.get(attrs, "parent_uuid", base.parent_uuid)
+
+    parent_uuid =
+      resolve_parent(sender_user_uuid, Map.get(attrs, "parent_uuid", base.parent_uuid))
 
     changeset =
       Message.sent_changeset(base, %{
-        "thread_uuid" => base.thread_uuid || thread_uuid_for(parent_uuid),
+        "thread_uuid" => thread_for(base, parent_uuid),
         "parent_uuid" => parent_uuid,
         "sender_mailbox_uuid" => mailbox.uuid,
         "sender_user_uuid" => sender_user_uuid,
@@ -589,8 +617,6 @@ defmodule PhoenixKitInbox.Messages do
 
   # A reply belongs to its parent's thread; a new message starts its own, which
   # `backfill_thread_uuid/2` stamps once the uuid exists.
-  defp thread_uuid_for(nil), do: nil
-
   defp thread_uuid_for(parent_uuid) do
     case repo().get(Message, parent_uuid) do
       nil -> nil

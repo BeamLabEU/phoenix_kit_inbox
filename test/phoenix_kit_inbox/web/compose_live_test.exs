@@ -138,6 +138,55 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     assert html =~ "&gt; Pass it on"
   end
 
+  test "a reply can be sent from another mailbox the user writes to", ctx do
+    shared = shared_mailbox_fixture(ctx.alice, %{name: "Alice's desk"})
+
+    {:ok, original} =
+      Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+        "to" => ctx.alice.email,
+        "subject" => "Question"
+      })
+
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose?reply_to=#{original.uuid}")
+
+    render_hook(view, "select_mailbox", %{"mailbox" => shared.uuid})
+
+    assert {:error, {:live_redirect, _}} =
+             view
+             |> form("form", %{"to" => ctx.bob.email, "subject" => "Re: Question", "body" => "A"})
+             |> render_submit()
+
+    assert [%{message: reply}] = Messages.list_folder(shared.uuid, "sent")
+    assert reply.parent_uuid == original.uuid
+    assert reply.thread_uuid == original.thread_uuid
+  end
+
+  test "a resumed draft whose parent copy was purged still sends", ctx do
+    {:ok, original} =
+      Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{"to" => ctx.alice.email, "subject" => "Q"})
+
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose?reply_to=#{original.uuid}")
+
+    view
+    |> form("form", %{"to" => ctx.bob.email, "subject" => "Re: Q", "body" => "later"})
+    |> render_change()
+
+    view |> element("button[phx-click='save_draft']") |> render_click()
+    assert [%{message: draft}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
+
+    :ok = Messages.purge(scope_for_user(ctx.alice), ctx.alice_mb, original.uuid)
+
+    {:ok, resumed, _html} = live(ctx.conn, "/en/admin/inbox/compose?draft=#{draft.uuid}")
+
+    assert {:error, {:live_redirect, _}} =
+             resumed
+             |> form("form", %{"to" => ctx.bob.email, "subject" => "Re: Q", "body" => "now"})
+             |> render_submit()
+
+    assert [%{message: sent}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    assert sent.uuid == draft.uuid
+  end
+
   test "an archived mailbox is not offered as a sender", ctx do
     active = shared_mailbox_fixture(ctx.bob, %{name: "Open desk"})
     archived = shared_mailbox_fixture(ctx.bob, %{name: "Closed desk", status: "archived"})
@@ -150,6 +199,8 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     refute has_element?(view, "select[name='mailbox'] option[value='#{archived.uuid}']")
     refute has_element?(view, "select[name='mailbox'] option[selected][value='#{archived.uuid}']")
   end
+
+  defp scope_for_user(user), do: PhoenixKitInbox.DataCase.scope_for(user)
 
   test "a user without the inbox permission can't compose", %{conn: conn} do
     conn = put_test_scope(conn, fake_scope(permissions: [], roles: []))
