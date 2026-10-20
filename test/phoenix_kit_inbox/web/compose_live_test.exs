@@ -58,7 +58,7 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "No mailbox matches"
+    assert html =~ "No recipient matches"
     assert Messages.list_folder(ctx.alice_mb.uuid, "sent") == []
   end
 

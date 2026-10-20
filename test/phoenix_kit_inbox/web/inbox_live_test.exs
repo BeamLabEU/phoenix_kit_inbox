@@ -72,12 +72,12 @@ defmodule PhoenixKitInbox.Web.InboxLiveTest do
     assert delivery.seen_at
   end
 
-  test "switching folders patches the URL", %{conn: conn} do
+  test "switching folders patches the URL", %{conn: conn, alice_mb: alice_mb} do
     {:ok, view, _html} = live(conn, "/en/admin/inbox")
 
     view |> element("button[phx-value-folder='sent']") |> render_click()
 
-    assert_patched(view, "/en/admin/inbox?folder=sent")
+    assert_patched(view, PhoenixKitInbox.Paths.inbox(mailbox: alice_mb.uuid, folder: "sent"))
   end
 
   test "a message can be trashed from the reading pane", %{conn: conn, alice: alice, bob: bob} do
