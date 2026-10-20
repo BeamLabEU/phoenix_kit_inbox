@@ -303,6 +303,47 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
   end
 
+  describe "who sees a bcc" do
+    setup ctx do
+      dave = user_fixture()
+      {:ok, dave_mb} = Mailboxes.ensure_user_mailbox(dave)
+
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "bcc" => "#{ctx.carol.email}, #{dave.email}",
+          "subject" => "Blind"
+        })
+
+      %{message: message, dave_mb: dave_mb}
+    end
+
+    defp visible(message, mailbox) do
+      message.uuid
+      |> Messages.list_recipients(mailbox.uuid)
+      |> Map.new(&{&1.mailbox.uuid, &1.role})
+    end
+
+    test "the sender sees every recipient", ctx do
+      assert visible(ctx.message, ctx.alice_mb) == %{
+               ctx.bob_mb.uuid => "to",
+               ctx.carol_mb.uuid => "bcc",
+               ctx.dave_mb.uuid => "bcc"
+             }
+    end
+
+    test "a to recipient sees no bcc", ctx do
+      assert visible(ctx.message, ctx.bob_mb) == %{ctx.bob_mb.uuid => "to"}
+    end
+
+    test "a bcc recipient sees their own row, not the other bcc", ctx do
+      assert visible(ctx.message, ctx.carol_mb) == %{
+               ctx.bob_mb.uuid => "to",
+               ctx.carol_mb.uuid => "bcc"
+             }
+    end
+  end
+
   describe "drafts" do
     test "saving creates one delivery in the author's drafts folder", ctx do
       assert {:ok, draft} =

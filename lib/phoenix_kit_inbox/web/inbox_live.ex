@@ -198,7 +198,10 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
         socket
         |> assign(:selected, entry)
-        |> assign(:recipients, Messages.list_recipients(message_uuid))
+        |> assign(
+          :recipients,
+          Messages.list_recipients(message_uuid, socket.assigns.mailbox.uuid)
+        )
         |> assign(:unseen_counts, Mailboxes.unseen_counts(socket.assigns.mailbox.uuid))
 
       {:error, reason} ->
@@ -638,6 +641,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
         <div class="flex flex-wrap items-center gap-2 text-xs">
           <span
             :for={recipient <- @recipients}
+            id={"recipient-#{recipient.mailbox.uuid}"}
             class="badge badge-ghost badge-sm gap-1"
             title={recipient.role}
           >

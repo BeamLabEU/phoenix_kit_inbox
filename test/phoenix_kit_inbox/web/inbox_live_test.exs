@@ -112,6 +112,39 @@ defmodule PhoenixKitInbox.Web.InboxLiveTest do
     refute html =~ "Holiday plans"
   end
 
+  test "a bcc recipient is hidden from the other readers", ctx do
+    carol = user_fixture()
+    {:ok, carol_mb} = Mailboxes.ensure_user_mailbox(carol)
+
+    {:ok, message} =
+      Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+        "to" => ctx.alice.email,
+        "bcc" => carol.email,
+        "subject" => "Blind copy"
+      })
+
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox?message=#{message.uuid}")
+
+    assert has_element?(view, "#recipient-#{ctx.alice_mb.uuid}")
+    refute has_element?(view, "#recipient-#{carol_mb.uuid}")
+  end
+
+  test "the sender sees the bcc recipients of their own message", ctx do
+    carol = user_fixture()
+    {:ok, carol_mb} = Mailboxes.ensure_user_mailbox(carol)
+
+    {:ok, message} =
+      Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+        "to" => ctx.bob.email,
+        "bcc" => carol.email,
+        "subject" => "Blind copy"
+      })
+
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox?folder=sent&message=#{message.uuid}")
+
+    assert has_element?(view, "#recipient-#{carol_mb.uuid}")
+  end
+
   test "a user without the inbox permission sees only the denial notice", %{conn: conn} do
     conn = put_test_scope(conn, fake_scope(permissions: [], roles: []))
 

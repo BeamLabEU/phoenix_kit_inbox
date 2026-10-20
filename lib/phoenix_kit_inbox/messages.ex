@@ -157,9 +157,8 @@ defmodule PhoenixKitInbox.Messages do
   end
 
   @doc """
-  The recipient mailboxes of a message, with their roles — the To/Cc chips in
-  the reading pane. `bcc` rows are included; callers showing a message to a
-  non-sender should filter them out.
+  The recipient mailboxes of a message, with their roles — every row, `bcc`
+  included. For showing a message to someone, use `list_recipients/2`.
   """
   @spec list_recipients(binary()) :: [%{role: String.t(), mailbox: Mailbox.t()}]
   def list_recipients(message_uuid) when is_binary(message_uuid) do
@@ -176,6 +175,32 @@ defmodule PhoenixKitInbox.Messages do
   end
 
   def list_recipients(_), do: []
+
+  @doc """
+  The recipients of a message as the mailbox `viewer_mailbox_uuid` may see
+  them — the To/Cc chips in the reading pane.
+
+  The sending mailbox sees everyone. Any other reader sees To and Cc, and a
+  Bcc row only if it is their own: a blind copy stays blind to the other
+  recipients, including the other Bcc ones.
+  """
+  @spec list_recipients(binary(), binary()) :: [%{role: String.t(), mailbox: Mailbox.t()}]
+  def list_recipients(message_uuid, viewer_mailbox_uuid)
+      when is_binary(message_uuid) and is_binary(viewer_mailbox_uuid) do
+    sender? =
+      from(m in Message,
+        where: m.uuid == ^message_uuid and m.sender_mailbox_uuid == ^viewer_mailbox_uuid
+      )
+      |> repo().exists?()
+
+    message_uuid
+    |> list_recipients()
+    |> Enum.filter(fn %{role: role, mailbox: mailbox} ->
+      sender? or role != "bcc" or mailbox.uuid == viewer_mailbox_uuid
+    end)
+  end
+
+  def list_recipients(_, _), do: []
 
   # ── drafts ──────────────────────────────────────────────────────────────────
 
