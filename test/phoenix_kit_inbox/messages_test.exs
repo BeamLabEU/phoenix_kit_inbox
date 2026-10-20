@@ -243,6 +243,38 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert Messages.list_thread(private.thread_uuid) |> length() == 1
     end
 
+    test "a reply to a reply stays in the root's thread", ctx do
+      {:ok, root} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "subject" => "1"
+        })
+
+      {:ok, reply} =
+        Messages.send_message(ctx.bob_scope, ctx.bob_mb, %{
+          "to" => ctx.alice.email,
+          "subject" => "2",
+          "parent_uuid" => root.uuid
+        })
+
+      {:ok, reply_to_reply} =
+        Messages.send_message(ctx.alice_scope, ctx.alice_mb, %{
+          "to" => ctx.bob.email,
+          "subject" => "3",
+          "parent_uuid" => reply.uuid
+        })
+
+      assert reply.parent_uuid == root.uuid
+      assert reply_to_reply.parent_uuid == reply.uuid
+
+      for message <- [root, reply, reply_to_reply] do
+        assert message.thread_uuid == root.uuid
+      end
+
+      assert root.thread_uuid |> Messages.list_thread() |> Enum.map(& &1.uuid) ==
+               [root.uuid, reply.uuid, reply_to_reply.uuid]
+    end
+
     test "a caller-supplied thread_uuid doesn't put a draft in someone else's thread", ctx do
       {:ok, private} =
         Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
