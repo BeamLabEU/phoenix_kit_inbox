@@ -69,7 +69,9 @@ defmodule PhoenixKitInbox.Messages do
     |> limit(^Keyword.get(opts, :limit, @default_limit))
     |> offset(^Keyword.get(opts, :offset, 0))
     |> repo().all()
-    |> Enum.map(fn {delivery, message} -> %{delivery: delivery, message: message} end)
+    |> Enum.map(fn {delivery, message} ->
+      %{delivery: delivery, message: for_viewer(message, mailbox_uuid)}
+    end)
   end
 
   def list_folder(_, _, _), do: []
@@ -156,11 +158,16 @@ defmodule PhoenixKitInbox.Messages do
         {:error, :message_not_found}
 
       {delivery, message} ->
-        {:ok, %{delivery: delivery, message: message}}
+        {:ok, %{delivery: delivery, message: for_viewer(message, mailbox_uuid)}}
     end
   end
 
-  @doc "Every message in a thread, oldest first — the conversation view."
+  @doc """
+  Every message in a thread, oldest first — the conversation view.
+
+  Not scoped to a viewer, so the recipient snapshot in each message's
+  metadata is returned without its `bcc` entries.
+  """
   @spec list_thread(binary()) :: [Message.t()]
   def list_thread(thread_uuid) when is_binary(thread_uuid) do
     from(m in Message,
@@ -169,7 +176,40 @@ defmodule PhoenixKitInbox.Messages do
       order_by: [asc: m.inserted_at]
     )
     |> repo().all()
+    |> Enum.map(&for_viewer(&1, nil))
   end
+
+  @doc """
+  The recipient snapshot written at send time (`metadata["recipients"]`), as
+  `viewer_mailbox_uuid` may see it: everything for the sending mailbox; for
+  anyone else To and Cc entries plus their own Bcc entry — the rule of
+  `list_recipients/2`. `nil` as the viewer drops every Bcc entry.
+
+  Messages returned by `list_folder/3`, `fetch_for_mailbox/2` and
+  `list_thread/1` already carry their metadata filtered this way.
+  """
+  @spec recipient_snapshot(Message.t(), binary() | nil) :: [map()]
+  def recipient_snapshot(%Message{metadata: metadata} = message, viewer_mailbox_uuid) do
+    sender? =
+      is_binary(viewer_mailbox_uuid) and message.sender_mailbox_uuid == viewer_mailbox_uuid
+
+    case metadata do
+      %{"recipients" => entries} when is_list(entries) ->
+        Enum.filter(entries, fn entry ->
+          sender? or entry["role"] != "bcc" or
+            (is_binary(viewer_mailbox_uuid) and entry["mailbox_uuid"] == viewer_mailbox_uuid)
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp for_viewer(%Message{metadata: %{"recipients" => _} = metadata} = message, viewer) do
+    %{message | metadata: Map.put(metadata, "recipients", recipient_snapshot(message, viewer))}
+  end
+
+  defp for_viewer(message, _viewer), do: message
 
   @doc """
   The recipient mailboxes of a message, with their roles — every row, `bcc`
@@ -503,11 +543,39 @@ defmodule PhoenixKitInbox.Messages do
         "email" => user && user.email,
         "mailbox" => mailbox.name
       },
-      "recipients" =>
-        Enum.map(recipients, fn %{role: role, mailbox: recipient} ->
-          %{"role" => role, "mailbox_uuid" => recipient.uuid, "name" => recipient.name}
-        end)
+      "recipients" => recipient_record(recipients)
     }
+  end
+
+  # Who each recipient was at send time: a personal mailbox's owner by their
+  # current name and handle (the mailbox name is a snapshot from when it was
+  # created), a shared mailbox by its name and address or slug.
+  defp recipient_record(recipients) do
+    owners =
+      recipients
+      |> Enum.flat_map(fn
+        %{mailbox: %Mailbox{kind: "user", owner_uuid: uuid}} when is_binary(uuid) -> [uuid]
+        _ -> []
+      end)
+      |> then(&from(u in User, where: u.uuid in ^&1))
+      |> repo().all()
+      |> Map.new(&{&1.uuid, &1})
+
+    Enum.map(recipients, fn %{role: role, mailbox: recipient} ->
+      {name, handle} =
+        case {recipient, Map.get(owners, recipient.owner_uuid)} do
+          {%Mailbox{kind: "user"}, %User{} = owner} ->
+            {Mailboxes.user_display_name(owner), Mailboxes.user_handle(owner)}
+
+          {%Mailbox{kind: "user"}, nil} ->
+            {recipient.name, nil}
+
+          {shared, _} ->
+            {shared.name, shared.address || shared.slug}
+        end
+
+      %{"role" => role, "mailbox_uuid" => recipient.uuid, "name" => name, "handle" => handle}
+    end)
   end
 
   defp fan_out(repo, message, recipients) do

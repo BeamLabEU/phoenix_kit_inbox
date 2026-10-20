@@ -337,6 +337,59 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert ctx.bob_mb.name in names
     end
 
+    test "a recipient is recorded by their name and handle at send time", ctx do
+      # The mailbox name was frozen when the mailbox was created.
+      ctx.bob
+      |> Ecto.Changeset.change(first_name: "Robert", last_name: "Renamed")
+      |> Repo.update!()
+
+      shared = shared_mailbox_fixture(ctx.carol, %{name: "Desk", address: "desk@example.com"})
+
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => "#{ctx.bob.email}, desk@example.com",
+          "subject" => "Who"
+        })
+
+      by_mailbox = Map.new(message.metadata["recipients"], &{&1["mailbox_uuid"], &1})
+
+      assert %{"name" => "Robert Renamed", "handle" => handle} = by_mailbox[ctx.bob_mb.uuid]
+      assert handle == "@#{ctx.bob.username}"
+      assert %{"name" => "Desk", "handle" => "desk@example.com"} = by_mailbox[shared.uuid]
+    end
+
+    test "the recipient snapshot shows bcc only to the sender and to that bcc", ctx do
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "bcc" => ctx.carol.email,
+          "subject" => "Snapshot"
+        })
+
+      roles = fn entries -> entries |> Enum.map(& &1["mailbox_uuid"]) |> Enum.sort() end
+
+      assert roles.(Messages.recipient_snapshot(message, ctx.alice_mb.uuid)) ==
+               Enum.sort([ctx.bob_mb.uuid, ctx.carol_mb.uuid])
+
+      assert roles.(Messages.recipient_snapshot(message, ctx.bob_mb.uuid)) == [ctx.bob_mb.uuid]
+
+      assert roles.(Messages.recipient_snapshot(message, ctx.carol_mb.uuid)) ==
+               Enum.sort([ctx.bob_mb.uuid, ctx.carol_mb.uuid])
+
+      # The reading paths hand out the filtered snapshot.
+      {:ok, %{message: as_bob}} = Messages.fetch_for_mailbox(ctx.bob_mb.uuid, message.uuid)
+      assert roles.(as_bob.metadata["recipients"]) == [ctx.bob_mb.uuid]
+
+      [%{message: listed}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
+      assert roles.(listed.metadata["recipients"]) == [ctx.bob_mb.uuid]
+
+      [threaded] = Messages.list_thread(message.thread_uuid)
+      assert roles.(threaded.metadata["recipients"]) == [ctx.bob_mb.uuid]
+
+      {:ok, %{message: as_sender}} = Messages.fetch_for_mailbox(ctx.alice_mb.uuid, message.uuid)
+      assert length(as_sender.metadata["recipients"]) == 2
+    end
+
     test "a caller can't forge the sender snapshot", ctx do
       {:ok, message} =
         Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
