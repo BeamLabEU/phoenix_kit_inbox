@@ -5,6 +5,7 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
   alias PhoenixKitInbox.Messages
 
   setup %{conn: conn} do
+    enable_inbox!()
     alice = user_fixture()
     bob = user_fixture()
 

@@ -623,7 +623,9 @@ defmodule PhoenixKitInbox.Mailboxes do
   own grants table.
   """
   @spec access_level(Mailbox.t(), binary()) :: access() | nil
-  def access_level(%Mailbox{owner_uuid: owner}, user_uuid) when owner == user_uuid, do: "admin"
+  def access_level(%Mailbox{owner_uuid: owner}, user_uuid)
+      when is_binary(user_uuid) and owner == user_uuid,
+      do: "admin"
 
   def access_level(%Mailbox{uuid: mailbox_uuid}, user_uuid) when is_binary(user_uuid) do
     from(g in MailboxGrant,

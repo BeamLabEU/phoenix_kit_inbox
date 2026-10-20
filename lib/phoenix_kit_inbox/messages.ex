@@ -27,6 +27,8 @@ defmodule PhoenixKitInbox.Messages do
   import Ecto.Query
 
   alias Ecto.Multi
+  alias PhoenixKit.Users.Auth.Scope
+  alias PhoenixKit.Users.Auth.User
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Notify
   alias PhoenixKitInbox.Schemas.Delivery
@@ -260,7 +262,15 @@ defmodule PhoenixKitInbox.Messages do
   # ── sending ─────────────────────────────────────────────────────────────────
 
   @doc """
-  Sends a message from `mailbox`.
+  Sends a message from `mailbox`, as the scope's user (`send_message/4`) or as
+  `sender_user_uuid` (the original three-argument form).
+
+  Both forms check that the sender holds at least `"write"` on `mailbox`
+  (`{:error, :mailbox_access_denied}`) — the context is the boundary, not the
+  compose form. The scope form also requires the `"inbox"` permission
+  (`{:error, :forbidden}`). Recipients are internal only: a term that names no
+  member or shared mailbox is an unknown recipient. `opts` is reserved for
+  server-side options and currently unused.
 
   `attrs` keys:
 
@@ -270,24 +280,51 @@ defmodule PhoenixKitInbox.Messages do
     * `"subject"`, `"body"`, `"body_format"`
     * `"uuid"` — promotes an existing draft instead of creating a new message
     * `"parent_uuid"` — set when replying; the thread is inherited from it
+    * `"metadata"` — a map stored on the message. Its `"sender"` and
+      `"recipients"` keys are always written by the send itself: a snapshot of
+      the sender (user uuid, name, email, mailbox name) and of each recipient
+      (role, mailbox uuid, mailbox name) at send time, so who wrote to whom
+      stays readable after an account is deleted. The recipient snapshot
+      includes `bcc` rows — show it to the sender only.
 
   Returns `{:error, {:unknown_recipients, ["typo@example.com"]}}` when an
   address doesn't resolve — the whole send is refused so the sender finds out
   immediately rather than discovering a missing recipient later — and
   `{:error, {:ambiguous_recipients, ["@alice"]}}` when one names two people.
   """
-  @spec send_message(Mailbox.t(), binary(), map()) ::
+  @spec send_message(Scope.t() | Mailbox.t(), Mailbox.t() | binary() | nil, map(), keyword()) ::
           {:ok, Message.t()} | {:error, term()}
-  def send_message(%Mailbox{} = mailbox, sender_user_uuid, attrs) do
+  def send_message(sender, mailbox_or_user, attrs, opts \\ [])
+
+  def send_message(%Scope{} = scope, %Mailbox{} = mailbox, attrs, _opts) when is_map(attrs) do
+    with {:ok, user_uuid} <- scope_user_uuid(scope),
+         :ok <- authorize_inbox(scope) do
+      deliver(mailbox, user_uuid, attrs)
+    end
+  end
+
+  def send_message(%Mailbox{} = mailbox, sender_user_uuid, attrs, _opts) when is_map(attrs) do
+    deliver(mailbox, sender_user_uuid, attrs)
+  end
+
+  defp deliver(mailbox, sender_user_uuid, attrs) do
     attrs = normalize_attrs(attrs)
 
-    with {:ok, recipients} <- resolve_recipients(attrs),
+    with :ok <- Mailboxes.authorize(mailbox, sender_user_uuid, "write"),
+         {:ok, recipients} <- resolve_recipients(attrs),
          :ok <- ensure_any_recipient(recipients),
          {:ok, message} <- do_send(mailbox, sender_user_uuid, attrs, recipients) do
       # Post-commit, deliberately: see the moduledoc.
       Notify.message_sent(message, mailbox, recipients)
       {:ok, message}
     end
+  end
+
+  defp scope_user_uuid(%Scope{user: %{uuid: uuid}}) when is_binary(uuid), do: {:ok, uuid}
+  defp scope_user_uuid(_), do: {:error, :forbidden}
+
+  defp authorize_inbox(scope) do
+    if Scope.can?(scope, "inbox"), do: :ok, else: {:error, :forbidden}
   end
 
   defp do_send(mailbox, sender_user_uuid, attrs, recipients) do
@@ -306,7 +343,10 @@ defmodule PhoenixKitInbox.Messages do
         "body" => Map.get(attrs, "body"),
         "body_format" => Map.get(attrs, "body_format", "text"),
         "sent_at" => now,
-        "metadata" => Map.get(attrs, "metadata", base.metadata || %{})
+        "metadata" =>
+          attrs
+          |> Map.get("metadata", base.metadata || %{})
+          |> Map.merge(send_record(mailbox, sender_user_uuid, recipients))
       })
 
     Multi.new()
@@ -329,6 +369,24 @@ defmodule PhoenixKitInbox.Messages do
       {:ok, %{thread: message}} -> {:ok, message}
       {:error, _step, reason, _changes} -> {:error, reason}
     end
+  end
+
+  # Server-written, so a caller's "sender" key can't impersonate anyone.
+  defp send_record(mailbox, sender_user_uuid, recipients) do
+    user = if is_binary(sender_user_uuid), do: repo().get(User, sender_user_uuid)
+
+    %{
+      "sender" => %{
+        "user_uuid" => sender_user_uuid,
+        "name" => user && Mailboxes.user_display_name(user),
+        "email" => user && user.email,
+        "mailbox" => mailbox.name
+      },
+      "recipients" =>
+        Enum.map(recipients, fn %{role: role, mailbox: recipient} ->
+          %{"role" => role, "mailbox_uuid" => recipient.uuid, "name" => recipient.name}
+        end)
+    }
   end
 
   defp fan_out(repo, message, recipients) do

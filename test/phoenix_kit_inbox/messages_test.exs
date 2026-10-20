@@ -1,6 +1,7 @@
 defmodule PhoenixKitInbox.MessagesTest do
   use PhoenixKitInbox.DataCase, async: true
 
+  alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
 
@@ -153,6 +154,152 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert reply.uuid != reply.thread_uuid
 
       assert length(Messages.list_thread(root.thread_uuid)) == 2
+    end
+  end
+
+  describe "who may send (send_message/3)" do
+    test "a user with no access to the mailbox can't send from it", ctx do
+      assert {:error, :mailbox_access_denied} =
+               Messages.send_message(ctx.alice_mb, ctx.bob.uuid, %{
+                 "to" => ctx.carol.email,
+                 "subject" => "Spoofed"
+               })
+
+      assert Messages.list_folder(ctx.carol_mb.uuid, "inbox") == []
+      assert Messages.list_folder(ctx.alice_mb.uuid, "sent") == []
+    end
+
+    test "a read grantee can't send as a shared mailbox; a write grantee can", ctx do
+      shared = shared_mailbox_fixture(ctx.alice, %{name: "Team"})
+      {:ok, _} = Mailboxes.grant_access(shared.uuid, ctx.bob.uuid, "read")
+
+      attrs = %{"to" => ctx.carol.email, "subject" => "From the team"}
+
+      assert {:error, :mailbox_access_denied} = Messages.send_message(shared, ctx.bob.uuid, attrs)
+
+      {:ok, _} = Mailboxes.grant_access(shared.uuid, ctx.bob.uuid, "write")
+      assert {:ok, _} = Messages.send_message(shared, ctx.bob.uuid, attrs)
+    end
+
+    test "no sender at all is refused, even for a mailbox that lost its owner", ctx do
+      ctx.alice_mb |> Ecto.Changeset.change(owner_uuid: nil) |> Repo.update!()
+      {:ok, orphan} = Mailboxes.fetch_mailbox(ctx.alice_mb.uuid)
+
+      assert {:error, :mailbox_access_denied} =
+               Messages.send_message(orphan, nil, %{"to" => ctx.bob.email, "subject" => "x"})
+    end
+
+    test "a non-member's email is refused like any unknown recipient", ctx do
+      user_fixture(%{email: "client@example.com", inbox_member: false})
+
+      assert {:error, {:unknown_recipients, ["client@example.com"]}} =
+               Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+                 "to" => "client@example.com",
+                 "subject" => "Hello"
+               })
+    end
+  end
+
+  describe "send_message/4 with a scope" do
+    setup ctx do
+      enable_inbox!()
+      %{alice_scope: scope_for(ctx.alice)}
+    end
+
+    test "sends as the scope's user", ctx do
+      assert {:ok, message} =
+               Messages.send_message(ctx.alice_scope, ctx.alice_mb, %{
+                 "to" => "@#{ctx.bob.username}",
+                 "subject" => "Scoped"
+               })
+
+      assert message.sender_user_uuid == ctx.alice.uuid
+      assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
+      assert uuid == message.uuid
+    end
+
+    test "is refused without the inbox permission", ctx do
+      scope = scope_for(ctx.alice, [])
+
+      assert {:error, :forbidden} =
+               Messages.send_message(scope, ctx.alice_mb, %{
+                 "to" => ctx.bob.email,
+                 "subject" => "x"
+               })
+
+      assert Messages.list_folder(ctx.bob_mb.uuid, "inbox") == []
+    end
+
+    test "is refused from someone else's mailbox", ctx do
+      assert {:error, :mailbox_access_denied} =
+               Messages.send_message(ctx.alice_scope, ctx.bob_mb, %{
+                 "to" => ctx.carol.email,
+                 "subject" => "Not mine"
+               })
+    end
+
+    test "an anonymous scope is refused", ctx do
+      assert {:error, :forbidden} =
+               Messages.send_message(Scope.for_user(nil), ctx.alice_mb, %{
+                 "to" => ctx.bob.email,
+                 "subject" => "x"
+               })
+    end
+  end
+
+  describe "the send record" do
+    test "the sender's name and email are kept on the message", ctx do
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "bcc" => ctx.carol.email,
+          "subject" => "Kept"
+        })
+
+      assert message.metadata["sender"] == %{
+               "user_uuid" => ctx.alice.uuid,
+               "name" => Mailboxes.user_display_name(ctx.alice),
+               "email" => ctx.alice.email,
+               "mailbox" => ctx.alice_mb.name
+             }
+
+      roles = Map.new(message.metadata["recipients"], &{&1["mailbox_uuid"], &1["role"]})
+      assert roles == %{ctx.bob_mb.uuid => "to", ctx.carol_mb.uuid => "bcc"}
+
+      names = Enum.map(message.metadata["recipients"], & &1["name"])
+      assert ctx.bob_mb.name in names
+    end
+
+    test "a caller can't forge the sender snapshot", ctx do
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "subject" => "Forged",
+          "metadata" => %{"sender" => %{"name" => "Somebody else"}, "ref" => "order-1"}
+        })
+
+      assert message.metadata["sender"]["name"] == Mailboxes.user_display_name(ctx.alice)
+      assert message.metadata["ref"] == "order-1"
+    end
+
+    test "one permanent inbox.message_sent activity with counts only", ctx do
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "cc" => ctx.carol.email,
+          "subject" => "Private subject"
+        })
+
+      assert [row] = sent_activities(message.uuid)
+      assert row.actor_uuid == ctx.alice.uuid
+      assert row.target_uuid == nil
+      assert row.permanent == true
+
+      assert row.metadata == %{
+               "internal_recipients" => 2,
+               "external_recipients" => 0,
+               "attachments" => 0
+             }
     end
   end
 
@@ -342,5 +489,19 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert length(page2) == 1
       assert Enum.map(page1, & &1.message.uuid) != Enum.map(page2, & &1.message.uuid)
     end
+  end
+
+  defp sent_activities(message_uuid) do
+    from(a in "phoenix_kit_activities",
+      where:
+        a.action == "inbox.message_sent" and a.resource_uuid == type(^message_uuid, :binary_id),
+      select: %{
+        actor_uuid: type(a.actor_uuid, :binary_id),
+        target_uuid: type(a.target_uuid, :binary_id),
+        permanent: a.permanent,
+        metadata: a.metadata
+      }
+    )
+    |> Repo.all()
   end
 end

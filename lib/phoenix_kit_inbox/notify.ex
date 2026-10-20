@@ -28,19 +28,50 @@ defmodule PhoenixKitInbox.Notify do
   alias PhoenixKitInbox.Schemas.Message
 
   @doc """
-  Announces a sent message: one activity event per recipient (which core turns
-  into that user's in-app notification), plus an optional email nudge.
+  Announces a sent message: one permanent `inbox.message_sent` activity for
+  the send itself, one activity event per recipient (which core turns into
+  that user's in-app notification), plus an optional email nudge.
 
   `bcc` recipients are notified like anyone else — they just don't appear in
   anyone else's recipient list.
   """
   @spec message_sent(Message.t(), Mailbox.t(), [%{role: String.t(), mailbox: Mailbox.t()}]) :: :ok
   def message_sent(%Message{} = message, %Mailbox{} = sender, recipients) do
+    log_sent(message, recipients)
+
     Enum.each(recipients, fn %{mailbox: recipient_mailbox} ->
       notify_recipient(message, sender, recipient_mailbox)
     end)
 
     :ok
+  end
+
+  # The audit line for "this user sent a message": kept forever, and therefore
+  # free of personal data — counts only, no subject, no addresses (those live
+  # in the module's own tables, see `Messages.send_message/4`). No target, so
+  # it notifies nobody.
+  defp log_sent(message, recipients) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      PhoenixKit.Activity.log(%{
+        action: "inbox.message_sent",
+        module: "inbox",
+        mode: "auto",
+        actor_uuid: message.sender_user_uuid,
+        resource_type: "inbox_message",
+        resource_uuid: message.uuid,
+        target_uuid: nil,
+        permanent: true,
+        metadata: %{
+          "internal_recipients" => length(recipients),
+          "external_recipients" => 0,
+          "attachments" => 0
+        }
+      })
+    end
+  rescue
+    e ->
+      Logger.warning("[Inbox] activity logging failed: #{Exception.message(e)}")
+      :error
   end
 
   defp notify_recipient(message, sender, recipient_mailbox) do

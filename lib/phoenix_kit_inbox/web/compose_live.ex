@@ -17,7 +17,8 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   ## Access
 
   Composing requires `"write"` on the sending mailbox — `"read"` grantees on a
-  shared mailbox can follow the conversation but can't send as it.
+  shared mailbox can follow the conversation but can't send as it. The check
+  that counts is in `Messages.send_message/4`, called with the session scope.
   """
 
   use PhoenixKitWeb, :live_view
@@ -38,6 +39,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       socket
       |> assign(:page_title, gettext_str("New message"))
       |> assign(:module_access, scope && Scope.has_module_access?(scope, "inbox"))
+      |> assign(:scope, scope)
       |> assign(:current_user, user)
       |> assign(:mailboxes, sendable_mailboxes(user))
       |> assign(:mailbox, nil)
@@ -199,10 +201,11 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   def handle_event("send", params, socket) do
     params = strip_meta(params)
 
+    # Authorization (inbox permission, write on the mailbox) is checked by
+    # send_message/4 itself; the From picker only hides what would fail.
     with %{} = mailbox <- socket.assigns.mailbox,
-         :ok <- Mailboxes.authorize(mailbox, user_uuid(socket), "write"),
          attrs <- send_attrs(socket, params),
-         {:ok, _message} <- Messages.send_message(mailbox, user_uuid(socket), attrs) do
+         {:ok, _message} <- Messages.send_message(socket.assigns.scope, mailbox, attrs) do
       {:noreply,
        socket
        |> put_flash(:info, gettext_str("Message sent."))
