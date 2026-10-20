@@ -222,17 +222,24 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   end
 
   def handle_event("discard", _params, socket) do
-    socket =
-      case {socket.assigns.mailbox, socket.assigns.draft_uuid} do
-        {%{} = mailbox, uuid} when is_binary(uuid) ->
-          Messages.delete_draft(socket.assigns.scope, mailbox, uuid)
-          put_flash(socket, :info, gettext_str("Draft discarded."))
+    case {socket.assigns.mailbox, socket.assigns.draft_uuid} do
+      {%{} = mailbox, uuid} when is_binary(uuid) ->
+        case Messages.delete_draft(socket.assigns.scope, mailbox, uuid) do
+          :ok ->
+            {:noreply,
+             socket
+             |> put_flash(:info, gettext_str("Draft discarded."))
+             |> push_navigate(to: back_path(socket))}
 
-        _ ->
-          socket
-      end
+          # The draft stays, so the page does too: leaving would look like
+          # it had been discarded.
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, Errors.message(reason))}
+        end
 
-    {:noreply, push_navigate(socket, to: back_path(socket))}
+      _ ->
+        {:noreply, push_navigate(socket, to: back_path(socket))}
+    end
   end
 
   def handle_event("select_mailbox", %{"mailbox" => uuid}, socket) do

@@ -3,6 +3,8 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
 
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
+  alias PhoenixKitInbox.Schemas.MailboxGrant
+  alias PhoenixKitInbox.Test.Repo
 
   setup %{conn: conn} do
     enable_inbox!()
@@ -185,6 +187,28 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
 
     assert [%{message: sent}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
     assert sent.uuid == draft.uuid
+  end
+
+  test "discarding a draft the user can no longer write to says so and stays", ctx do
+    shared = shared_mailbox_fixture(ctx.bob, %{name: "Bob's desk"})
+    grant_fixture(shared, ctx.alice, "write")
+
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose?mailbox=#{shared.uuid}")
+
+    view
+    |> form("form", %{"to" => "", "subject" => "Doomed", "body" => ""})
+    |> render_change()
+
+    view |> element("button[phx-click='save_draft']") |> render_click()
+    assert [_] = Messages.list_folder(shared.uuid, "drafts")
+
+    Repo.delete_all(MailboxGrant)
+
+    html = view |> element("button[phx-click='discard']") |> render_click()
+
+    assert html =~ "access to this mailbox"
+    refute html =~ "Draft discarded."
+    assert [_] = Messages.list_folder(shared.uuid, "drafts")
   end
 
   test "an archived mailbox is not offered as a sender", ctx do
