@@ -94,11 +94,8 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
 
   def handle_event("grant", %{"user_uuid" => target, "access" => access}, socket) do
     with {:ok, mailbox} <- expanded_mailbox(socket),
-         :ok <- Mailboxes.authorize(mailbox, user_uuid(socket), "admin"),
          {:ok, _grant} <-
-           Mailboxes.grant_access(mailbox.uuid, String.trim(target), access,
-             granted_by_uuid: user_uuid(socket)
-           ) do
+           Mailboxes.grant_access(socket.assigns.scope, mailbox, String.trim(target), access) do
       {:noreply,
        socket
        |> assign(:grants, Mailboxes.list_grants(mailbox.uuid))
@@ -110,9 +107,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
 
   def handle_event("revoke", %{"user_uuid" => target}, socket) do
     with {:ok, mailbox} <- expanded_mailbox(socket),
-         :ok <- Mailboxes.authorize(mailbox, user_uuid(socket), "admin") do
-      Mailboxes.revoke_access(mailbox.uuid, target)
-
+         :ok <- Mailboxes.revoke_access(socket.assigns.scope, mailbox, target) do
       {:noreply,
        socket
        |> assign(:grants, Mailboxes.list_grants(mailbox.uuid))
@@ -124,8 +119,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
 
   def handle_event("archive", %{"uuid" => uuid}, socket) do
     with {:ok, mailbox} <- Mailboxes.fetch_mailbox(uuid),
-         :ok <- Mailboxes.authorize(mailbox, user_uuid(socket), "admin"),
-         {:ok, _} <- Mailboxes.archive_mailbox(mailbox) do
+         {:ok, _} <- Mailboxes.archive_mailbox(socket.assigns.scope, mailbox) do
       {:noreply,
        socket
        |> load_mailboxes()

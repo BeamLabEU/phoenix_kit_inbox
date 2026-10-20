@@ -225,7 +225,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     socket =
       case {socket.assigns.mailbox, socket.assigns.draft_uuid} do
         {%{} = mailbox, uuid} when is_binary(uuid) ->
-          Messages.delete_draft(mailbox, uuid)
+          Messages.delete_draft(socket.assigns.scope, mailbox, uuid)
           put_flash(socket, :info, gettext_str("Draft discarded."))
 
         _ ->
@@ -250,7 +250,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       |> Map.put("uuid", socket.assigns.draft_uuid)
       |> Map.put("parent_uuid", socket.assigns.parent_uuid)
 
-    case Messages.save_draft(mailbox, user_uuid(socket), attrs) do
+    case Messages.save_draft(socket.assigns.scope, mailbox, attrs) do
       {:ok, message} ->
         socket
         |> assign(:draft_uuid, message.uuid)
@@ -272,13 +272,6 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   # Phoenix injects "_target"/"_csrf_token" into form payloads; they'd end up in
   # the form assign and re-render as stray values.
   defp strip_meta(params), do: Map.drop(params, ~w(_target _csrf_token))
-
-  defp user_uuid(socket) do
-    case socket.assigns[:current_user] do
-      %{uuid: uuid} -> uuid
-      _ -> nil
-    end
-  end
 
   defp back_path(%{assigns: %{mailbox: %{uuid: uuid}}}), do: Paths.inbox(mailbox: uuid)
   defp back_path(_socket), do: Paths.inbox()

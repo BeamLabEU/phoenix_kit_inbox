@@ -32,6 +32,15 @@ defmodule PhoenixKitInbox.Errors do
   def message(:cannot_archive_personal_mailbox),
     do: gettext("Personal mailboxes can't be archived.")
 
+  def message(:cannot_grant_personal_mailbox),
+    do: gettext("Only shared mailboxes can be shared with others.")
+
+  def message(:mailbox_archived),
+    do: gettext("This mailbox is archived; it can't send.")
+
+  def message(:opts_need_scope),
+    do: gettext("These options need the sender's scope.")
+
   # Names the accepted forms. The bare "No mailbox matches: fotkin" left the
   # sender guessing whether the name was wrong, the person had no account, or
   # some other spelling was expected — and a username was in fact the one form

@@ -138,6 +138,19 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     assert html =~ "&gt; Pass it on"
   end
 
+  test "an archived mailbox is not offered as a sender", ctx do
+    active = shared_mailbox_fixture(ctx.bob, %{name: "Open desk"})
+    archived = shared_mailbox_fixture(ctx.bob, %{name: "Closed desk", status: "archived"})
+    grant_fixture(active, ctx.alice, "write")
+    grant_fixture(archived, ctx.alice, "write")
+
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose?mailbox=#{archived.uuid}")
+
+    assert has_element?(view, "select[name='mailbox'] option[value='#{active.uuid}']")
+    refute has_element?(view, "select[name='mailbox'] option[value='#{archived.uuid}']")
+    refute has_element?(view, "select[name='mailbox'] option[selected][value='#{archived.uuid}']")
+  end
+
   test "a user without the inbox permission can't compose", %{conn: conn} do
     conn = put_test_scope(conn, fake_scope(permissions: [], roles: []))
 

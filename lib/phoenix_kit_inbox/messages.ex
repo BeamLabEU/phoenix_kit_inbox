@@ -129,6 +129,17 @@ defmodule PhoenixKitInbox.Messages do
   @spec fetch_for_mailbox(binary(), binary()) :: {:ok, listed()} | {:error, :message_not_found}
   def fetch_for_mailbox(mailbox_uuid, message_uuid)
       when is_binary(mailbox_uuid) and is_binary(message_uuid) do
+    with {:ok, mailbox_uuid} <- Ecto.UUID.cast(mailbox_uuid),
+         {:ok, message_uuid} <- Ecto.UUID.cast(message_uuid) do
+      fetch_delivered(mailbox_uuid, message_uuid)
+    else
+      :error -> {:error, :message_not_found}
+    end
+  end
+
+  def fetch_for_mailbox(_, _), do: {:error, :message_not_found}
+
+  defp fetch_delivered(mailbox_uuid, message_uuid) do
     query =
       from(d in Delivery,
         join: m in Message,
@@ -141,12 +152,13 @@ defmodule PhoenixKitInbox.Messages do
       )
 
     case repo().one(query) do
-      nil -> {:error, :message_not_found}
-      {delivery, message} -> {:ok, %{delivery: delivery, message: message}}
+      nil ->
+        {:error, :message_not_found}
+
+      {delivery, message} ->
+        {:ok, %{delivery: delivery, message: message}}
     end
   end
-
-  def fetch_for_mailbox(_, _), do: {:error, :message_not_found}
 
   @doc "Every message in a thread, oldest first — the conversation view."
   @spec list_thread(binary()) :: [Message.t()]
@@ -223,14 +235,19 @@ defmodule PhoenixKitInbox.Messages do
   and `"bcc"` is kept as text (`draft_recipients/1` reads it back) so a
   reopened draft still has its recipients.
 
-  Like sending, saving needs `"write"` on the mailbox
-  (`{:error, :mailbox_access_denied}`).
+  Saving needs the `"inbox"` permission and `"write"` on the mailbox; the
+  draft's author is the scope's user. A `"parent_uuid"` must be a message the
+  mailbox holds (`{:error, :message_not_found}`).
   """
-  @spec save_draft(Mailbox.t(), binary(), map()) ::
+  @spec save_draft(Scope.t(), Mailbox.t(), map()) ::
           {:ok, Message.t()} | {:error, Ecto.Changeset.t() | atom()}
-  def save_draft(%Mailbox{} = mailbox, sender_user_uuid, attrs) do
-    with :ok <- Mailboxes.authorize(mailbox, sender_user_uuid, "write") do
-      do_save_draft(mailbox, sender_user_uuid, normalize_attrs(attrs))
+  def save_draft(%Scope{} = scope, %Mailbox{} = mailbox, attrs) when is_map(attrs) do
+    attrs = normalize_attrs(attrs)
+
+    with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
+         {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write"),
+         :ok <- validate_parent(fresh, attrs) do
+      do_save_draft(fresh, user_uuid, attrs)
     end
   end
 
@@ -315,21 +332,27 @@ defmodule PhoenixKitInbox.Messages do
     end
   end
 
-  @doc "Discards a draft and its delivery row. Only the author's own drafts."
-  @spec delete_draft(Mailbox.t(), binary()) :: :ok | {:error, :message_not_found}
-  def delete_draft(%Mailbox{} = mailbox, message_uuid) when is_binary(message_uuid) do
-    case repo().get_by(Message,
-           uuid: message_uuid,
-           sender_mailbox_uuid: mailbox.uuid,
-           status: "draft"
-         ) do
-      nil ->
-        {:error, :message_not_found}
-
-      message ->
-        # Deliveries cascade via the FK's on_delete: :delete_all.
-        repo().delete(message)
-        :ok
+  @doc """
+  Discards a draft and its delivery row. Only the mailbox's own drafts; needs
+  `"write"` on the mailbox.
+  """
+  @spec delete_draft(Scope.t(), Mailbox.t(), binary()) ::
+          :ok | {:error, :message_not_found | :forbidden | :mailbox_access_denied | term()}
+  def delete_draft(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid) do
+    with {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write"),
+         {:ok, message_uuid} <- cast_message_uuid(message_uuid),
+         %Message{} = draft <-
+           repo().get_by(Message,
+             uuid: message_uuid,
+             sender_mailbox_uuid: fresh.uuid,
+             status: "draft"
+           ),
+         # Deliveries cascade via the FK's on_delete: :delete_all.
+         {:ok, _} <- repo().delete(draft) do
+      :ok
+    else
+      nil -> {:error, :message_not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -371,20 +394,30 @@ defmodule PhoenixKitInbox.Messages do
   def send_message(sender, mailbox_or_user, attrs, opts \\ [])
 
   def send_message(%Scope{} = scope, %Mailbox{} = mailbox, attrs, _opts) when is_map(attrs) do
-    with {:ok, user_uuid} <- scope_user_uuid(scope),
-         :ok <- authorize_inbox(scope) do
+    with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
+         {:ok, _fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write") do
       deliver(mailbox, user_uuid, attrs)
     end
   end
 
-  def send_message(%Mailbox{} = mailbox, sender_user_uuid, attrs, _opts) when is_map(attrs) do
+  # Server-side options only mean something with a scope; the legacy form
+  # refuses them rather than silently dropping them.
+  def send_message(%Mailbox{}, _sender_user_uuid, _attrs, [_ | _]),
+    do: {:error, :opts_need_scope}
+
+  def send_message(%Mailbox{} = mailbox, sender_user_uuid, attrs, []) when is_map(attrs) do
     deliver(mailbox, sender_user_uuid, attrs)
   end
 
+  # The mailbox is re-read so its stored status and owner decide, not the
+  # struct the caller handed in.
   defp deliver(mailbox, sender_user_uuid, attrs) do
     attrs = normalize_attrs(attrs)
 
-    with :ok <- Mailboxes.authorize(mailbox, sender_user_uuid, "write"),
+    with {:ok, mailbox} <- Mailboxes.fetch_mailbox(mailbox.uuid),
+         :ok <- Mailboxes.authorize(mailbox, sender_user_uuid, "write"),
+         :ok <- ensure_active(mailbox),
+         :ok <- validate_parent(mailbox, attrs),
          {:ok, recipients} <- resolve_recipients(attrs),
          :ok <- ensure_any_recipient(recipients),
          {:ok, message} <- do_send(mailbox, sender_user_uuid, attrs, recipients) do
@@ -394,11 +427,23 @@ defmodule PhoenixKitInbox.Messages do
     end
   end
 
-  defp scope_user_uuid(%Scope{user: %{uuid: uuid}}) when is_binary(uuid), do: {:ok, uuid}
-  defp scope_user_uuid(_), do: {:error, :forbidden}
+  defp ensure_active(%Mailbox{status: "active"}), do: :ok
+  defp ensure_active(_), do: {:error, :mailbox_archived}
 
-  defp authorize_inbox(scope) do
-    if Scope.can?(scope, "inbox"), do: :ok, else: {:error, :forbidden}
+  # A reply joins its parent's thread, so the parent must be a message this
+  # mailbox actually holds — otherwise any uuid would let a message attach
+  # itself to someone else's conversation.
+  defp validate_parent(mailbox, attrs) do
+    case Map.get(attrs, "parent_uuid") do
+      blank when blank in [nil, ""] ->
+        :ok
+
+      parent_uuid ->
+        case fetch_for_mailbox(mailbox.uuid, parent_uuid) do
+          {:ok, _} -> :ok
+          {:error, _} -> {:error, :message_not_found}
+        end
+    end
   end
 
   defp do_send(mailbox, sender_user_uuid, attrs, recipients) do
@@ -595,11 +640,19 @@ defmodule PhoenixKitInbox.Messages do
   defp ensure_any_recipient(_), do: :ok
 
   # ── per-mailbox state ───────────────────────────────────────────────────────
+  #
+  # Each takes the caller's scope and checks it here, at the levels of the
+  # grant table: reading state (seen, star) needs "read", filing (move,
+  # purge) needs "write".
 
-  @doc "Marks a delivery seen. Idempotent — an already-seen row keeps its original stamp."
-  @spec mark_seen(binary(), binary()) :: {:ok, Delivery.t()} | {:error, :message_not_found}
-  def mark_seen(mailbox_uuid, message_uuid) do
-    update_delivery(mailbox_uuid, message_uuid, fn
+  @doc """
+  Marks a delivery seen. Idempotent — an already-seen row keeps its original
+  stamp. Needs `"read"` on the mailbox.
+  """
+  @spec mark_seen(Scope.t(), Mailbox.t(), binary()) ::
+          {:ok, Delivery.t()} | {:error, :message_not_found | :forbidden | :mailbox_access_denied}
+  def mark_seen(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid) do
+    update_delivery(scope, mailbox, "read", message_uuid, fn
       %Delivery{seen_at: nil} = delivery ->
         %{seen_at: DateTime.utc_now() |> DateTime.truncate(:second)}
         |> then(&Delivery.changeset(delivery, &1))
@@ -610,20 +663,22 @@ defmodule PhoenixKitInbox.Messages do
     end)
   end
 
-  @doc "Marks a delivery unseen."
-  @spec mark_unseen(binary(), binary()) :: {:ok, Delivery.t()} | {:error, :message_not_found}
-  def mark_unseen(mailbox_uuid, message_uuid) do
-    update_delivery(mailbox_uuid, message_uuid, fn delivery ->
+  @doc "Marks a delivery unseen. Needs `\"read\"` on the mailbox."
+  @spec mark_unseen(Scope.t(), Mailbox.t(), binary()) ::
+          {:ok, Delivery.t()} | {:error, :message_not_found | :forbidden | :mailbox_access_denied}
+  def mark_unseen(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid) do
+    update_delivery(scope, mailbox, "read", message_uuid, fn delivery ->
       delivery
       |> Ecto.Changeset.change(seen_at: nil)
       |> repo().update()
     end)
   end
 
-  @doc "Flips the star on a delivery."
-  @spec toggle_star(binary(), binary()) :: {:ok, Delivery.t()} | {:error, :message_not_found}
-  def toggle_star(mailbox_uuid, message_uuid) do
-    update_delivery(mailbox_uuid, message_uuid, fn delivery ->
+  @doc "Flips the star on a delivery. Needs `\"read\"` on the mailbox."
+  @spec toggle_star(Scope.t(), Mailbox.t(), binary()) ::
+          {:ok, Delivery.t()} | {:error, :message_not_found | :forbidden | :mailbox_access_denied}
+  def toggle_star(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid) do
+    update_delivery(scope, mailbox, "read", message_uuid, fn delivery ->
       delivery
       |> Delivery.changeset(%{starred: !delivery.starred})
       |> repo().update()
@@ -632,12 +687,14 @@ defmodule PhoenixKitInbox.Messages do
 
   @doc """
   Moves a delivery to another folder — the one operation behind Archive, Spam,
-  Trash, and Restore in the UI.
+  Trash, and Restore in the UI. Needs `"write"` on the mailbox.
   """
-  @spec move_to_folder(binary(), binary(), String.t()) ::
-          {:ok, Delivery.t()} | {:error, :message_not_found | Ecto.Changeset.t()}
-  def move_to_folder(mailbox_uuid, message_uuid, folder) do
-    update_delivery(mailbox_uuid, message_uuid, fn delivery ->
+  @spec move_to_folder(Scope.t(), Mailbox.t(), binary(), String.t()) ::
+          {:ok, Delivery.t()}
+          | {:error,
+             :message_not_found | :forbidden | :mailbox_access_denied | Ecto.Changeset.t()}
+  def move_to_folder(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid, folder) do
+    update_delivery(scope, mailbox, "write", message_uuid, fn delivery ->
       delivery
       |> Delivery.changeset(%{folder: folder})
       |> repo().update()
@@ -647,11 +704,12 @@ defmodule PhoenixKitInbox.Messages do
   @doc """
   Permanently removes a mailbox's copy of a message. The message itself and
   other mailboxes' copies are untouched — deleting your copy of a group thread
-  doesn't delete anyone else's.
+  doesn't delete anyone else's. Needs `"write"` on the mailbox.
   """
-  @spec purge(binary(), binary()) :: :ok | {:error, :message_not_found}
-  def purge(mailbox_uuid, message_uuid) do
-    case update_delivery(mailbox_uuid, message_uuid, fn delivery ->
+  @spec purge(Scope.t(), Mailbox.t(), binary()) ::
+          :ok | {:error, :message_not_found | :forbidden | :mailbox_access_denied}
+  def purge(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid) do
+    case update_delivery(scope, mailbox, "write", message_uuid, fn delivery ->
            delivery
            |> Delivery.changeset(%{status: "deleted"})
            |> repo().update()
@@ -661,23 +719,30 @@ defmodule PhoenixKitInbox.Messages do
     end
   end
 
-  defp update_delivery(mailbox_uuid, message_uuid, fun)
-       when is_binary(mailbox_uuid) and is_binary(message_uuid) do
-    query =
-      from(d in Delivery,
-        where: d.mailbox_uuid == ^mailbox_uuid,
-        where: d.message_uuid == ^message_uuid,
-        where: d.status == "active",
-        limit: 1
-      )
+  defp update_delivery(scope, mailbox, level, message_uuid, fun) do
+    with {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, level),
+         {:ok, message_uuid} <- cast_message_uuid(message_uuid) do
+      query =
+        from(d in Delivery,
+          where: d.mailbox_uuid == ^fresh.uuid,
+          where: d.message_uuid == ^message_uuid,
+          where: d.status == "active",
+          limit: 1
+        )
 
-    case repo().one(query) do
-      nil -> {:error, :message_not_found}
-      delivery -> fun.(delivery)
+      case repo().one(query) do
+        nil -> {:error, :message_not_found}
+        delivery -> fun.(delivery)
+      end
     end
   end
 
-  defp update_delivery(_, _, _), do: {:error, :message_not_found}
+  defp cast_message_uuid(uuid) do
+    case Ecto.UUID.cast(uuid) do
+      {:ok, uuid} -> {:ok, uuid}
+      :error -> {:error, :message_not_found}
+    end
+  end
 
   # ── helpers ─────────────────────────────────────────────────────────────────
 

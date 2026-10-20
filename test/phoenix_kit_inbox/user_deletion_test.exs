@@ -70,15 +70,15 @@ defmodule PhoenixKitInbox.UserDeletionTest do
   test "a shared mailbox passes to its oldest admin grantee", ctx do
     shared = shared_mailbox_fixture(ctx.leaver, %{name: "Handover"})
     newer_admin = user_fixture()
-    {:ok, _} = Mailboxes.grant_access(shared.uuid, ctx.stayer.uuid, "admin")
-    {:ok, _} = Mailboxes.grant_access(shared.uuid, user_fixture().uuid, "write")
+    grant_fixture(shared, ctx.stayer, "admin")
+    grant_fixture(shared, user_fixture(), "write")
     # Make the grant order unambiguous regardless of clock resolution.
     Repo.update_all(
       from(g in MailboxGrant, where: g.mailbox_uuid == ^shared.uuid),
       set: [inserted_at: ~U[2026-01-01 00:00:00Z]]
     )
 
-    {:ok, _} = Mailboxes.grant_access(shared.uuid, newer_admin.uuid, "admin")
+    grant_fixture(shared, newer_admin, "admin")
 
     delete!(ctx, ctx.leaver)
 
@@ -92,7 +92,7 @@ defmodule PhoenixKitInbox.UserDeletionTest do
 
   test "a shared mailbox with no admin grantee is archived", ctx do
     shared = shared_mailbox_fixture(ctx.leaver, %{name: "Last one out"})
-    {:ok, _} = Mailboxes.grant_access(shared.uuid, ctx.stayer.uuid, "write")
+    grant_fixture(shared, ctx.stayer, "write")
 
     delete!(ctx, ctx.leaver)
 

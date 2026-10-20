@@ -168,25 +168,27 @@ defmodule PhoenixKitInbox.MailboxesTest do
       user = user_fixture()
       {:ok, personal} = Mailboxes.ensure_user_mailbox(user)
 
-      assert {:error, :cannot_archive_personal_mailbox} = Mailboxes.archive_mailbox(personal)
+      assert {:error, :cannot_archive_personal_mailbox} =
+               Mailboxes.archive_mailbox(scope_for(user), personal)
     end
 
     test "archiving a shared mailbox removes it from the accessible list", %{owner: owner} do
       shared = shared_mailbox_fixture(owner, %{name: "Temp"})
 
       assert shared.uuid in mailbox_uuids(owner)
-      assert {:ok, _} = Mailboxes.archive_mailbox(shared)
+      assert {:ok, _} = Mailboxes.archive_mailbox(scope_for(owner), shared)
       refute shared.uuid in mailbox_uuids(owner)
     end
   end
 
   describe "access control" do
     setup do
+      enable_inbox!()
       owner = user_fixture()
       other = user_fixture()
       shared = shared_mailbox_fixture(owner, %{name: "Support Desk"})
 
-      %{owner: owner, other: other, shared: shared}
+      %{owner: owner, other: other, shared: shared, owner_scope: scope_for(owner)}
     end
 
     test "the owner holds admin without any grant row", %{owner: owner, shared: shared} do
@@ -199,44 +201,43 @@ defmodule PhoenixKitInbox.MailboxesTest do
       assert {:error, :mailbox_access_denied} = Mailboxes.authorize(shared, other.uuid, "read")
     end
 
-    test "granting read allows read but not write", %{other: other, shared: shared, owner: owner} do
-      {:ok, _} =
-        Mailboxes.grant_access(shared.uuid, other.uuid, "read", granted_by_uuid: owner.uuid)
+    test "granting read allows read but not write", ctx do
+      {:ok, grant} = Mailboxes.grant_access(ctx.owner_scope, ctx.shared, ctx.other.uuid, "read")
 
-      assert :ok = Mailboxes.authorize(shared, other.uuid, "read")
-      assert {:error, :mailbox_access_denied} = Mailboxes.authorize(shared, other.uuid, "write")
+      assert grant.granted_by_uuid == ctx.owner.uuid
+      assert :ok = Mailboxes.authorize(ctx.shared, ctx.other.uuid, "read")
+
+      assert {:error, :mailbox_access_denied} =
+               Mailboxes.authorize(ctx.shared, ctx.other.uuid, "write")
     end
 
     test "admin covers every weaker level", %{other: other, shared: shared} do
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, other.uuid, "admin")
+      grant_fixture(shared, other, "admin")
 
       assert :ok = Mailboxes.authorize(shared, other.uuid, "read")
       assert :ok = Mailboxes.authorize(shared, other.uuid, "write")
       assert :ok = Mailboxes.authorize(shared, other.uuid, "admin")
     end
 
-    test "re-granting updates the level instead of duplicating the row", %{
-      other: other,
-      shared: shared
-    } do
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, other.uuid, "read")
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, other.uuid, "write")
+    test "re-granting updates the level instead of duplicating the row", ctx do
+      {:ok, _} = Mailboxes.grant_access(ctx.owner_scope, ctx.shared, ctx.other.uuid, "read")
+      {:ok, _} = Mailboxes.grant_access(ctx.owner_scope, ctx.shared, ctx.other.uuid, "write")
 
-      assert length(Mailboxes.list_grants(shared.uuid)) == 1
-      assert Mailboxes.access_level(shared, other.uuid) == "write"
+      assert length(Mailboxes.list_grants(ctx.shared.uuid)) == 1
+      assert Mailboxes.access_level(ctx.shared, ctx.other.uuid) == "write"
     end
 
-    test "revoking is idempotent", %{other: other, shared: shared} do
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, other.uuid, "read")
+    test "revoking is idempotent", ctx do
+      grant_fixture(ctx.shared, ctx.other, "read")
 
-      assert :ok = Mailboxes.revoke_access(shared.uuid, other.uuid)
-      assert :ok = Mailboxes.revoke_access(shared.uuid, other.uuid)
-      assert Mailboxes.access_level(shared, other.uuid) == nil
+      assert :ok = Mailboxes.revoke_access(ctx.owner_scope, ctx.shared, ctx.other.uuid)
+      assert :ok = Mailboxes.revoke_access(ctx.owner_scope, ctx.shared, ctx.other.uuid)
+      assert Mailboxes.access_level(ctx.shared, ctx.other.uuid) == nil
     end
 
     test "a granted mailbox shows up in the sidebar list", %{other: other, shared: shared} do
       {:ok, _} = Mailboxes.ensure_user_mailbox(other)
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, other.uuid, "read")
+      grant_fixture(shared, other, "read")
 
       assert shared.uuid in mailbox_uuids(other)
     end
@@ -246,6 +247,89 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
       assert [first | _] = Mailboxes.list_accessible_mailboxes(owner.uuid)
       assert first.uuid == personal.uuid
+    end
+  end
+
+  describe "mailbox administration refuses a forged caller" do
+    setup do
+      enable_inbox!()
+      owner = user_fixture()
+      shared = shared_mailbox_fixture(owner, %{name: "Guarded"})
+      writer = user_fixture()
+      grant_fixture(shared, writer, "write")
+      target = user_fixture()
+
+      %{
+        owner: owner,
+        shared: shared,
+        target: target,
+        stranger: scope_for(user_fixture()),
+        writer: scope_for(writer),
+        no_inbox: scope_for(owner, [])
+      }
+    end
+
+    test "grant_access/4", ctx do
+      for {scope, reason} <- [
+            {ctx.stranger, :mailbox_access_denied},
+            {ctx.writer, :mailbox_access_denied},
+            {ctx.no_inbox, :forbidden},
+            {Scope.for_user(nil), :forbidden}
+          ] do
+        assert {:error, ^reason} =
+                 Mailboxes.grant_access(scope, ctx.shared, ctx.target.uuid, "admin")
+      end
+
+      assert Mailboxes.access_level(ctx.shared, ctx.target.uuid) == nil
+    end
+
+    test "grant_access/4 refuses grants on a personal mailbox", %{owner: owner, target: target} do
+      {:ok, personal} = Mailboxes.ensure_user_mailbox(owner)
+
+      assert {:error, :cannot_grant_personal_mailbox} =
+               Mailboxes.grant_access(scope_for(owner), personal, target.uuid, "read")
+    end
+
+    test "grant_access/4 can't be talked into trusting a hand-built struct", ctx do
+      # A struct claiming the stranger owns it: the stored row decides.
+      forged = %{ctx.shared | owner_uuid: ctx.stranger.user.uuid}
+
+      assert {:error, :mailbox_access_denied} =
+               Mailboxes.grant_access(ctx.stranger, forged, ctx.target.uuid, "admin")
+    end
+
+    test "revoke_access/3", ctx do
+      grant_fixture(ctx.shared, ctx.target, "read")
+
+      for scope <- [ctx.stranger, ctx.writer, ctx.no_inbox] do
+        assert {:error, _} = Mailboxes.revoke_access(scope, ctx.shared, ctx.target.uuid)
+      end
+
+      assert Mailboxes.access_level(ctx.shared, ctx.target.uuid) == "read"
+    end
+
+    test "archive_mailbox/2 and restore_mailbox/2", ctx do
+      for scope <- [ctx.stranger, ctx.writer, ctx.no_inbox] do
+        assert {:error, _} = Mailboxes.archive_mailbox(scope, ctx.shared)
+      end
+
+      assert {:ok, %{status: "active"}} = Mailboxes.fetch_mailbox(ctx.shared.uuid)
+
+      {:ok, archived} = Mailboxes.archive_mailbox(scope_for(ctx.owner), ctx.shared)
+
+      for scope <- [ctx.stranger, ctx.writer, ctx.no_inbox] do
+        assert {:error, _} = Mailboxes.restore_mailbox(scope, archived)
+      end
+
+      assert {:ok, %{status: "archived"}} = Mailboxes.fetch_mailbox(ctx.shared.uuid)
+
+      assert {:ok, %{status: "active"}} =
+               Mailboxes.restore_mailbox(scope_for(ctx.owner), archived)
+    end
+
+    test "update_mailbox/3 needs the inbox permission, not only admin", ctx do
+      assert {:error, :forbidden} =
+               Mailboxes.update_mailbox(ctx.no_inbox, ctx.shared, %{name: "x"})
     end
   end
 
@@ -273,7 +357,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
     test "archived mailboxes stop resolving" do
       owner = user_fixture()
       shared = shared_mailbox_fixture(owner, %{name: "Old Desk"})
-      {:ok, _} = Mailboxes.archive_mailbox(shared)
+      shared |> Ecto.Changeset.change(status: "archived") |> Repo.update!()
 
       assert {:error, :recipient_not_found} = Mailboxes.fetch_mailbox_by_recipient("old-desk")
     end

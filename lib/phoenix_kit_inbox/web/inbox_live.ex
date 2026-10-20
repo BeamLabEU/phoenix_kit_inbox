@@ -59,6 +59,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
       |> assign(:page_title, gettext_str("Inbox"))
       |> assign(:page_subtitle, gettext_str("Messages between users of this application"))
       |> assign(:module_access, scope && Scope.has_module_access?(scope, "inbox"))
+      |> assign(:scope, scope)
       |> assign(:current_user, user)
       |> assign(:mailboxes, [])
       |> assign(:mailbox, nil)
@@ -212,7 +213,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   end
 
   defp maybe_mark_seen(socket, %{delivery: %Delivery{seen_at: nil}} = entry) do
-    case Messages.mark_seen(socket.assigns.mailbox.uuid, entry.message.uuid) do
+    case Messages.mark_seen(socket.assigns.scope, socket.assigns.mailbox, entry.message.uuid) do
       {:ok, delivery} -> %{entry | delivery: delivery}
       _ -> entry
     end
@@ -253,7 +254,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   end
 
   def handle_event("toggle_star", %{"uuid" => uuid}, socket) do
-    {:noreply, mutate(socket, "read", fn mailbox -> Messages.toggle_star(mailbox.uuid, uuid) end)}
+    {:noreply, mutate(socket, &Messages.toggle_star(&1, &2, uuid))}
   end
 
   def handle_event("toggle_seen", %{"uuid" => uuid}, socket) do
@@ -261,25 +262,23 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     seen? = entry && entry.delivery.seen_at
 
     {:noreply,
-     mutate(socket, "read", fn mailbox ->
+     mutate(socket, fn scope, mailbox ->
        if seen?,
-         do: Messages.mark_unseen(mailbox.uuid, uuid),
-         else: Messages.mark_seen(mailbox.uuid, uuid)
+         do: Messages.mark_unseen(scope, mailbox, uuid),
+         else: Messages.mark_seen(scope, mailbox, uuid)
      end)}
   end
 
   def handle_event("move", %{"uuid" => uuid, "folder" => folder}, socket) do
     socket =
-      mutate(socket, "write", fn mailbox ->
-        Messages.move_to_folder(mailbox.uuid, uuid, folder)
-      end)
+      mutate(socket, &Messages.move_to_folder(&1, &2, uuid, folder))
 
     # The message just left the folder we're looking at, so close the pane.
     {:noreply, if(socket.assigns.folder == folder, do: socket, else: close_selected(socket))}
   end
 
   def handle_event("delete_forever", %{"uuid" => uuid}, socket) do
-    socket = mutate(socket, "write", fn mailbox -> Messages.purge(mailbox.uuid, uuid) end)
+    socket = mutate(socket, &Messages.purge(&1, &2, uuid))
     {:noreply, close_selected(socket)}
   end
 
@@ -287,31 +286,21 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     {:noreply, load_messages(socket)}
   end
 
-  # Runs a mutation against the current mailbox after re-checking access, then
-  # reloads the list. Centralized so every mutating event gets the same
-  # authorization + reload + flash treatment.
-  defp mutate(%{assigns: %{mailbox: nil}} = socket, _level, _fun), do: socket
+  # Runs a mutation against the current mailbox with the session scope, then
+  # reloads the list. The context function checks the scope's grant level
+  # itself (read for seen/star, write for move/purge); this only renders the
+  # outcome.
+  defp mutate(%{assigns: %{mailbox: nil}} = socket, _fun), do: socket
 
-  defp mutate(socket, level, fun) do
-    mailbox = socket.assigns.mailbox
-
-    case authorize(socket, mailbox, level) do
-      :ok ->
-        case fun.(mailbox) do
-          {:error, reason} when not is_struct(reason, Ecto.Changeset) ->
-            put_flash(socket, :error, Errors.message(reason))
-
-          {:error, changeset} ->
-            put_flash(socket, :error, Errors.message(changeset))
-
-          _ok ->
-            socket
-            |> load_messages()
-            |> refresh_selected()
-        end
-
+  defp mutate(socket, fun) do
+    case fun.(socket.assigns.scope, socket.assigns.mailbox) do
       {:error, reason} ->
         put_flash(socket, :error, Errors.message(reason))
+
+      _ok ->
+        socket
+        |> load_messages()
+        |> refresh_selected()
     end
   end
 

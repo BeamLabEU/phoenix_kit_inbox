@@ -39,6 +39,7 @@ defmodule PhoenixKitInbox.DataCase do
   alias PhoenixKit.Users.RoleAssignment
   alias PhoenixKit.Users.RolePermission
   alias PhoenixKitInbox.Schemas.Mailbox
+  alias PhoenixKitInbox.Schemas.MailboxGrant
   alias PhoenixKitInbox.Test.Repo, as: TestRepo
 
   setup tags do
@@ -158,6 +159,23 @@ defmodule PhoenixKitInbox.DataCase do
     %Mailbox{}
     |> Mailbox.changeset(attrs)
     |> TestRepo.insert!()
+  end
+
+  @doc """
+  Inserts a grant directly, bypassing the scope check of
+  `Mailboxes.grant_access/4` — for tests about something else.
+  """
+  def grant_fixture(mailbox, user, access) do
+    %MailboxGrant{}
+    |> MailboxGrant.changeset(%{
+      mailbox_uuid: mailbox.uuid,
+      user_uuid: user.uuid,
+      access: access
+    })
+    |> TestRepo.insert!(
+      on_conflict: {:replace, [:access, :updated_at]},
+      conflict_target: [:mailbox_uuid, :user_uuid]
+    )
   end
 
   @doc """

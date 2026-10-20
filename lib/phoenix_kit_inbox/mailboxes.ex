@@ -45,9 +45,12 @@ defmodule PhoenixKitInbox.Mailboxes do
   """
   @spec fetch_mailbox(binary()) :: {:ok, Mailbox.t()} | {:error, :mailbox_not_found}
   def fetch_mailbox(uuid) when is_binary(uuid) do
-    case repo().get(Mailbox, uuid) do
-      nil -> {:error, :mailbox_not_found}
-      mailbox -> {:ok, mailbox}
+    # A malformed uuid (a hand-edited `?mailbox=`) is "not found", not a crash.
+    with {:ok, uuid} <- Ecto.UUID.cast(uuid),
+         %Mailbox{} = mailbox <- repo().get(Mailbox, uuid) do
+      {:ok, mailbox}
+    else
+      _ -> {:error, :mailbox_not_found}
     end
   end
 
@@ -258,10 +261,12 @@ defmodule PhoenixKitInbox.Mailboxes do
   def recipient_handle(%Mailbox{kind: "user"}), do: nil
   def recipient_handle(%Mailbox{} = mailbox), do: mailbox.address || mailbox.slug
 
-  defp user_handle(%{username: username}) when is_binary(username) and username != "",
+  @doc "A user's To-field handle: `\"@username\"`, or the email without one."
+  @spec user_handle(map()) :: String.t() | nil
+  def user_handle(%{username: username}) when is_binary(username) and username != "",
     do: "@" <> username
 
-  defp user_handle(%{email: email}), do: email
+  def user_handle(%{email: email}), do: email
 
   @doc """
   Addressable recipients, for the compose field's suggestion list.
@@ -484,9 +489,9 @@ defmodule PhoenixKitInbox.Mailboxes do
   Updates a mailbox's `name`, `address` or `settings` — nothing else
   (ownership, kind and status have their own paths).
 
-  The scope's user needs `"admin"` on the mailbox
-  (`{:error, :mailbox_access_denied}`), and changing the `address` also needs
-  `inbox.manage_shared` (`{:error, :forbidden}`).
+  The scope needs the `"inbox"` permission (`{:error, :forbidden}`) and
+  `"admin"` on the mailbox (`{:error, :mailbox_access_denied}`); changing the
+  `address` also needs `inbox.manage_shared` (`{:error, :forbidden}`).
   """
   @spec update_mailbox(Scope.t(), Mailbox.t(), map()) ::
           {:ok, Mailbox.t()}
@@ -498,8 +503,7 @@ defmodule PhoenixKitInbox.Mailboxes do
         attrs |> normalize_attrs() |> Map.take(~w(name address settings))
       )
 
-    with {:ok, user_uuid} <- scope_user_uuid(scope),
-         :ok <- authorize(mailbox, user_uuid, "admin"),
+    with {:ok, _fresh} <- authorize_scope(scope, mailbox, "admin"),
          :ok <- authorize_address_change(scope, changeset) do
       changeset
       |> validate_address_not_a_user_email()
@@ -516,9 +520,6 @@ defmodule PhoenixKitInbox.Mailboxes do
       do: authorize_manage_shared(scope),
       else: :ok
   end
-
-  defp scope_user_uuid(%Scope{user: %{uuid: uuid}}) when is_binary(uuid), do: {:ok, uuid}
-  defp scope_user_uuid(_), do: {:error, :forbidden}
 
   # A shared address equal to someone's login email would make that string
   # mean two different recipients. Personal mailboxes are exempt — their
@@ -544,24 +545,38 @@ defmodule PhoenixKitInbox.Mailboxes do
   sentinel on the existing `status` column, never a `deleted_at` timestamp).
 
   Personal mailboxes cannot be archived: a user always has somewhere for mail
-  to land.
+  to land. Needs the `"inbox"` permission and `"admin"` on the mailbox.
   """
-  @spec archive_mailbox(Mailbox.t()) ::
-          {:ok, Mailbox.t()} | {:error, Ecto.Changeset.t() | :cannot_archive_personal_mailbox}
-  def archive_mailbox(%Mailbox{kind: "user"}), do: {:error, :cannot_archive_personal_mailbox}
+  @spec archive_mailbox(Scope.t(), Mailbox.t()) ::
+          {:ok, Mailbox.t()}
+          | {:error,
+             Ecto.Changeset.t()
+             | :cannot_archive_personal_mailbox
+             | :forbidden
+             | :mailbox_access_denied}
+  def archive_mailbox(%Scope{} = scope, %Mailbox{} = mailbox) do
+    with {:ok, fresh} <- authorize_scope(scope, mailbox, "admin") do
+      case fresh do
+        %Mailbox{kind: "user"} ->
+          {:error, :cannot_archive_personal_mailbox}
 
-  def archive_mailbox(%Mailbox{} = mailbox) do
-    mailbox
-    |> Mailbox.changeset(%{"status" => "archived"})
-    |> repo().update()
+        _ ->
+          fresh
+          |> Mailbox.changeset(%{"status" => "archived"})
+          |> repo().update()
+      end
+    end
   end
 
-  @doc "Reverses `archive_mailbox/1`."
-  @spec restore_mailbox(Mailbox.t()) :: {:ok, Mailbox.t()} | {:error, Ecto.Changeset.t()}
-  def restore_mailbox(%Mailbox{} = mailbox) do
-    mailbox
-    |> Mailbox.changeset(%{"status" => "active"})
-    |> repo().update()
+  @doc "Reverses `archive_mailbox/2`. Same permissions."
+  @spec restore_mailbox(Scope.t(), Mailbox.t()) ::
+          {:ok, Mailbox.t()} | {:error, Ecto.Changeset.t() | :forbidden | :mailbox_access_denied}
+  def restore_mailbox(%Scope{} = scope, %Mailbox{} = mailbox) do
+    with {:ok, fresh} <- authorize_scope(scope, mailbox, "admin") do
+      fresh
+      |> Mailbox.changeset(%{"status" => "active"})
+      |> repo().update()
+    end
   end
 
   @doc "Changeset for mailbox forms."
@@ -640,16 +655,34 @@ defmodule PhoenixKitInbox.Mailboxes do
   end
 
   @doc """
-  Grants (or re-grants) `user_uuid` access to a mailbox.
+  Grants (or re-grants) `user_uuid` access to a shared mailbox, recorded as
+  granted by the scope's user.
+
+  Needs the `"inbox"` permission and `"admin"` on the mailbox. Personal
+  mailboxes take no grants (`{:error, :cannot_grant_personal_mailbox}`).
 
   Upsert semantics: re-granting an existing user simply changes their level,
   which is what "set access to write" means in the UI.
   """
-  @spec grant_access(binary(), binary(), access(), keyword()) ::
-          {:ok, MailboxGrant.t()} | {:error, Ecto.Changeset.t()}
-  def grant_access(mailbox_uuid, user_uuid, access, opts \\ []) do
-    granted_by = Keyword.get(opts, :granted_by_uuid)
+  @spec grant_access(Scope.t(), Mailbox.t(), binary(), access()) ::
+          {:ok, MailboxGrant.t()}
+          | {:error,
+             Ecto.Changeset.t()
+             | :cannot_grant_personal_mailbox
+             | :forbidden
+             | :mailbox_access_denied}
+  def grant_access(%Scope{} = scope, %Mailbox{} = mailbox, user_uuid, access) do
+    with {:ok, fresh} <- authorize_scope(scope, mailbox, "admin"),
+         :ok <- ensure_shared(fresh) do
+      {:ok, granted_by} = scope_user_uuid(scope)
+      put_grant(fresh.uuid, user_uuid, access, granted_by)
+    end
+  end
 
+  defp ensure_shared(%Mailbox{kind: "shared"}), do: :ok
+  defp ensure_shared(_), do: {:error, :cannot_grant_personal_mailbox}
+
+  defp put_grant(mailbox_uuid, user_uuid, access, granted_by) do
     attrs = %{
       mailbox_uuid: mailbox_uuid,
       user_uuid: user_uuid,
@@ -657,20 +690,38 @@ defmodule PhoenixKitInbox.Mailboxes do
       granted_by_uuid: granted_by
     }
 
-    existing = repo().get_by(MailboxGrant, mailbox_uuid: mailbox_uuid, user_uuid: user_uuid)
+    # A malformed uuid falls through to the changeset, which rejects it.
+    existing =
+      case Ecto.UUID.cast(user_uuid) do
+        {:ok, uuid} -> repo().get_by(MailboxGrant, mailbox_uuid: mailbox_uuid, user_uuid: uuid)
+        :error -> nil
+      end
 
     (existing || %MailboxGrant{})
     |> MailboxGrant.changeset(attrs)
     |> then(&if existing, do: repo().update(&1), else: repo().insert(&1))
   end
 
-  @doc "Removes a user's grant on a mailbox. Idempotent."
-  @spec revoke_access(binary(), binary()) :: :ok
-  def revoke_access(mailbox_uuid, user_uuid) do
-    from(g in MailboxGrant, where: g.mailbox_uuid == ^mailbox_uuid and g.user_uuid == ^user_uuid)
-    |> repo().delete_all()
+  @doc """
+  Removes a user's grant on a mailbox. Idempotent. Needs the `"inbox"`
+  permission and `"admin"` on the mailbox.
+  """
+  @spec revoke_access(Scope.t(), Mailbox.t(), binary()) ::
+          :ok | {:error, :forbidden | :mailbox_access_denied}
+  def revoke_access(%Scope{} = scope, %Mailbox{} = mailbox, user_uuid) do
+    with {:ok, fresh} <- authorize_scope(scope, mailbox, "admin") do
+      case Ecto.UUID.cast(user_uuid) do
+        {:ok, uuid} ->
+          from(g in MailboxGrant, where: g.mailbox_uuid == ^fresh.uuid and g.user_uuid == ^uuid)
+          |> repo().delete_all()
 
-    :ok
+        # Not a uuid, so nobody holds a grant under it.
+        :error ->
+          :ok
+      end
+
+      :ok
+    end
   end
 
   @doc """
@@ -707,6 +758,38 @@ defmodule PhoenixKitInbox.Mailboxes do
       {:error, :mailbox_access_denied}
     end
   end
+
+  @doc """
+  The check every caller-acting function runs: the scope's user holds the
+  `"inbox"` permission (`{:error, :forbidden}`) and at least `required` on the
+  mailbox (`{:error, :mailbox_access_denied}`).
+
+  The mailbox is re-read, so a stale or hand-built struct can't grant more
+  than the stored row does; the fresh row is returned for the caller to act
+  on (`{:error, :mailbox_not_found}` if it is gone).
+  """
+  @spec authorize_scope(Scope.t(), Mailbox.t(), access()) ::
+          {:ok, Mailbox.t()}
+          | {:error, :forbidden | :mailbox_access_denied | :mailbox_not_found}
+  def authorize_scope(%Scope{} = scope, %Mailbox{uuid: uuid}, required) do
+    with {:ok, user_uuid} <- scope_user_uuid(scope),
+         :ok <- authorize_inbox(scope),
+         {:ok, fresh} <- fetch_mailbox(uuid),
+         :ok <- authorize(fresh, user_uuid, required) do
+      {:ok, fresh}
+    end
+  end
+
+  def authorize_scope(_scope, _mailbox, _required), do: {:error, :forbidden}
+
+  defp authorize_inbox(scope) do
+    if Scope.can?(scope, "inbox"), do: :ok, else: {:error, :forbidden}
+  end
+
+  @doc "The scope's user uuid, or `{:error, :forbidden}` for an anonymous scope."
+  @spec scope_user_uuid(Scope.t() | term()) :: {:ok, binary()} | {:error, :forbidden}
+  def scope_user_uuid(%Scope{user: %{uuid: uuid}}) when is_binary(uuid), do: {:ok, uuid}
+  def scope_user_uuid(_), do: {:error, :forbidden}
 
   # ── counts ──────────────────────────────────────────────────────────────────
 

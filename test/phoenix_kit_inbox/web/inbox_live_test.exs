@@ -5,6 +5,7 @@ defmodule PhoenixKitInbox.Web.InboxLiveTest do
   alias PhoenixKitInbox.Messages
 
   setup %{conn: conn} do
+    enable_inbox!()
     alice = user_fixture()
     bob = user_fixture()
 
@@ -143,6 +144,26 @@ defmodule PhoenixKitInbox.Web.InboxLiveTest do
     {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox?folder=sent&message=#{message.uuid}")
 
     assert has_element?(view, "#recipient-#{carol_mb.uuid}")
+  end
+
+  test "a read grantee's forged move and purge are refused", ctx do
+    shared = shared_mailbox_fixture(ctx.bob, %{name: "Read only here"})
+    grant_fixture(shared, ctx.alice, "read")
+
+    {:ok, message} =
+      Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+        "to" => shared.slug,
+        "subject" => "Stays put"
+      })
+
+    {:ok, view, _html} =
+      live(ctx.conn, "/en/admin/inbox?mailbox=#{shared.uuid}&message=#{message.uuid}")
+
+    render_hook(view, "move", %{"uuid" => message.uuid, "folder" => "trash"})
+    render_hook(view, "delete_forever", %{"uuid" => message.uuid})
+
+    assert [%{message: %{uuid: uuid}}] = Messages.list_folder(shared.uuid, "inbox")
+    assert uuid == message.uuid
   end
 
   test "a user without the inbox permission sees only the denial notice", %{conn: conn} do

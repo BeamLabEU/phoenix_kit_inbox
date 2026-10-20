@@ -7,6 +7,7 @@ defmodule PhoenixKitInbox.MessagesTest do
   alias PhoenixKitInbox.Notify
 
   setup do
+    enable_inbox!()
     alice = user_fixture()
     bob = user_fixture()
     carol = user_fixture()
@@ -21,7 +22,9 @@ defmodule PhoenixKitInbox.MessagesTest do
       carol: carol,
       alice_mb: alice_mb,
       bob_mb: bob_mb,
-      carol_mb: carol_mb
+      carol_mb: carol_mb,
+      alice_scope: scope_for(alice),
+      bob_scope: scope_for(bob)
     }
   end
 
@@ -172,13 +175,13 @@ defmodule PhoenixKitInbox.MessagesTest do
 
     test "a read grantee can't send as a shared mailbox; a write grantee can", ctx do
       shared = shared_mailbox_fixture(ctx.alice, %{name: "Team"})
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, ctx.bob.uuid, "read")
+      grant_fixture(shared, ctx.bob, "read")
 
       attrs = %{"to" => ctx.carol.email, "subject" => "From the team"}
 
       assert {:error, :mailbox_access_denied} = Messages.send_message(shared, ctx.bob.uuid, attrs)
 
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, ctx.bob.uuid, "write")
+      grant_fixture(shared, ctx.bob, "write")
       assert {:ok, _} = Messages.send_message(shared, ctx.bob.uuid, attrs)
     end
 
@@ -201,12 +204,75 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
   end
 
-  describe "send_message/4 with a scope" do
-    setup ctx do
-      enable_inbox!()
-      %{alice_scope: scope_for(ctx.alice)}
+  describe "what a send may refer to" do
+    test "an archived mailbox can't send, whatever the caller's struct says", ctx do
+      shared = shared_mailbox_fixture(ctx.alice, %{name: "Retired desk"})
+      stale = shared
+      {:ok, _} = Mailboxes.archive_mailbox(ctx.alice_scope, shared)
+
+      attrs = %{"to" => ctx.bob.email, "subject" => "From the grave"}
+
+      assert {:error, :mailbox_archived} = Messages.send_message(ctx.alice_scope, stale, attrs)
+      assert {:error, :mailbox_archived} = Messages.send_message(stale, ctx.alice.uuid, attrs)
+      assert Messages.list_folder(ctx.bob_mb.uuid, "inbox") == []
     end
 
+    test "a reply must name a message the sending mailbox holds", ctx do
+      {:ok, private} =
+        Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+          "to" => ctx.carol.email,
+          "subject" => "Bob and Carol only"
+        })
+
+      attrs = %{"to" => ctx.carol.email, "subject" => "Me too", "parent_uuid" => private.uuid}
+
+      assert {:error, :message_not_found} =
+               Messages.send_message(ctx.alice_scope, ctx.alice_mb, attrs)
+
+      assert {:error, :message_not_found} =
+               Messages.send_message(ctx.alice_mb, ctx.alice.uuid, attrs)
+
+      assert {:error, :message_not_found} =
+               Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"parent_uuid" => private.uuid})
+
+      assert {:error, :message_not_found} =
+               Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+                 attrs
+                 | "parent_uuid" => "junk"
+               })
+
+      assert Messages.list_thread(private.thread_uuid) |> length() == 1
+    end
+
+    test "a reply to a message the mailbox holds joins its thread", ctx do
+      {:ok, original} =
+        Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+          "to" => ctx.alice.email,
+          "subject" => "Q"
+        })
+
+      assert {:ok, reply} =
+               Messages.send_message(ctx.alice_scope, ctx.alice_mb, %{
+                 "to" => ctx.bob.email,
+                 "subject" => "A",
+                 "parent_uuid" => original.uuid
+               })
+
+      assert reply.thread_uuid == original.thread_uuid
+    end
+
+    test "the legacy form refuses server-side options instead of dropping them", ctx do
+      assert {:error, :opts_need_scope} =
+               Messages.send_message(
+                 ctx.alice_mb,
+                 ctx.alice.uuid,
+                 %{"to" => ctx.bob.email, "subject" => "x"},
+                 attachments_authorized: ["x"]
+               )
+    end
+  end
+
+  describe "send_message/4 with a scope" do
     test "sends as the scope's user", ctx do
       assert {:ok, message} =
                Messages.send_message(ctx.alice_scope, ctx.alice_mb, %{
@@ -294,7 +360,7 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert message.metadata["sender"]["user_uuid"] == ctx.alice.uuid
 
       assert {:ok, _draft} =
-               Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{"metadata" => nil})
+               Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"metadata" => nil})
     end
 
     test "one permanent inbox.message_sent activity with counts only", ctx do
@@ -321,9 +387,9 @@ defmodule PhoenixKitInbox.MessagesTest do
   describe "notifications" do
     test "a shared mailbox's message notifies its owner and every grantee", ctx do
       shared = shared_mailbox_fixture(ctx.carol, %{name: "Ops"})
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, ctx.bob.uuid, "read")
+      grant_fixture(shared, ctx.bob, "read")
       dave = user_fixture()
-      {:ok, _} = Mailboxes.grant_access(shared.uuid, dave.uuid, "admin")
+      grant_fixture(shared, dave, "admin")
 
       {:ok, message} =
         Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{"to" => "ops", "subject" => "Ping"})
@@ -400,7 +466,7 @@ defmodule PhoenixKitInbox.MessagesTest do
   describe "drafts" do
     test "saving creates one delivery in the author's drafts folder", ctx do
       assert {:ok, draft} =
-               Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{
+               Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{
                  "subject" => "Half written",
                  "body" => "..."
                })
@@ -411,10 +477,10 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
 
     test "re-saving updates the same message rather than creating another", ctx do
-      {:ok, draft} = Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{"subject" => "v1"})
+      {:ok, draft} = Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"subject" => "v1"})
 
       {:ok, updated} =
-        Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{
+        Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{
           "uuid" => draft.uuid,
           "subject" => "v2"
         })
@@ -425,11 +491,11 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
 
     test "a draft with no recipients is fine — validation happens at send", ctx do
-      assert {:ok, _} = Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{"subject" => ""})
+      assert {:ok, _} = Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"subject" => ""})
     end
 
     test "sending a draft promotes the same row and empties the drafts folder", ctx do
-      {:ok, draft} = Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{"subject" => "Ready"})
+      {:ok, draft} = Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"subject" => "Ready"})
 
       {:ok, sent} =
         Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
@@ -446,15 +512,15 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
 
     test "deleting a draft removes it and its delivery", ctx do
-      {:ok, draft} = Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{"subject" => "Nope"})
+      {:ok, draft} = Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"subject" => "Nope"})
 
-      assert :ok = Messages.delete_draft(ctx.alice_mb, draft.uuid)
+      assert :ok = Messages.delete_draft(ctx.alice_scope, ctx.alice_mb, draft.uuid)
       assert Messages.list_folder(ctx.alice_mb.uuid, "drafts") == []
     end
 
     test "a draft keeps its recipients as typed, half-typed ones included", ctx do
       {:ok, draft} =
-        Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{
+        Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{
           "to" => "@#{ctx.bob.username}, half-typ",
           "cc" => ["#{ctx.carol.email}"],
           "bcc" => "",
@@ -468,7 +534,7 @@ defmodule PhoenixKitInbox.MessagesTest do
              }
 
       {:ok, again} =
-        Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{
+        Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{
           "uuid" => draft.uuid,
           "to" => ctx.bob.email,
           "subject" => "With people"
@@ -479,7 +545,7 @@ defmodule PhoenixKitInbox.MessagesTest do
 
     test "sending a draft drops the saved recipient text", ctx do
       {:ok, draft} =
-        Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{
+        Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{
           "to" => ctx.bob.email,
           "subject" => "Go"
         })
@@ -496,15 +562,16 @@ defmodule PhoenixKitInbox.MessagesTest do
 
     test "nobody saves a draft into a mailbox they can't write to", ctx do
       assert {:error, :mailbox_access_denied} =
-               Messages.save_draft(ctx.alice_mb, ctx.bob.uuid, %{"subject" => "Planted"})
+               Messages.save_draft(ctx.bob_scope, ctx.alice_mb, %{"subject" => "Planted"})
 
       assert Messages.list_folder(ctx.alice_mb.uuid, "drafts") == []
     end
 
     test "you can't delete someone else's draft", ctx do
-      {:ok, draft} = Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{"subject" => "Mine"})
+      {:ok, draft} = Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{"subject" => "Mine"})
 
-      assert {:error, :message_not_found} = Messages.delete_draft(ctx.bob_mb, draft.uuid)
+      assert {:error, :message_not_found} =
+               Messages.delete_draft(ctx.bob_scope, ctx.bob_mb, draft.uuid)
     end
   end
 
@@ -521,7 +588,7 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
 
     test "marking seen in one mailbox doesn't touch the other", ctx do
-      assert {:ok, _} = Messages.mark_seen(ctx.bob_mb.uuid, ctx.message.uuid)
+      assert {:ok, _} = Messages.mark_seen(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid)
 
       assert [%{delivery: bobs}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
       assert bobs.seen_at
@@ -531,26 +598,28 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
 
     test "mark_seen is idempotent and keeps the original stamp", ctx do
-      {:ok, first} = Messages.mark_seen(ctx.bob_mb.uuid, ctx.message.uuid)
-      {:ok, second} = Messages.mark_seen(ctx.bob_mb.uuid, ctx.message.uuid)
+      {:ok, first} = Messages.mark_seen(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid)
+      {:ok, second} = Messages.mark_seen(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid)
 
       assert first.seen_at == second.seen_at
     end
 
     test "mark_unseen clears the stamp", ctx do
-      {:ok, _} = Messages.mark_seen(ctx.bob_mb.uuid, ctx.message.uuid)
-      assert {:ok, delivery} = Messages.mark_unseen(ctx.bob_mb.uuid, ctx.message.uuid)
+      {:ok, _} = Messages.mark_seen(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid)
+      assert {:ok, delivery} = Messages.mark_unseen(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid)
       assert is_nil(delivery.seen_at)
     end
 
     test "starring is per mailbox", ctx do
-      assert {:ok, %{starred: true}} = Messages.toggle_star(ctx.bob_mb.uuid, ctx.message.uuid)
+      assert {:ok, %{starred: true}} =
+               Messages.toggle_star(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid)
 
       assert [%{delivery: %{starred: false}}] = Messages.list_folder(ctx.carol_mb.uuid, "inbox")
     end
 
     test "moving to trash takes it out of the inbox listing", ctx do
-      assert {:ok, _} = Messages.move_to_folder(ctx.bob_mb.uuid, ctx.message.uuid, "trash")
+      assert {:ok, _} =
+               Messages.move_to_folder(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid, "trash")
 
       assert Messages.list_folder(ctx.bob_mb.uuid, "inbox") == []
       assert length(Messages.list_folder(ctx.bob_mb.uuid, "trash")) == 1
@@ -560,7 +629,7 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
 
     test "purging removes only this mailbox's copy", ctx do
-      assert :ok = Messages.purge(ctx.bob_mb.uuid, ctx.message.uuid)
+      assert :ok = Messages.purge(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid)
 
       assert Messages.list_folder(ctx.bob_mb.uuid, "inbox") == []
 
@@ -582,8 +651,99 @@ defmodule PhoenixKitInbox.MessagesTest do
     test "unseen counts are per folder", ctx do
       assert %{"inbox" => 1} = Mailboxes.unseen_counts(ctx.bob_mb.uuid)
 
-      {:ok, _} = Messages.mark_seen(ctx.bob_mb.uuid, ctx.message.uuid)
+      {:ok, _} = Messages.mark_seen(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid)
       assert Mailboxes.unseen_counts(ctx.bob_mb.uuid) == %{}
+    end
+  end
+
+  describe "delivery state refuses a forged caller" do
+    setup ctx do
+      shared = shared_mailbox_fixture(ctx.carol, %{name: "Front"})
+      reader = user_fixture()
+      writer = user_fixture()
+      grant_fixture(shared, reader, "read")
+      grant_fixture(shared, writer, "write")
+
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{"to" => "front", "subject" => "Hi"})
+
+      %{
+        shared: shared,
+        message: message,
+        reader: scope_for(reader),
+        writer: scope_for(writer),
+        stranger: scope_for(user_fixture()),
+        no_inbox: scope_for(reader, [])
+      }
+    end
+
+    test "reading state needs read: a stranger or a scope without inbox is refused", ctx do
+      for fun <- [&Messages.mark_seen/3, &Messages.mark_unseen/3, &Messages.toggle_star/3] do
+        assert {:error, :mailbox_access_denied} = fun.(ctx.stranger, ctx.shared, ctx.message.uuid)
+        assert {:error, :forbidden} = fun.(ctx.no_inbox, ctx.shared, ctx.message.uuid)
+        assert {:error, :forbidden} = fun.(Scope.for_user(nil), ctx.shared, ctx.message.uuid)
+        assert {:ok, _} = fun.(ctx.reader, ctx.shared, ctx.message.uuid)
+      end
+    end
+
+    test "someone else's personal mailbox is refused", ctx do
+      {:ok, sent} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "subject" => "x"
+        })
+
+      assert {:error, :mailbox_access_denied} =
+               Messages.mark_seen(ctx.alice_scope, ctx.bob_mb, sent.uuid)
+
+      assert {:error, :mailbox_access_denied} =
+               Messages.purge(ctx.alice_scope, ctx.bob_mb, sent.uuid)
+    end
+
+    test "filing needs write: a read grantee is refused", ctx do
+      assert {:error, :mailbox_access_denied} =
+               Messages.move_to_folder(ctx.reader, ctx.shared, ctx.message.uuid, "trash")
+
+      assert {:error, :mailbox_access_denied} =
+               Messages.purge(ctx.reader, ctx.shared, ctx.message.uuid)
+
+      assert {:error, :forbidden} =
+               Messages.move_to_folder(
+                 scope_for(ctx.carol, []),
+                 ctx.shared,
+                 ctx.message.uuid,
+                 "trash"
+               )
+
+      assert [_] = Messages.list_folder(ctx.shared.uuid, "inbox")
+
+      assert {:ok, _} =
+               Messages.move_to_folder(ctx.writer, ctx.shared, ctx.message.uuid, "archive")
+
+      assert :ok = Messages.purge(ctx.writer, ctx.shared, ctx.message.uuid)
+    end
+
+    test "a draft is deleted only with write on its mailbox", ctx do
+      {:ok, draft} = Messages.save_draft(ctx.writer, ctx.shared, %{"subject" => "Team draft"})
+
+      assert {:error, :mailbox_access_denied} =
+               Messages.delete_draft(ctx.reader, ctx.shared, draft.uuid)
+
+      assert {:error, :forbidden} = Messages.delete_draft(ctx.no_inbox, ctx.shared, draft.uuid)
+      assert [_] = Messages.list_folder(ctx.shared.uuid, "drafts")
+      assert :ok = Messages.delete_draft(ctx.writer, ctx.shared, draft.uuid)
+    end
+
+    test "a draft can't be saved by a read grantee or without inbox", ctx do
+      assert {:error, :mailbox_access_denied} =
+               Messages.save_draft(ctx.reader, ctx.shared, %{"subject" => "x"})
+
+      assert {:error, :forbidden} =
+               Messages.save_draft(ctx.no_inbox, ctx.shared, %{"subject" => "x"})
+    end
+
+    test "a malformed message uuid is not found, not a crash", ctx do
+      assert {:error, :message_not_found} = Messages.mark_seen(ctx.reader, ctx.shared, "nope")
     end
   end
 
@@ -619,7 +779,7 @@ defmodule PhoenixKitInbox.MessagesTest do
 
     test "unseen_only filters read messages out", ctx do
       [%{message: first} | _] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
-      {:ok, _} = Messages.mark_seen(ctx.bob_mb.uuid, first.uuid)
+      {:ok, _} = Messages.mark_seen(ctx.bob_scope, ctx.bob_mb, first.uuid)
 
       assert length(Messages.list_folder(ctx.bob_mb.uuid, "inbox", unseen_only: true)) == 2
     end
