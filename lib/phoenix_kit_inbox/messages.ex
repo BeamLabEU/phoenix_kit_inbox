@@ -36,6 +36,9 @@ defmodule PhoenixKitInbox.Messages do
   alias PhoenixKitInbox.Schemas.Message
 
   @default_limit 50
+  @recipient_roles ~w(to cc bcc)
+  # Where a draft keeps what was typed into To/Cc/Bcc — text, unresolved.
+  @draft_recipients_key "draft_recipients"
 
   @typedoc """
   A message as the UI consumes it: the delivery row (folder/seen/starred state
@@ -216,15 +219,30 @@ defmodule PhoenixKitInbox.Messages do
   own `"drafts"` folder.
 
   Recipients are *not* resolved here. A half-typed address is a normal state
-  for a draft; validation happens at send.
+  for a draft; validation happens at send. What was typed into `"to"`, `"cc"`
+  and `"bcc"` is kept as text (`draft_recipients/1` reads it back) so a
+  reopened draft still has its recipients.
+
+  Like sending, saving needs `"write"` on the mailbox
+  (`{:error, :mailbox_access_denied}`).
   """
   @spec save_draft(Mailbox.t(), binary(), map()) ::
           {:ok, Message.t()} | {:error, Ecto.Changeset.t() | atom()}
   def save_draft(%Mailbox{} = mailbox, sender_user_uuid, attrs) do
-    attrs = normalize_attrs(attrs)
+    with :ok <- Mailboxes.authorize(mailbox, sender_user_uuid, "write") do
+      do_save_draft(mailbox, sender_user_uuid, normalize_attrs(attrs))
+    end
+  end
+
+  defp do_save_draft(mailbox, sender_user_uuid, attrs) do
     existing = draft_from_attrs(mailbox, attrs)
 
     base = existing || %Message{}
+
+    metadata =
+      attrs
+      |> Map.get("metadata", base.metadata || %{})
+      |> Map.put(@draft_recipients_key, typed_recipients(attrs))
 
     changeset =
       Message.changeset(base, %{
@@ -236,7 +254,7 @@ defmodule PhoenixKitInbox.Messages do
         "body" => Map.get(attrs, "body"),
         "body_format" => Map.get(attrs, "body_format", "text"),
         "status" => "draft",
-        "metadata" => Map.get(attrs, "metadata", base.metadata || %{})
+        "metadata" => metadata
       })
 
     Multi.new()
@@ -255,6 +273,29 @@ defmodule PhoenixKitInbox.Messages do
       {:error, _step, reason, _changes} -> {:error, reason}
     end
   end
+
+  @doc """
+  The recipients typed into a draft when it was last saved, as
+  `%{"to" => text, "cc" => text, "bcc" => text}` — blank strings when none.
+  """
+  @spec draft_recipients(Message.t()) :: %{String.t() => String.t()}
+  def draft_recipients(%Message{metadata: %{@draft_recipients_key => saved}})
+      when is_map(saved) do
+    Map.new(@recipient_roles, &{&1, Map.get(saved, &1) || ""})
+  end
+
+  def draft_recipients(%Message{}), do: Map.new(@recipient_roles, &{&1, ""})
+
+  defp typed_recipients(attrs) do
+    Map.new(@recipient_roles, fn role ->
+      {role, attrs |> Map.get(role) |> recipient_text()}
+    end)
+  end
+
+  defp recipient_text(list) when is_list(list), do: Enum.map_join(list, ", ", &to_string/1)
+
+  defp recipient_text(text) when is_binary(text), do: text
+  defp recipient_text(_), do: ""
 
   defp draft_from_attrs(mailbox, attrs) do
     case Map.get(attrs, "uuid") do
@@ -371,6 +412,7 @@ defmodule PhoenixKitInbox.Messages do
         "metadata" =>
           attrs
           |> Map.get("metadata", base.metadata || %{})
+          |> Map.delete(@draft_recipients_key)
           |> Map.merge(send_record(mailbox, sender_user_uuid, recipients))
       })
 

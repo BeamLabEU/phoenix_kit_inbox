@@ -83,6 +83,31 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     assert draft.status == "draft"
   end
 
+  test "a saved draft reopens with its recipients", ctx do
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+
+    view
+    |> form("form", %{
+      "to" => "@#{ctx.bob.username}",
+      "cc" => "someone-half",
+      "bcc" => ctx.bob.email,
+      "subject" => "Come back to this",
+      "body" => ""
+    })
+    |> render_change()
+
+    view |> element("button[phx-click='save_draft']") |> render_click()
+
+    assert [%{message: draft}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
+
+    {:ok, reopened, _html} = live(ctx.conn, "/en/admin/inbox/compose?draft=#{draft.uuid}")
+
+    assert has_element?(reopened, "input[name='to'][value='@#{ctx.bob.username}']")
+    assert has_element?(reopened, "input[name='cc'][value='someone-half']")
+    assert has_element?(reopened, "input[name='bcc'][value='#{ctx.bob.email}']")
+    assert has_element?(reopened, "input[name='subject'][value='Come back to this']")
+  end
+
   test "replying prefills the recipient and a Re: subject", ctx do
     {:ok, message} =
       Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{

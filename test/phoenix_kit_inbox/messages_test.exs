@@ -399,6 +399,55 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert Messages.list_folder(ctx.alice_mb.uuid, "drafts") == []
     end
 
+    test "a draft keeps its recipients as typed, half-typed ones included", ctx do
+      {:ok, draft} =
+        Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => "@#{ctx.bob.username}, half-typ",
+          "cc" => ["#{ctx.carol.email}"],
+          "bcc" => "",
+          "subject" => "With people"
+        })
+
+      assert Messages.draft_recipients(draft) == %{
+               "to" => "@#{ctx.bob.username}, half-typ",
+               "cc" => ctx.carol.email,
+               "bcc" => ""
+             }
+
+      {:ok, again} =
+        Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{
+          "uuid" => draft.uuid,
+          "to" => ctx.bob.email,
+          "subject" => "With people"
+        })
+
+      assert Messages.draft_recipients(again) == %{"to" => ctx.bob.email, "cc" => "", "bcc" => ""}
+    end
+
+    test "sending a draft drops the saved recipient text", ctx do
+      {:ok, draft} =
+        Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "subject" => "Go"
+        })
+
+      {:ok, sent} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "uuid" => draft.uuid,
+          "to" => ctx.bob.email,
+          "subject" => "Go"
+        })
+
+      refute Map.has_key?(sent.metadata, "draft_recipients")
+    end
+
+    test "nobody saves a draft into a mailbox they can't write to", ctx do
+      assert {:error, :mailbox_access_denied} =
+               Messages.save_draft(ctx.alice_mb, ctx.bob.uuid, %{"subject" => "Planted"})
+
+      assert Messages.list_folder(ctx.alice_mb.uuid, "drafts") == []
+    end
+
     test "you can't delete someone else's draft", ctx do
       {:ok, draft} = Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{"subject" => "Mine"})
 

@@ -162,10 +162,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   defp prefill_draft(socket, uuid) do
     case Messages.fetch_for_mailbox(socket.assigns.mailbox.uuid, uuid) do
       {:ok, %{message: %Message{status: "draft"} = message}} ->
-        recipients =
-          message.uuid
-          |> Messages.list_recipients()
-          |> Enum.group_by(& &1.role, &recipient_handle(&1.mailbox))
+        recipients = Messages.draft_recipients(message)
 
         socket
         |> assign(:draft_uuid, message.uuid)
@@ -174,9 +171,9 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         |> assign(
           :form,
           to_form(%{
-            "to" => recipients |> Map.get("to", []) |> Enum.join(", "),
-            "cc" => recipients |> Map.get("cc", []) |> Enum.join(", "),
-            "bcc" => recipients |> Map.get("bcc", []) |> Enum.join(", "),
+            "to" => recipients["to"],
+            "cc" => recipients["cc"],
+            "bcc" => recipients["bcc"],
             "subject" => message.subject || "",
             "body" => message.body || ""
           })
@@ -194,8 +191,10 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     {:noreply, assign(socket, :form, to_form(strip_meta(params)))}
   end
 
+  # The Save draft button is a phx-click, which carries no form fields — the
+  # draft is whatever the form holds, as kept current by "validate".
   def handle_event("save_draft", params, socket) do
-    {:noreply, save_draft(socket, strip_meta(params))}
+    {:noreply, save_draft(socket, Map.merge(socket.assigns.form.params, strip_meta(params)))}
   end
 
   def handle_event("send", params, socket) do
@@ -247,7 +246,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
     attrs =
       params
-      |> Map.take(~w(subject body))
+      |> Map.take(~w(to cc bcc subject body))
       |> Map.put("uuid", socket.assigns.draft_uuid)
       |> Map.put("parent_uuid", socket.assigns.parent_uuid)
 
@@ -411,8 +410,6 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       _ -> ""
     end
   end
-
-  defp recipient_handle(mailbox), do: Mailboxes.recipient_handle(mailbox) || mailbox.slug
 
   defp prefixed_subject(prefix, nil), do: String.trim_trailing(prefix)
 
