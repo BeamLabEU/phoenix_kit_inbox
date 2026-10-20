@@ -71,7 +71,7 @@ Consequences worth remembering before changing anything:
 
 - **Per-recipient state lives on the delivery, never on the message.** Marking a group thread read must not mark it read for the other four recipients. Any new per-person flag goes on `Delivery`.
 - **`Messages.fetch_for_mailbox/2` is scoped through the delivery.** Asking for a message uuid a mailbox was never sent returns `{:error, :message_not_found}` — that is the read-authorization boundary, not an incidental join.
-- **`purge/2` marks the delivery `"deleted"`, not the message.** Deleting your copy of a thread must not delete anyone else's.
+- **`purge/3` marks the delivery `"deleted"`, not the message.** Deleting your copy of a thread must not delete anyone else's.
 - **`thread_uuid` is NOT NULL and a root message's equals its own uuid.** It can't be set before insert, so `backfill_thread_uuid/2` writes it inside the same `Multi`.
 - **Folders are a column, not a table.** Six fixed values. User-defined labels would be a new table + join, i.e. a V02 — not a v1 guess.
 
@@ -94,6 +94,8 @@ Two gates, and they are different questions:
 
 1. **Module permission** — `Scope.has_module_access?(scope, "inbox")`. Can this user open Inbox at all? Checked in every LiveView's `mount/3` and re-checked in `handle_params/3`. Sub-permissions (`inbox.manage_shared`, `inbox.send_external`) are checked with `Scope.can?/2` **in the context function** that needs them, so those functions take the caller's `%Scope{}` (`create_shared_mailbox/2`, `update_mailbox/3`).
 2. **Mailbox grants** — `Mailboxes.authorize(mailbox, user_uuid, "write")`. Which mailboxes can they see once inside? Ownership short-circuits to `"admin"`, so an owner never has a grant row for their own mailbox.
+
+**Every function that changes data takes the caller's `%Scope{}` and checks both gates itself** through `Mailboxes.authorize_scope/3` (which re-reads the mailbox, so a stale or hand-built struct grants nothing): seen/star need `read`; drafts, move, purge and sending need `write`; grants, archive/restore and `update_mailbox/3` need `admin`. LiveViews pass `socket.assigns.scope` and only render the outcome. The one exception is `Messages.send_message/3` (mailbox + sender uuid), kept for hosts and checked against the grants. Sending refuses an archived mailbox and a `parent_uuid` the mailbox doesn't hold.
 
 Levels are ordered `read < write < admin` via `MailboxGrant.covers?/2`.
 

@@ -158,6 +158,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
 
         <.create_form :if={@can_manage_shared} form={@form} />
         <.mailbox_table
+          can_create={@can_manage_shared}
           mailboxes={@mailboxes}
           expanded={@expanded}
           grants={@grants}
@@ -214,6 +215,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
     """
   end
 
+  attr(:can_create, :boolean, required: true)
   attr(:mailboxes, :list, required: true)
   attr(:expanded, :any, required: true)
   attr(:grants, :list, required: true)
@@ -229,7 +231,12 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
           <.empty_state
             icon="hero-user-group"
             title={gettext_str("No shared mailboxes yet.")}
-            description={gettext_str("Create one above to let a team share an address.")}
+            description={
+              if(@can_create,
+                do: gettext_str("Create one above to let a team share an address."),
+                else: gettext_str("Shared mailboxes you are given access to appear here.")
+              )
+            }
           />
         </div>
 

@@ -21,6 +21,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLiveTest do
     {:ok, view, _html} = live(as(ctx.conn, ctx.alice, ["inbox"]), "/en/admin/inbox/mailboxes")
 
     refute has_element?(view, "#new-shared-mailbox-form")
+    refute render(view) =~ "Create one above"
   end
 
   test "a forged create event without inbox.manage_shared creates nothing", ctx do

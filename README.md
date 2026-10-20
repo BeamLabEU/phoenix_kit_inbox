@@ -100,8 +100,7 @@ alias PhoenixKitInbox.Mailboxes
   address: "support@example.com"
 })
 
-{:ok, _} = Mailboxes.grant_access(support.uuid, teammate.uuid, "write",
-             granted_by_uuid: owner.uuid)
+{:ok, _} = Mailboxes.grant_access(scope, support, teammate.uuid, "write")   # admin on support
 
 Mailboxes.access_level(support, owner.uuid)           #=> "admin"  (ownership implies admin)
 Mailboxes.authorize(support, teammate.uuid, "write")  #=> :ok
@@ -141,21 +140,21 @@ Messages.count_folder(mailbox.uuid, "inbox")
 Messages.fetch_for_mailbox(mailbox.uuid, message_uuid)   # scoped — never reads someone else's mail
 Messages.list_thread(message.thread_uuid)
 
-Messages.mark_seen(mailbox.uuid, message_uuid)
-Messages.toggle_star(mailbox.uuid, message_uuid)
-Messages.move_to_folder(mailbox.uuid, message_uuid, "archive")
-Messages.purge(mailbox.uuid, message_uuid)   # removes only THIS mailbox's copy
+Messages.mark_seen(scope, mailbox, message_uuid)        # read on the mailbox
+Messages.toggle_star(scope, mailbox, message_uuid)      # read
+Messages.move_to_folder(scope, mailbox, message_uuid, "archive")   # write
+Messages.purge(scope, mailbox, message_uuid)   # write; removes only THIS mailbox's copy
 ```
 
 ### Drafts
 
 ```elixir
-{:ok, draft} = Messages.save_draft(mailbox, user_uuid, %{"to" => "@bob", "subject" => "WIP"})
+{:ok, draft} = Messages.save_draft(scope, mailbox, %{"to" => "@bob", "subject" => "WIP"})
 Messages.draft_recipients(draft)   #=> %{"to" => "@bob", "cc" => "", "bcc" => ""}
-{:ok, draft} = Messages.save_draft(mailbox, user_uuid, %{"uuid" => draft.uuid, "body" => "more"})
+{:ok, draft} = Messages.save_draft(scope, mailbox, %{"uuid" => draft.uuid, "body" => "more"})
 
 # Sending promotes the same row — same uuid, status flips to "sent"
-{:ok, sent} = Messages.send_message(mailbox, user_uuid, %{
+{:ok, sent} = Messages.send_message(scope, mailbox, %{
   "uuid" => draft.uuid, "to" => "bob@example.com", "subject" => "WIP"
 })
 ```
@@ -177,7 +176,7 @@ PhoenixKitInbox.Notify.email_nudges_available?()  #=> is phoenix_kit_emails actu
 The module key is `"inbox"`. Two levels:
 
 1. **Module permission** — `Scope.has_module_access?(scope, "inbox")` decides who can open Inbox at all. Managed in the admin roles/permissions matrix like every other module. Two sub-permissions add capabilities, checked by the context functions with `Scope.can?/2`: `inbox.manage_shared` (create shared mailboxes, set addresses) and `inbox.send_external` (reserved for sending to outside addresses).
-2. **Mailbox grants** — decide which mailboxes a user sees once inside. Owning a mailbox implies `"admin"` on it; everything else needs a row in `phoenix_kit_inbox_mailbox_grants`.
+2. **Mailbox grants** — decide which mailboxes a user sees once inside, and what they may do there (every function that changes something takes the caller's scope and checks both gates itself). Owning a mailbox implies `"admin"` on it; everything else needs a row in `phoenix_kit_inbox_mailbox_grants`.
 
 Levels are ordered `read < write < admin`:
 

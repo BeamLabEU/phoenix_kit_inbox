@@ -99,7 +99,7 @@ defmodule PhoenixKitInbox.Mailboxes do
   Accepted, case-insensitively:
 
     * `"@alice"` — a **username**, the `@` stripped; a shared mailbox's slug
-      or name only when no user has that username
+      only when no user has that username
     * `"alice@example.com"` — a user's login **email**, then a shared
       mailbox's `address`
     * `"support"` / `"Customer Support"` — a shared mailbox's slug, name or
