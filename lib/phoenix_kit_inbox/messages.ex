@@ -446,9 +446,10 @@ defmodule PhoenixKitInbox.Messages do
     end
   end
 
-  # Server-written, so a caller's "sender" key can't impersonate anyone.
+  # Server-written, so a caller's "sender" key can't impersonate anyone. The
+  # write check before it guarantees a sender uuid.
   defp send_record(mailbox, sender_user_uuid, recipients) do
-    user = if is_binary(sender_user_uuid), do: repo().get(User, sender_user_uuid)
+    user = repo().get(User, sender_user_uuid)
 
     %{
       "sender" => %{
