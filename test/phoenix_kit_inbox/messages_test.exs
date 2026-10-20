@@ -283,6 +283,20 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert message.metadata["ref"] == "order-1"
     end
 
+    test "a nil metadata from the caller is treated as none", ctx do
+      assert {:ok, message} =
+               Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+                 "to" => ctx.bob.email,
+                 "subject" => "No meta",
+                 "metadata" => nil
+               })
+
+      assert message.metadata["sender"]["user_uuid"] == ctx.alice.uuid
+
+      assert {:ok, _draft} =
+               Messages.save_draft(ctx.alice_mb, ctx.alice.uuid, %{"metadata" => nil})
+    end
+
     test "one permanent inbox.message_sent activity with counts only", ctx do
       {:ok, message} =
         Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{

@@ -241,7 +241,7 @@ defmodule PhoenixKitInbox.Messages do
 
     metadata =
       attrs
-      |> Map.get("metadata", base.metadata || %{})
+      |> caller_metadata(base)
       |> Map.put(@draft_recipients_key, typed_recipients(attrs))
 
     changeset =
@@ -290,6 +290,14 @@ defmodule PhoenixKitInbox.Messages do
     Map.new(@recipient_roles, fn role ->
       {role, attrs |> Map.get(role) |> recipient_text()}
     end)
+  end
+
+  # The caller's "metadata" when it is a map, else what the message had.
+  defp caller_metadata(attrs, base) do
+    case Map.get(attrs, "metadata") do
+      metadata when is_map(metadata) -> metadata
+      _ -> base.metadata || %{}
+    end
   end
 
   defp recipient_text(list) when is_list(list), do: Enum.map_join(list, ", ", &to_string/1)
@@ -411,7 +419,7 @@ defmodule PhoenixKitInbox.Messages do
         "sent_at" => now,
         "metadata" =>
           attrs
-          |> Map.get("metadata", base.metadata || %{})
+          |> caller_metadata(base)
           |> Map.delete(@draft_recipients_key)
           |> Map.merge(send_record(mailbox, sender_user_uuid, recipients))
       })
