@@ -11,6 +11,10 @@ defmodule PhoenixKitInbox.Schemas.Mailbox do
       user who created it; everyone else reaches it through a
       `PhoenixKitInbox.Schemas.MailboxGrant`.
 
+  `owner_uuid` is required on creation but nullable in the table (V02): when
+  the owner's account is deleted the mailbox and its mail stay, ownerless and
+  archived (see `PhoenixKitInbox.before_user_delete/1`).
+
   A shared mailbox's `address` is unique regardless of case and may not be a
   user's login email (`PhoenixKitInbox.Mailboxes` checks the latter on save).
 

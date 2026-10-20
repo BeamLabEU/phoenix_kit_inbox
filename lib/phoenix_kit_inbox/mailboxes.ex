@@ -570,6 +570,63 @@ defmodule PhoenixKitInbox.Mailboxes do
     Mailbox.changeset(mailbox, normalize_attrs(attrs))
   end
 
+  # ── account deletion ────────────────────────────────────────────────────────
+
+  @doc """
+  Readies `user_uuid`'s mailboxes for the deletion of their account — called
+  by `PhoenixKitInbox.before_user_delete/1` while the user row still exists.
+
+    * their personal mailbox is archived (personal mailboxes otherwise can't
+      be); its mail stays, readable by nobody until an admin restores it
+    * each shared mailbox they own passes to its oldest `"admin"` grantee,
+      whose grant row goes (ownership already means admin); with no admin
+      grantee it is archived
+
+  The deletion then clears `owner_uuid` on whatever is still theirs (V02:
+  `ON DELETE SET NULL`). Those foreign keys are what keep the mail; this is
+  the best-effort part that leaves no live mailbox without an owner.
+  """
+  @spec handle_user_deletion(binary()) :: :ok
+  def handle_user_deletion(user_uuid) when is_binary(user_uuid) do
+    repo().transaction(fn ->
+      from(m in Mailbox, where: m.owner_uuid == ^user_uuid and m.kind == "user")
+      |> repo().all()
+      |> Enum.each(&force_archive/1)
+
+      from(m in Mailbox, where: m.owner_uuid == ^user_uuid and m.kind == "shared")
+      |> repo().all()
+      |> Enum.each(&hand_over(&1, user_uuid))
+    end)
+
+    :ok
+  end
+
+  defp hand_over(mailbox, leaving_uuid) do
+    successor =
+      from(g in MailboxGrant,
+        where: g.mailbox_uuid == ^mailbox.uuid and g.access == "admin",
+        where: g.user_uuid != ^leaving_uuid,
+        order_by: [asc: g.inserted_at, asc: g.uuid],
+        limit: 1
+      )
+      |> repo().one()
+
+    case successor do
+      nil ->
+        force_archive(mailbox)
+
+      grant ->
+        mailbox |> Ecto.Changeset.change(owner_uuid: grant.user_uuid) |> repo().update!()
+        repo().delete!(grant)
+    end
+  end
+
+  # Straight to the column: `archive_mailbox/1` refuses personal mailboxes,
+  # and an ownerless mailbox wouldn't pass `Mailbox.changeset/2`.
+  defp force_archive(mailbox) do
+    mailbox |> Ecto.Changeset.change(status: "archived") |> repo().update!()
+  end
+
   # ── grants ──────────────────────────────────────────────────────────────────
 
   @doc "All grants on a mailbox, for the mailbox admin page."

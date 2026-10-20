@@ -218,6 +218,15 @@ defmodule PhoenixKitInbox do
   end
 
   @impl PhoenixKit.Module
+  @doc """
+  Called by core before a user is deleted: archives their personal mailbox
+  and hands each shared mailbox they own to its oldest admin grantee (or
+  archives it). The mail itself is kept by the foreign keys either way — see
+  `PhoenixKitInbox.Mailboxes.handle_user_deletion/1`.
+  """
+  def before_user_delete(user_uuid), do: PhoenixKitInbox.Mailboxes.handle_user_deletion(user_uuid)
+
+  @impl PhoenixKit.Module
   @doc "OTP apps whose templates Tailwind should scan for CSS classes."
   def css_sources, do: [:phoenix_kit_inbox]
 
