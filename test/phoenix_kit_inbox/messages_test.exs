@@ -4,6 +4,7 @@ defmodule PhoenixKitInbox.MessagesTest do
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
+  alias PhoenixKitInbox.Notify
 
   setup do
     alice = user_fixture()
@@ -303,6 +304,44 @@ defmodule PhoenixKitInbox.MessagesTest do
     end
   end
 
+  describe "notifications" do
+    test "a shared mailbox's message notifies its owner and every grantee", ctx do
+      shared = shared_mailbox_fixture(ctx.carol, %{name: "Ops"})
+      {:ok, _} = Mailboxes.grant_access(shared.uuid, ctx.bob.uuid, "read")
+      dave = user_fixture()
+      {:ok, _} = Mailboxes.grant_access(shared.uuid, dave.uuid, "admin")
+
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{"to" => "ops", "subject" => "Ping"})
+
+      assert received_targets(message.uuid) ==
+               Enum.sort([ctx.carol.uuid, ctx.bob.uuid, dave.uuid])
+    end
+
+    test "a personal mailbox's message notifies its owner once", ctx do
+      {:ok, message} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "subject" => "Ping"
+        })
+
+      assert received_targets(message.uuid) == [ctx.bob.uuid]
+    end
+
+    test "the email nudge for a personal mailbox goes to the owner's current email", ctx do
+      ctx.bob |> Ecto.Changeset.change(email: "bob.new@example.com") |> Repo.update!()
+
+      assert ctx.bob_mb.address != "bob.new@example.com"
+      assert Notify.nudge_address(ctx.bob_mb) == "bob.new@example.com"
+    end
+
+    test "the email nudge for a shared mailbox goes to its address", ctx do
+      shared = shared_mailbox_fixture(ctx.carol, %{name: "Desk", address: "desk@example.com"})
+
+      assert Notify.nudge_address(shared) == "desk@example.com"
+    end
+  end
+
   describe "who sees a bcc" do
     setup ctx do
       dave = user_fixture()
@@ -593,5 +632,16 @@ defmodule PhoenixKitInbox.MessagesTest do
       }
     )
     |> Repo.all()
+  end
+
+  defp received_targets(message_uuid) do
+    from(a in "phoenix_kit_activities",
+      where:
+        a.action == "inbox.message_received" and
+          a.resource_uuid == type(^message_uuid, :binary_id),
+      select: type(a.target_uuid, :binary_id)
+    )
+    |> Repo.all()
+    |> Enum.sort()
   end
 end
