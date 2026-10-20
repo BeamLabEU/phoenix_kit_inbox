@@ -90,6 +90,33 @@ defmodule PhoenixKitInbox.UserDeletionTest do
     assert Mailboxes.access_level(mailbox, newer_admin.uuid) == "admin"
   end
 
+  test "a deactivated admin grantee is passed over for the next active one", ctx do
+    shared = shared_mailbox_fixture(ctx.leaver, %{name: "Skip the sleeper"})
+    sleeper = user_fixture(%{is_active: false})
+    grant_fixture(shared, sleeper, "admin")
+
+    Repo.update_all(
+      from(g in MailboxGrant, where: g.mailbox_uuid == ^shared.uuid),
+      set: [inserted_at: ~U[2026-01-01 00:00:00Z]]
+    )
+
+    grant_fixture(shared, ctx.stayer, "admin")
+
+    delete!(ctx, ctx.leaver)
+
+    assert %Mailbox{status: "active", owner_uuid: owner} = Repo.get(Mailbox, shared.uuid)
+    assert owner == ctx.stayer.uuid
+  end
+
+  test "a shared mailbox whose only admin grantee is deactivated is archived", ctx do
+    shared = shared_mailbox_fixture(ctx.leaver, %{name: "Nobody awake"})
+    grant_fixture(shared, user_fixture(%{is_active: false}), "admin")
+
+    delete!(ctx, ctx.leaver)
+
+    assert %Mailbox{status: "archived", owner_uuid: nil} = Repo.get(Mailbox, shared.uuid)
+  end
+
   test "a shared mailbox with no admin grantee is archived", ctx do
     shared = shared_mailbox_fixture(ctx.leaver, %{name: "Last one out"})
     grant_fixture(shared, ctx.stayer, "write")

@@ -593,9 +593,9 @@ defmodule PhoenixKitInbox.Mailboxes do
 
     * their personal mailbox is archived (personal mailboxes otherwise can't
       be); its mail stays, readable by nobody until an admin restores it
-    * each shared mailbox they own passes to its oldest `"admin"` grantee,
-      whose grant row goes (ownership already means admin); with no admin
-      grantee it is archived
+    * each shared mailbox they own passes to its oldest `"admin"` grantee
+      whose account is active, and that grant row goes (ownership already
+      means admin); with no such grantee it is archived
 
   The deletion then clears `owner_uuid` on whatever is still theirs (V02:
   `ON DELETE SET NULL`). Those foreign keys are what keep the mail; this is
@@ -619,8 +619,10 @@ defmodule PhoenixKitInbox.Mailboxes do
   defp hand_over(mailbox, leaving_uuid) do
     successor =
       from(g in MailboxGrant,
+        join: u in User,
+        on: u.uuid == g.user_uuid,
         where: g.mailbox_uuid == ^mailbox.uuid and g.access == "admin",
-        where: g.user_uuid != ^leaving_uuid,
+        where: g.user_uuid != ^leaving_uuid and u.is_active == true,
         order_by: [asc: g.inserted_at, asc: g.uuid],
         limit: 1
       )
