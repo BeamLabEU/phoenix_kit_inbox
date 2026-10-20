@@ -121,6 +121,24 @@ defmodule PhoenixKitInbox.MigrationsTest do
       assert owner == nil
     end
 
+    test "V02 refuses, naming them, when shared addresses already collide" do
+      owner = Ecto.UUID.generate()
+      TestRepo.query!("INSERT INTO #{@probe}.phoenix_kit_users (uuid) VALUES ($1)", [dump(owner)])
+      insert_mailbox!(@probe, owner, "shared", "desk-a", "Desk@Example.com")
+      insert_mailbox!(@probe, owner, "shared", "desk-b", "desk@example.com")
+      insert_mailbox!(@probe, owner, "shared", "other", "other@example.com")
+
+      error =
+        assert_raise Postgrex.Error, fn ->
+          Ecto.Migrator.up(TestRepo, 2, ProbeToV2, @migrator_opts)
+        end
+
+      assert Exception.message(error) =~ "share an address"
+      assert Exception.message(error) =~ "desk@example.com"
+      refute Exception.message(error) =~ "other@example.com"
+      assert version_comment(@probe) == "1"
+    end
+
     test "down to V01 restores the cascades" do
       Ecto.Migrator.up(TestRepo, 2, ProbeToV2, @migrator_opts)
       Ecto.Migrator.down(TestRepo, 2, ProbeToV2, @migrator_opts)

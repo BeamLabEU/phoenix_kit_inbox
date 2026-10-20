@@ -16,7 +16,8 @@ defmodule PhoenixKitInbox.Migrations.V02 do
     * a case-insensitive unique index on the `address` of shared mailboxes.
       Personal mailboxes are left out: their address is a snapshot of the
       owner's email, and two snapshots may legitimately collide after an
-      email change.
+      email change. Existing collisions stop the migration with a message
+      listing them — nothing is renamed automatically.
 
   Immutable once shipped, like V01.
 
@@ -50,6 +51,8 @@ defmodule PhoenixKitInbox.Migrations.V02 do
 
   @doc false
   def up(%{prefix: prefix} = _opts) do
+    refuse_duplicate_shared_addresses(prefix)
+
     replace_fk(prefix, @mailboxes, "owner_uuid", @users, "SET NULL")
 
     execute(
@@ -89,6 +92,33 @@ defmodule PhoenixKitInbox.Migrations.V02 do
 
     execute("ALTER TABLE #{mailboxes} ALTER COLUMN owner_uuid SET NOT NULL")
     replace_fk(prefix, @mailboxes, "owner_uuid", @users, "CASCADE")
+  end
+
+  # The unique index below would fail on its own, but with a bare
+  # unique_violation that aborts the host's whole update migration and names
+  # one value. Say what is wrong and what to do instead; never pick a winner.
+  defp refuse_duplicate_shared_addresses(prefix) do
+    mailboxes = Helpers.qualify_table(@mailboxes, prefix)
+
+    execute("""
+    DO $$
+    DECLARE
+      duplicates text;
+    BEGIN
+      SELECT string_agg(address, ', ' ORDER BY address) INTO duplicates
+      FROM (
+        SELECT lower(address) AS address
+        FROM #{mailboxes}
+        WHERE kind = 'shared' AND address IS NOT NULL
+        GROUP BY lower(address)
+        HAVING count(*) > 1
+      ) collisions;
+
+      IF duplicates IS NOT NULL THEN
+        RAISE EXCEPTION 'phoenix_kit_inbox V02: shared mailboxes share an address (case-insensitive): %. Give each shared mailbox a distinct address (or clear one), then run the migration again.', duplicates;
+      END IF;
+    END $$;
+    """)
   end
 
   # Drops whatever FK constraint(s) sit on `table.column` in this schema, then
