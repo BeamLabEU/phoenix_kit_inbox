@@ -87,6 +87,12 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   # Mailbox list is stable for the life of the socket — grants change rarely
   # and a re-read on every patch would be a query per folder click.
+  #
+  # Without Inbox access nothing is loaded: the personal mailbox is created
+  # lazily here, and a user who can't use Inbox must not get one by visiting.
+  defp load_mailboxes(%{assigns: %{module_access: access}} = socket) when access != true,
+    do: assign(socket, :personal_mailbox, nil)
+
   defp load_mailboxes(%{assigns: %{current_user: user}} = socket) when is_map(user) do
     case Mailboxes.ensure_user_mailbox(user) do
       {:ok, personal} ->
