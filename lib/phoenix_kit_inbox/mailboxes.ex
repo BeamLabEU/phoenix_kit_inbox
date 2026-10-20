@@ -24,6 +24,7 @@ defmodule PhoenixKitInbox.Mailboxes do
 
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Users.Auth.User
+  alias PhoenixKitInbox.Members
   alias PhoenixKitInbox.Schemas.Delivery
   alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.MailboxGrant
@@ -94,107 +95,188 @@ defmodule PhoenixKitInbox.Mailboxes do
 
   Accepted, case-insensitively:
 
-    * a mailbox `address` — `"alice@example.com"`
-    * a shared mailbox `slug` or `name` — `"support"` or `"Customer Support"`
-    * a **username** — `"alice"`
-    * a user's login **email**, even if they have no mailbox yet
+    * `"@alice"` — a **username**, the `@` stripped; a shared mailbox's slug
+      or name only when no user has that username
+    * `"alice@example.com"` — a user's login **email**, then a shared
+      mailbox's `address`
+    * `"support"` / `"Customer Support"` — a shared mailbox's slug, name or
+      address first, then a username (the pre-`@` behaviour)
+
+  Users are only found inside the recipient circle (`PhoenixKitInbox.Members`):
+  a customer account resolves to nothing. Personal mailboxes are reached
+  through their user, never through their own `address`, which is a snapshot
+  of the owner's email at creation and goes stale when it changes.
+
+  Two candidates for one term — two members whose usernames differ only in
+  case (possible on cores before `username` became `citext`), or two shared
+  mailboxes with one name — return `{:error, :ambiguous_recipient}` rather
+  than an arbitrary pick.
 
   ## Why users are looked up, not just mailboxes
 
-  Two things were wrong when this only queried `phoenix_kit_inbox_mailboxes`
-  on `address`/`slug`:
-
-    1. A username matched nothing. It lives on the user record and was never
-       copied onto the mailbox, so `"alice"` was unresolvable while
-       `"alice@example.com"` worked — with no hint which was expected.
-    2. Personal mailboxes are created lazily on first visit to Inbox, so a user
-       who had never opened the page had no mailbox row and was unaddressable
-       by *any* spelling. You could not message a colleague until they happened
-       to click the tab.
-
-  Falling back to a user lookup fixes both: an account is reachable from the
-  moment it exists, and its mailbox is created here, on demand, when the first
-  message is addressed to it. That write happens outside the send transaction
-  (`Messages.send_message/3` resolves recipients before opening it), so a send
-  that later fails leaves behind only a mailbox the user would have got on
-  their next visit anyway.
+  Personal mailboxes are created lazily on first visit to Inbox, so a user
+  who had never opened the page had no mailbox row. Resolving through the
+  user makes an account reachable from the moment it exists; its mailbox is
+  created here, on demand, when the first message is addressed to it. That
+  write happens outside the send transaction (`Messages.send_message/3`
+  resolves recipients before opening it), so a send that later fails leaves
+  behind only a mailbox the user would have got on their next visit anyway.
   """
   @spec fetch_mailbox_by_recipient(String.t()) ::
-          {:ok, Mailbox.t()} | {:error, :recipient_not_found}
+          {:ok, Mailbox.t()} | {:error, :recipient_not_found | :ambiguous_recipient}
   def fetch_mailbox_by_recipient(term) when is_binary(term) do
-    normalized = term |> String.trim() |> String.downcase()
-
-    if normalized == "" do
-      {:error, :recipient_not_found}
-    else
-      case existing_mailbox_for(normalized) do
-        nil -> mailbox_for_user(normalized)
-        mailbox -> {:ok, mailbox}
-      end
+    case classify_recipient(term) do
+      :blank -> {:error, :recipient_not_found}
+      {:username, name} -> first_match([&user_by_username/1, &shared_by_handle/1], name)
+      {:email, email} -> first_match([&user_by_email/1, &shared_by_address/1], email)
+      {:bare, name} -> first_match([&shared_by_any/1, &user_by_username/1], name)
     end
   end
 
   def fetch_mailbox_by_recipient(_), do: {:error, :recipient_not_found}
 
-  # `name` is matched too so a shared mailbox can be addressed the way it is
-  # displayed ("Customer Support"), not only by its derived slug.
-  defp existing_mailbox_for(normalized) do
-    from(m in Mailbox,
-      where: m.status == "active",
-      where:
-        m.address == ^normalized or m.slug == ^normalized or
-          fragment("lower(?)", m.name) == ^normalized,
-      limit: 1
-    )
-    |> repo().one()
-  end
+  defp classify_recipient(term) do
+    case term |> String.trim() |> String.downcase() do
+      "" ->
+        :blank
 
-  defp mailbox_for_user(normalized) do
-    case find_active_user(normalized) do
-      nil ->
-        {:error, :recipient_not_found}
-
-      user ->
-        case ensure_user_mailbox(user) do
-          {:ok, mailbox} -> {:ok, mailbox}
-          # Creation failed (e.g. the address collides with a shared mailbox).
-          # Report it as unresolvable rather than leaking a changeset into a
-          # recipient list.
-          {:error, _reason} -> {:error, :recipient_not_found}
+      "@" <> name ->
+        case String.trim(name) do
+          "" -> :blank
+          name -> {:username, name}
         end
+
+      normalized ->
+        if String.contains?(normalized, "@"), do: {:email, normalized}, else: {:bare, normalized}
     end
   end
 
-  # `lower/1` on both sides rather than `ilike`: this is an equality match, and
-  # core stores emails as citext while `username` is a plain string.
-  defp find_active_user(normalized) do
-    from(u in User,
-      where: u.is_active == true,
-      where:
-        fragment("lower(?)", u.username) == ^normalized or
-          fragment("lower(?)", u.email) == ^normalized,
-      order_by: [asc: u.inserted_at],
-      limit: 1
-    )
-    |> repo().one()
+  # Each lookup answers {:ok, mailbox}, {:error, :ambiguous_recipient} or
+  # :none; the first that is not :none decides.
+  defp first_match(lookups, term) do
+    Enum.reduce_while(lookups, {:error, :recipient_not_found}, fn lookup, acc ->
+      case lookup.(term) do
+        :none -> {:cont, acc}
+        result -> {:halt, result}
+      end
+    end)
   end
+
+  defp shared_by_handle(term) do
+    shared_matching(term, fn q -> where(q, [m], m.slug == ^term) end)
+  end
+
+  defp shared_by_address(term) do
+    shared_matching(term, fn q -> where(q, [m], fragment("lower(?)", m.address) == ^term) end)
+  end
+
+  # `name` is matched too so a shared mailbox can be addressed the way it is
+  # displayed ("Customer Support"), not only by its derived slug.
+  defp shared_by_any(term) do
+    shared_matching(term, fn q ->
+      where(
+        q,
+        [m],
+        fragment("lower(?)", m.address) == ^term or m.slug == ^term or
+          fragment("lower(?)", m.name) == ^term
+      )
+    end)
+  end
+
+  # Slug and address are unique, so an exact hit on either wins; several
+  # mailboxes sharing a display name are ambiguous.
+  defp shared_matching(term, narrow) do
+    candidates =
+      from(m in Mailbox, where: m.status == "active" and m.kind == "shared")
+      |> narrow.()
+      |> repo().all()
+
+    exact =
+      Enum.find(candidates, &(&1.address && String.downcase(&1.address) == term)) ||
+        Enum.find(candidates, &(&1.slug == term))
+
+    case {exact, candidates} do
+      {%Mailbox{} = mailbox, _} -> {:ok, mailbox}
+      {nil, []} -> :none
+      {nil, [mailbox]} -> {:ok, mailbox}
+      {nil, _several} -> {:error, :ambiguous_recipient}
+    end
+  end
+
+  # `lower/1` on both sides rather than `ilike`: this is an equality match,
+  # and it stays one on cores where `username` is still a plain string.
+  defp user_by_username(term) do
+    users_matching(fn q -> where(q, [u], fragment("lower(?)", u.username) == ^term) end)
+  end
+
+  defp user_by_email(term) do
+    users_matching(fn q -> where(q, [u], fragment("lower(?)", u.email) == ^term) end)
+  end
+
+  defp users_matching(narrow) do
+    from(u in User, order_by: [asc: u.inserted_at])
+    |> narrow.()
+    |> Members.scope_query()
+    |> repo().all()
+    |> Members.keep()
+    |> case do
+      [] -> :none
+      [user] -> mailbox_for_user(user)
+      _several -> {:error, :ambiguous_recipient}
+    end
+  end
+
+  defp mailbox_for_user(user) do
+    case ensure_user_mailbox(user) do
+      {:ok, mailbox} ->
+        {:ok, mailbox}
+
+      # Creation failed. Report it as unresolvable rather than leaking a
+      # changeset into a recipient list.
+      {:error, _reason} ->
+        :none
+    end
+  end
+
+  @doc """
+  The handle that addresses `mailbox` from a To field — `"@username"` (or the
+  email, for a user without one) for a personal mailbox, the address or slug
+  for a shared one. `nil` for a personal mailbox whose owner is gone.
+
+  Used to prefill a reply; it always resolves back through
+  `fetch_mailbox_by_recipient/1` while the owner is a member.
+  """
+  @spec recipient_handle(Mailbox.t()) :: String.t() | nil
+  def recipient_handle(%Mailbox{kind: "user", owner_uuid: owner_uuid})
+      when is_binary(owner_uuid) do
+    case repo().get(User, owner_uuid) do
+      nil -> nil
+      user -> user_handle(user)
+    end
+  end
+
+  def recipient_handle(%Mailbox{kind: "user"}), do: nil
+  def recipient_handle(%Mailbox{} = mailbox), do: mailbox.address || mailbox.slug
+
+  defp user_handle(%{username: username}) when is_binary(username) and username != "",
+    do: "@" <> username
+
+  defp user_handle(%{email: email}), do: email
 
   @doc """
   Addressable recipients, for the compose field's suggestion list.
 
   Returns `%{handle: String.t(), label: String.t()}` — `handle` is what goes in
-  the To field and is guaranteed to resolve through
-  `fetch_mailbox_by_recipient/1`; `label` is the human description shown beside
-  it.
+  the To field and resolves through `fetch_mailbox_by_recipient/1`; `label`
+  is the human description shown beside it.
 
-  Covers **shared mailboxes and users**, not just existing mailboxes. Searching
-  only mailboxes is what made this useless: a colleague who had never opened
-  Inbox had no mailbox row and so never appeared, which is exactly the case
-  where a suggestion is most needed.
+  Offers **shared mailboxes and members** (`PhoenixKitInbox.Members`) — users
+  outside the recipient circle never appear. A user is offered as
+  `"@username"` with their name; their email is shown only when they have
+  no username, since it is then the handle itself.
 
-  Usernames are preferred as the handle because they are what people know each
-  other by; the email is shown in the label so an ambiguous display name can
-  still be told apart.
+  Covers users who have no mailbox yet: a colleague who never opened Inbox
+  is exactly the one a suggestion helps most.
   """
   @spec search_recipients(binary(), String.t(), keyword()) :: [
           %{handle: String.t(), label: String.t()}
@@ -233,14 +315,16 @@ defmodule PhoenixKitInbox.Mailboxes do
   end
 
   # The sender is excluded — a To field offering you yourself is noise, and
-  # messaging yourself is still possible by typing the handle.
+  # messaging yourself is still possible by typing the handle. A host rule
+  # can't be expressed in SQL, so with one the limit applies after it.
   defp user_suggestions(user_uuid, term, limit) do
     query =
       from(u in User,
-        where: u.is_active == true and u.uuid != ^user_uuid,
-        order_by: [asc: u.username],
-        limit: ^limit
+        where: u.uuid != ^user_uuid,
+        order_by: [asc: u.username]
       )
+
+    query = if Members.host_filter?(), do: query, else: limit(query, ^limit)
 
     query
     |> filter_by_term(term, fn q, pattern ->
@@ -251,12 +335,17 @@ defmodule PhoenixKitInbox.Mailboxes do
           ilike(u.first_name, ^pattern) or ilike(u.last_name, ^pattern)
       )
     end)
+    |> Members.scope_query()
     |> repo().all()
-    |> Enum.map(fn user ->
-      %{handle: user.username || user.email, label: suggestion_label(user)}
-    end)
+    |> Members.keep()
+    |> Enum.take(limit)
+    |> Enum.map(&%{handle: user_handle(&1), label: suggestion_label(&1)})
     |> Enum.reject(&is_nil(&1.handle))
   end
+
+  defp suggestion_label(%{username: username} = user)
+       when is_binary(username) and username != "",
+       do: user_display_name(user)
 
   defp suggestion_label(user) do
     name = user_display_name(user)

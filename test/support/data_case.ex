@@ -34,6 +34,11 @@ defmodule PhoenixKitInbox.DataCase do
   end
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias PhoenixKit.Users.Auth.Scope
+  alias PhoenixKit.Users.Role
+  alias PhoenixKit.Users.RoleAssignment
+  alias PhoenixKit.Users.RolePermission
+  alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Test.Repo, as: TestRepo
 
   setup tags do
@@ -51,8 +56,55 @@ defmodule PhoenixKitInbox.DataCase do
   uuid fails on insert — every mailbox needs an owner that actually exists.
   Inserted through the schema (rather than raw SQL) so the row matches whatever
   core's current columns are.
+
+  The user is an Inbox member — addressable — through a role of their own
+  holding the `"inbox"` permission. Pass `inbox_member: false` for a user
+  outside the recipient circle (a customer account, say).
   """
   def user_fixture(attrs \\ %{}) do
+    {member?, attrs} = Map.pop(attrs, :inbox_member, true)
+    user = insert_user!(attrs)
+    if member?, do: grant_role!(user, ["inbox"])
+    user
+  end
+
+  @doc """
+  Gives `user` a fresh role holding `permission_keys` (`[]` for none). With
+  `name:` the role is looked up by name instead (e.g. `"Owner"`, seeded by
+  core) and the keys are ignored.
+  """
+  def grant_role!(user, permission_keys, opts \\ []) do
+    role =
+      case Keyword.get(opts, :name) do
+        nil ->
+          role =
+            TestRepo.insert!(%Role{
+              name: "inbox-test-role-#{System.unique_integer([:positive])}"
+            })
+
+          for key <- permission_keys do
+            TestRepo.insert!(%RolePermission{
+              role_uuid: role.uuid,
+              module_key: key
+            })
+          end
+
+          role
+
+        name ->
+          TestRepo.get_by!(Role, name: name)
+      end
+
+    TestRepo.insert!(%RoleAssignment{
+      user_uuid: user.uuid,
+      role_uuid: role.uuid,
+      assigned_at: DateTime.utc_now() |> DateTime.truncate(:second)
+    })
+
+    role
+  end
+
+  defp insert_user!(attrs) do
     n = System.unique_integer([:positive])
 
     defaults = %{
@@ -74,7 +126,7 @@ defmodule PhoenixKitInbox.DataCase do
   module to be enabled.
   """
   def scope_for(user, permissions \\ ["inbox"]) do
-    %PhoenixKit.Users.Auth.Scope{
+    %Scope{
       user: user,
       authenticated?: true,
       cached_roles: [],
@@ -103,8 +155,8 @@ defmodule PhoenixKitInbox.DataCase do
       |> Map.put_new(:slug, name)
       |> Map.merge(%{kind: "shared", owner_uuid: owner.uuid})
 
-    %PhoenixKitInbox.Schemas.Mailbox{}
-    |> PhoenixKitInbox.Schemas.Mailbox.changeset(attrs)
+    %Mailbox{}
+    |> Mailbox.changeset(attrs)
     |> TestRepo.insert!()
   end
 

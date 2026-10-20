@@ -265,15 +265,16 @@ defmodule PhoenixKitInbox.Messages do
   `attrs` keys:
 
     * `"to"` / `"cc"` / `"bcc"` — comma-separated recipient strings, or lists.
-      Each entry is a mailbox slug or address (see
-      `Mailboxes.fetch_mailbox_by_recipient/1`).
+      Each entry is a `@username`, an email, or a shared mailbox's slug, name
+      or address (see `Mailboxes.fetch_mailbox_by_recipient/1`).
     * `"subject"`, `"body"`, `"body_format"`
     * `"uuid"` — promotes an existing draft instead of creating a new message
     * `"parent_uuid"` — set when replying; the thread is inherited from it
 
   Returns `{:error, {:unknown_recipients, ["typo@example.com"]}}` when an
   address doesn't resolve — the whole send is refused so the sender finds out
-  immediately rather than discovering a missing recipient later.
+  immediately rather than discovering a missing recipient later — and
+  `{:error, {:ambiguous_recipients, ["@alice"]}}` when one names two people.
   """
   @spec send_message(Mailbox.t(), binary(), map()) ::
           {:ok, Message.t()} | {:error, term()}
@@ -413,17 +414,19 @@ defmodule PhoenixKitInbox.Messages do
           entry <- parse_recipient_list(Map.get(attrs, role)),
           do: {role, entry}
 
-    {resolved, unknown} =
-      Enum.reduce(parsed, {[], []}, fn {role, entry}, {ok, bad} ->
+    {resolved, unknown, ambiguous} =
+      Enum.reduce(parsed, {[], [], []}, fn {role, entry}, {ok, unknown, ambiguous} ->
         case Mailboxes.fetch_mailbox_by_recipient(entry) do
-          {:ok, mailbox} -> {[%{role: role, mailbox: mailbox} | ok], bad}
-          {:error, _} -> {ok, [entry | bad]}
+          {:ok, mailbox} -> {[%{role: role, mailbox: mailbox} | ok], unknown, ambiguous}
+          {:error, :ambiguous_recipient} -> {ok, unknown, [entry | ambiguous]}
+          {:error, _} -> {ok, [entry | unknown], ambiguous}
         end
       end)
 
-    case unknown do
-      [] -> {:ok, resolved |> Enum.reverse() |> dedupe_recipients()}
-      bad -> {:error, {:unknown_recipients, Enum.reverse(bad)}}
+    case {unknown, ambiguous} do
+      {[], []} -> {:ok, resolved |> Enum.reverse() |> dedupe_recipients()}
+      {[], ambiguous} -> {:error, {:ambiguous_recipients, Enum.reverse(ambiguous)}}
+      {unknown, _} -> {:error, {:unknown_recipients, Enum.reverse(unknown)}}
     end
   end
 

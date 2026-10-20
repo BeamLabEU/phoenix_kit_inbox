@@ -1,7 +1,9 @@
 defmodule PhoenixKitInbox.MailboxesTest do
   use PhoenixKitInbox.DataCase, async: true
 
+  alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitInbox.Mailboxes
+  alias PhoenixKitInbox.Members
   alias PhoenixKitInbox.Schemas.Mailbox
 
   describe "ensure_user_mailbox/1" do
@@ -84,7 +86,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
     test "an anonymous scope can't create one" do
       assert {:error, :forbidden} =
-               Mailboxes.create_shared_mailbox(PhoenixKit.Users.Auth.Scope.for_user(nil), %{
+               Mailboxes.create_shared_mailbox(Scope.for_user(nil), %{
                  name: "Nobody's"
                })
     end
@@ -340,9 +342,120 @@ defmodule PhoenixKitInbox.MailboxesTest do
     end
 
     test "a blank term never resolves" do
-      for typed <- ["", "   "] do
+      for typed <- ["", "   ", "@", " @ "] do
         assert {:error, :recipient_not_found} = Mailboxes.fetch_mailbox_by_recipient(typed)
       end
+    end
+
+    test "@name is the username, the @ stripped, regardless of case" do
+      user = user_fixture(%{username: "Mari", email: "mari@example.com"})
+
+      for typed <- ["@mari", "@MARI", " @Mari "] do
+        assert {:ok, mailbox} = Mailboxes.fetch_mailbox_by_recipient(typed),
+               "#{inspect(typed)} did not resolve"
+
+        assert mailbox.owner_uuid == user.uuid
+      end
+    end
+
+    test "@name finds the user before a shared mailbox of the same name; a bare name the mailbox" do
+      user = user_fixture(%{username: "sales", email: "sales.person@example.com"})
+      shared = shared_mailbox_fixture(user_fixture(), %{name: "Sales"})
+
+      assert {:ok, %{owner_uuid: owner}} = Mailboxes.fetch_mailbox_by_recipient("@sales")
+      assert owner == user.uuid
+
+      assert {:ok, %{uuid: uuid}} = Mailboxes.fetch_mailbox_by_recipient("sales")
+      assert uuid == shared.uuid
+    end
+
+    test "@name falls back to a shared mailbox when no user has that username" do
+      shared = shared_mailbox_fixture(user_fixture(), %{name: "Helpline"})
+
+      assert {:ok, %{uuid: uuid}} = Mailboxes.fetch_mailbox_by_recipient("@helpline")
+      assert uuid == shared.uuid
+    end
+
+    test "an email finds the user before a shared mailbox carrying the same address" do
+      user = user_fixture(%{username: "kai", email: "kai@example.com"})
+      # Only reachable with pre-V02 data: saving such an address is refused now.
+      shared_mailbox_fixture(user_fixture(), %{name: "Kai desk", address: "kai@example.com"})
+
+      assert {:ok, %{owner_uuid: owner}} = Mailboxes.fetch_mailbox_by_recipient("KAI@example.com")
+      assert owner == user.uuid
+    end
+
+    test "a personal mailbox is not reached through its stale address snapshot" do
+      user = user_fixture(%{username: "mover", email: "old@example.com"})
+      {:ok, _} = Mailboxes.ensure_user_mailbox(user)
+
+      user |> Ecto.Changeset.change(email: "new@example.com") |> Repo.update!()
+
+      assert {:error, :recipient_not_found} =
+               Mailboxes.fetch_mailbox_by_recipient("old@example.com")
+
+      assert {:ok, %{owner_uuid: owner}} = Mailboxes.fetch_mailbox_by_recipient("new@example.com")
+      assert owner == user.uuid
+    end
+
+    test "two shared mailboxes with the same name are ambiguous" do
+      owner = user_fixture()
+      shared_mailbox_fixture(owner, %{name: "Desk", slug: "desk-a"})
+      shared_mailbox_fixture(owner, %{name: "Desk", slug: "desk-b"})
+
+      assert {:error, :ambiguous_recipient} = Mailboxes.fetch_mailbox_by_recipient("desk")
+      assert {:ok, %{slug: "desk-a"}} = Mailboxes.fetch_mailbox_by_recipient("desk-a")
+    end
+  end
+
+  describe "recipient circle" do
+    test "a user outside the circle is not addressable by username or email" do
+      user_fixture(%{username: "customer", email: "customer@example.com", inbox_member: false})
+
+      for typed <- ["@customer", "customer", "customer@example.com"] do
+        assert {:error, :recipient_not_found} = Mailboxes.fetch_mailbox_by_recipient(typed),
+               "#{inspect(typed)} resolved to a non-member"
+      end
+    end
+
+    test "any held role carrying inbox makes a member, not only one role" do
+      user = user_fixture(%{username: "multi", email: "multi@example.com", inbox_member: false})
+      grant_role!(user, [])
+      grant_role!(user, ["inbox"])
+
+      assert Members.member?(user)
+      assert {:ok, _} = Mailboxes.fetch_mailbox_by_recipient("@multi")
+    end
+
+    test "a role carrying the superadmin key makes a member" do
+      user = user_fixture(%{username: "star", email: "star@example.com", inbox_member: false})
+      grant_role!(user, ["*"])
+
+      assert Members.member?(user)
+    end
+
+    test "the Owner is a member without any permission rows" do
+      user = user_fixture(%{username: "boss", email: "boss@example.com", inbox_member: false})
+      grant_role!(user, [], name: "Owner")
+
+      assert Members.member?(user)
+      assert {:ok, _} = Mailboxes.fetch_mailbox_by_recipient("@boss")
+    end
+
+    test "a role without inbox doesn't make a member" do
+      user = user_fixture(%{username: "plain", email: "plain@example.com", inbox_member: false})
+      grant_role!(user, ["users"])
+
+      refute Members.member?(user)
+    end
+
+    test "suggestions leave non-members out" do
+      me = user_fixture()
+      user_fixture(%{username: "outsider", email: "outsider@example.com", inbox_member: false})
+
+      handles = me.uuid |> Mailboxes.search_recipients("outsider") |> Enum.map(& &1.handle)
+
+      assert handles == []
     end
   end
 
@@ -353,7 +466,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
       handles = me.uuid |> Mailboxes.search_recipients() |> Enum.map(& &1.handle)
 
-      assert "suggestme" in handles
+      assert "@suggestme" in handles
       assert Mailboxes.list_accessible_mailboxes(them.uuid) == []
     end
 
@@ -373,7 +486,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
       handles = me.uuid |> Mailboxes.search_recipients() |> Enum.map(& &1.handle)
 
-      refute "myself" in handles
+      refute "@myself" in handles
     end
 
     test "filters on username, email and name" do
@@ -388,7 +501,7 @@ defmodule PhoenixKitInbox.MailboxesTest do
 
       for term <- ["zzfindme", "zzfindme@exam", "Zaphod", "Beeblebrox"] do
         handles = me.uuid |> Mailboxes.search_recipients(term) |> Enum.map(& &1.handle)
-        assert "zzfindme" in handles, "term #{inspect(term)} did not surface the user"
+        assert "@zzfindme" in handles, "term #{inspect(term)} did not surface the user"
       end
     end
 
@@ -410,6 +523,31 @@ defmodule PhoenixKitInbox.MailboxesTest do
       user_fixture(%{username: "listed", email: "listed@example.com"})
 
       assert me.uuid |> Mailboxes.search_recipients("") |> length() > 0
+    end
+
+    test "a user with a username is offered as @username, without the email" do
+      me = user_fixture()
+
+      user_fixture(%{
+        username: "quiet",
+        email: "quiet@example.com",
+        first_name: "Q",
+        last_name: "Uiet"
+      })
+
+      assert [suggestion] = Mailboxes.search_recipients(me.uuid, "quiet")
+      assert suggestion.handle == "@quiet"
+      refute suggestion.label =~ "quiet@example.com"
+      assert suggestion.label =~ "Q Uiet"
+    end
+
+    test "a user without a username is offered by email" do
+      me = user_fixture()
+      user_fixture(%{username: nil, email: "nousername@example.com"})
+
+      assert [suggestion] = Mailboxes.search_recipients(me.uuid, "nousername")
+      assert suggestion.handle == "nousername@example.com"
+      assert {:ok, _} = Mailboxes.fetch_mailbox_by_recipient(suggestion.handle)
     end
 
     test "respects the limit" do

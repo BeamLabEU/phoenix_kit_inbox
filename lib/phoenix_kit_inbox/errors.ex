@@ -38,7 +38,16 @@ defmodule PhoenixKitInbox.Errors do
   # that never resolved.
   def message({:unknown_recipients, recipients}) do
     gettext(
-      "No recipient matches: %{recipients}. Use a username, an email address, or a shared mailbox name.",
+      "No recipient matches: %{recipients}. Use @username, an email address, or a shared mailbox name.",
+      recipients: Enum.join(recipients, ", ")
+    )
+  end
+
+  def message(:ambiguous_recipient),
+    do: gettext("That name matches more than one recipient.")
+
+  def message({:ambiguous_recipients, recipients}) do
+    gettext("More than one recipient matches: %{recipients}. Use the full email address instead.",
       recipients: Enum.join(recipients, ", ")
     )
   end

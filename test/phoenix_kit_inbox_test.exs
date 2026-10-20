@@ -8,6 +8,7 @@ defmodule PhoenixKitInboxTest do
   """
 
   alias PhoenixKit.Dashboard.Tab
+  alias PhoenixKit.Users.Permissions
 
   test "module_key is the lowercase underscore key used everywhere" do
     assert PhoenixKitInbox.module_key() == "inbox"
@@ -43,8 +44,8 @@ defmodule PhoenixKitInboxTest do
   end
 
   test "core composes the sub-permissions under the inbox key" do
-    assert PhoenixKit.Users.Permissions.parent_key("inbox.manage_shared") == "inbox"
-    assert PhoenixKit.Users.Permissions.parent_key("inbox.send_external") == "inbox"
+    assert Permissions.parent_key("inbox.manage_shared") == "inbox"
+    assert Permissions.parent_key("inbox.send_external") == "inbox"
   end
 
   test "css_sources returns this OTP app so Tailwind scans our templates" do

@@ -93,7 +93,8 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     {:ok, _view, html} = live(ctx.conn, "/en/admin/inbox/compose?reply_to=#{message.uuid}")
 
     assert html =~ "Re: Original"
-    assert html =~ ctx.bob.email
+    # The sender's handle, which resolves back to them through the @ rule.
+    assert html =~ "@#{ctx.bob.username}"
     assert html =~ "&gt; Quote this"
   end
 

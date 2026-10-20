@@ -337,7 +337,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
             field={@form[:to]}
             type="text"
             label={gettext_str("To")}
-            placeholder={gettext_str("Username, email or shared mailbox — comma separated")}
+            placeholder={gettext_str("@username, email or shared mailbox — comma separated")}
             list="phoenix-kit-inbox-recipients"
           />
           <.input
@@ -404,14 +404,12 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   defp sender_mailbox_handle(%Message{sender_mailbox_uuid: uuid}) do
     case Mailboxes.fetch_mailbox(uuid) do
-      {:ok, mailbox} -> recipient_handle(mailbox)
+      {:ok, mailbox} -> Mailboxes.recipient_handle(mailbox) || ""
       _ -> ""
     end
   end
 
-  # Prefer the address (what a person recognizes), fall back to the slug (what
-  # always resolves).
-  defp recipient_handle(mailbox), do: mailbox.address || mailbox.slug
+  defp recipient_handle(mailbox), do: Mailboxes.recipient_handle(mailbox) || mailbox.slug
 
   defp prefixed_subject(prefix, nil), do: String.trim_trailing(prefix)
 
