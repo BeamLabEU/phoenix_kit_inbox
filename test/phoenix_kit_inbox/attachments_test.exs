@@ -684,6 +684,78 @@ defmodule PhoenixKitInbox.AttachmentsTest do
       assert {:ok, _} = Attachments.fetch_for_download(scope_for(ctx.dave), row.uuid)
     end
 
+    test "a reader granted later cannot launder the file through a forward", ctx do
+      {:ok, message} =
+        Messages.send_message(ctx.scope, ctx.alice_box, %{"to" => "desk", "subject" => "x"},
+          attachments_data: [%{binary: "priced", filename: "offer.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+      erin = user_fixture()
+      {:ok, erin_box} = Mailboxes.ensure_user_mailbox(erin)
+      grant_fixture(ctx.desk, erin, "read")
+      refuse_user!(erin)
+
+      assert {:error, {:attachment_refused, :money}} =
+               send_to(scope_for(erin), erin_box, ctx.alice, attach(row.file_uuid))
+    end
+
+    test "a forwarder is asked at download about a file they did not create", ctx do
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: [%{binary: "priced", filename: "offer.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+      {:ok, forward} = send_to(scope_for(ctx.bob), ctx.bob_box, ctx.carol, attach(row.file_uuid))
+      [copy] = Attachments.list_for_message(forward.uuid)
+
+      refuse_user!(ctx.bob)
+      assert {:error, :not_found} = Attachments.fetch_for_download(scope_for(ctx.bob), copy.uuid)
+    end
+
+    test "a reader granted later cannot launder the file into a personal draft", ctx do
+      {:ok, message} =
+        Messages.send_message(ctx.scope, ctx.alice_box, %{"to" => "desk", "subject" => "x"},
+          attachments_data: [%{binary: "priced", filename: "offer.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+      erin = user_fixture()
+      {:ok, erin_box} = Mailboxes.ensure_user_mailbox(erin)
+      grant_fixture(ctx.desk, erin, "read")
+      refuse_user!(erin)
+
+      assert {:error, {:attachment_refused, :money}} =
+               Messages.save_draft(scope_for(erin), erin_box, attach(row.file_uuid))
+    end
+
+    test "a grantee added later cannot send a colleague's shared draft with its files", ctx do
+      {:ok, draft} =
+        Messages.save_draft(ctx.scope, ctx.desk, %{"subject" => "WIP"},
+          attachments_data: [%{binary: "priced", filename: "offer.pdf"}]
+        )
+
+      erin = user_fixture()
+      grant_fixture(ctx.desk, erin, "write")
+      refuse_user!(erin)
+
+      assert {:error, {:attachment_refused, :money}} =
+               send_to(scope_for(erin), ctx.desk, ctx.bob, %{"uuid" => draft.uuid})
+    end
+
+    test "one's own upload is never asked about its creator, at send or at download", ctx do
+      refuse_user!(ctx.alice)
+
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: [%{binary: "my own scan", filename: "scan.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+      assert {:ok, _} = Attachments.fetch_for_download(ctx.scope, row.uuid)
+    end
+
     test "the sender downloads their own attachment without asking the policy", ctx do
       {:ok, message} =
         send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},

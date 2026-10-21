@@ -70,11 +70,14 @@ defmodule PhoenixKitInbox.Attachments do
   with the sender's scope, every user who will be able to read the files —
   the owners of the personal mailboxes addressed in To/Cc/Bcc, the owner and
   grantees of each shared mailbox addressed, and of the sending mailbox when
-  it is a shared one (the sender left out) — and the attachment rows with
-  their flags. A draft saved in a shared mailbox asks about that mailbox's
-  readers. At download it is asked again for the viewer alone (anyone but
-  the message's sender), so a reader granted a mailbox later is covered; a
-  refusal there is a 404.
+  it is a shared one — and the attachment rows with their flags. The
+  sender is among the users whenever a file is a snapshot someone else
+  created (a forward, a colleague's draft), and left out only when every
+  file is their own upload or copy. A draft save asks the same way about
+  its mailbox's readers. At download it is asked again for the viewer
+  alone, unless the viewer created the snapshot, so a reader granted a
+  mailbox later is covered and a forward or a draft cannot launder a file;
+  a refusal there is a 404. One policy call per download.
   It is called before any snapshot is stored, so a row about to be copied
   has no `file_uuid` yet. `:ok` lets the send go ahead; `{:error, reason}`
   refuses it with `{:error, {:attachment_refused, reason}}`; a raise or any
@@ -221,7 +224,8 @@ defmodule PhoenixKitInbox.Attachments do
   Allowed when the module is on, the scope holds `"inbox"`, its user sent
   the message or holds a non-deleted copy of it (a delivery) in a mailbox
   they can read, and — for anyone but the sender — the host's
-  `attachment_policy` accepts this row for this viewer.
+  `attachment_policy` accepts this row for this viewer — asked of anyone
+  but the snapshot's creator, on every download.
   """
   @spec fetch_for_download(Scope.t() | nil, term()) ::
           {:ok, Attachment.t()} | {:error, :not_found}
@@ -240,19 +244,22 @@ defmodule PhoenixKitInbox.Attachments do
   end
 
   # The policy again, at download, for the viewer alone: a reader granted a
-  # mailbox after the send was never among the users asked then. The
-  # message's sender attached the file and is not asked.
+  # mailbox after the send was never among the users asked then. Only the
+  # snapshot's creator — whose upload or copy it is — is not asked; being
+  # the sender of the message is not enough, or a forward or a draft would
+  # launder someone else's file.
   defp download_policy(scope, user_uuid, attachment) do
-    sender? =
-      from(m in Message,
-        where: m.uuid == ^attachment.message_uuid and m.sender_user_uuid == ^user_uuid
-      )
-      |> repo().exists?()
-
-    case {sender?, repo().get(User, user_uuid)} do
+    case {created_by?(attachment.file_uuid, user_uuid), repo().get(User, user_uuid)} do
       {true, _} -> :ok
       {false, %User{} = viewer} -> ask_policy(scope, [viewer], [attachment])
       {false, nil} -> {:error, :not_found}
+    end
+  end
+
+  defp created_by?(file_uuid, user_uuid) do
+    case Storage.get_file(to_string(file_uuid)) do
+      %Storage.File{user_uuid: creator} -> to_string(creator) == user_uuid
+      nil -> false
     end
   end
 
@@ -642,9 +649,11 @@ defmodule PhoenixKitInbox.Attachments do
 
   @doc false
   # Asks the host's attachment_policy about `items` reaching everyone who can
-  # read `mailboxes` — the sending mailbox and the recipients' — leaving out
-  # the scope's own user, who attached the files. Nothing to ask without
-  # attachments, without anyone else, or without a policy.
+  # read `mailboxes` — the sending mailbox and the recipients'. The scope's
+  # own user is left out only when every file is a snapshot they created
+  # (their upload or copy); a forwarded file, a colleague's draft file or any
+  # other snapshot someone else made counts them in. Nothing to ask without
+  # attachments, without anyone, or without a policy.
   @spec check_policy(Scope.t(), [Mailbox.t()], [map()]) :: :ok | {:error, term()}
   def check_policy(_scope, _mailboxes, []), do: :ok
 
@@ -655,9 +664,38 @@ defmodule PhoenixKitInbox.Attachments do
         _ -> nil
       end
 
-    case Enum.reject(readers(mailboxes), &(to_string(&1.uuid) == me)) do
+    others = Enum.reject(readers(mailboxes), &(to_string(&1.uuid) == me))
+    users = if foreign_snapshot?(items, me), do: with_user(others, me), else: others
+
+    case users do
       [] -> :ok
       users -> ask_policy(scope, users, Enum.map(items, &to_row/1))
+    end
+  end
+
+  # Whether an item re-uses or keeps a snapshot `me` did not create. New
+  # snapshots (`:snapshot` items) are stored as `me`'s.
+  defp foreign_snapshot?(_items, nil), do: false
+
+  defp foreign_snapshot?(items, me) do
+    uuids = for %{mode: mode, file_uuid: uuid} <- items, mode in [:keep, :reuse], do: uuid
+
+    uuids != [] and
+      from(f in Storage.File,
+        where: f.uuid in ^uuids,
+        where: is_nil(f.user_uuid) or f.user_uuid != ^me,
+        select: count(f.uuid)
+      )
+      |> repo().one()
+      |> Kernel.>(0)
+  end
+
+  defp with_user(users, nil), do: users
+
+  defp with_user(users, me) do
+    case repo().get(User, me) do
+      nil -> users
+      user -> users ++ [user]
     end
   end
 
