@@ -219,6 +219,22 @@ defmodule PhoenixKitInbox.Attachments do
     )
   end
 
+  @doc """
+  Copies the bytes of `attachment` out of Storage into a temporary file and
+  returns its path — the caller deletes it. `{:error, :not_found}` when the
+  snapshot is gone or is not a file of the Inbox library.
+  """
+  @spec read_file(Attachment.t()) :: {:ok, Path.t()} | {:error, :not_found}
+  def read_file(%Attachment{file_uuid: file_uuid}) do
+    with %Storage.File{system_managed: false} = file <- Storage.get_file(to_string(file_uuid)),
+         true <- in_library?(file, library_uuid()),
+         {:ok, path, _file} <- Storage.retrieve_file(file.uuid) do
+      {:ok, path}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
   # ── uploads ─────────────────────────────────────────────────────────────────
 
   @doc """
