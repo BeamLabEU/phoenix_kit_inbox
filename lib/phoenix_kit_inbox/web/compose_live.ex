@@ -14,6 +14,17 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   sent message rather than being copied and deleted, which keeps the uuid
   stable for anything already linking to it.
 
+  ## Attachments
+
+  Files come from two places: an upload (`allow_upload/3`, stored in the
+  module's library as soon as it finishes, `Attachments.store_upload/4`) and
+  "Attach existing file" — core's media picker, which lists every file on
+  purpose, so each pick is checked with `Attachments.describe/2` and a file
+  the user may not read is refused by name. A forward and a reopened draft
+  start with the attachments they carry. The chips are the attachment list
+  the send or draft save submits; the checks that count are in
+  `Messages.send_message/4`.
+
   ## Access
 
   Composing requires `"write"` on the sending mailbox — `"read"` grantees on a
@@ -23,7 +34,10 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   use PhoenixKitWeb, :live_view
 
+  alias PhoenixKit.Modules.Storage
   alias PhoenixKit.Users.Auth.Scope
+  alias PhoenixKit.Utils.Format
+  alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Errors
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
@@ -48,6 +62,15 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       |> assign(:saving, false)
       |> assign(:recipients, recipient_suggestions(user))
       |> assign(:form, to_form(blank_params()))
+      |> assign(:attachments, [])
+      |> assign(:show_media_selector, false)
+      |> allow_upload(:attachments,
+        accept: :any,
+        max_entries: Attachments.max_files(),
+        max_file_size: Attachments.max_upload_bytes(),
+        auto_upload: true,
+        progress: &handle_progress/3
+      )
 
     {:ok, socket}
   end
@@ -141,6 +164,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       {:ok, %{message: message}} ->
         socket
         |> assign(:page_title, gettext_str("Forward"))
+        |> assign(:attachments, chips_for(message.uuid))
         |> assign(
           :form,
           to_form(%{
@@ -168,6 +192,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         |> assign(:draft_uuid, message.uuid)
         |> assign(:parent_uuid, message.parent_uuid)
         |> assign(:page_title, gettext_str("Draft"))
+        |> assign(:attachments, chips_for(message.uuid))
         |> assign(
           :form,
           to_form(%{
@@ -246,6 +271,135 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     {:noreply, assign_mailbox(socket, uuid)}
   end
 
+  def handle_event("open_media_selector", _params, socket) do
+    {:noreply, assign(socket, :show_media_selector, true)}
+  end
+
+  # Taking a chip off: a fresh upload nothing else names is deleted
+  # (`Attachments.discard_upload/2` leaves anything else alone).
+  def handle_event("remove_attachment", %{"file" => file_uuid}, socket) do
+    Attachments.discard_upload(socket.assigns.scope, file_uuid)
+
+    {:noreply,
+     assign(
+       socket,
+       :attachments,
+       Enum.reject(socket.assigns.attachments, &(&1.file_uuid == file_uuid))
+     )}
+  end
+
+  def handle_event("cancel_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :attachments, ref)}
+  end
+
+  @impl true
+  def handle_info({:media_selected, file_uuids}, socket) do
+    {chips, refused} =
+      Enum.reduce(List.wrap(file_uuids), {[], []}, fn uuid, {chips, refused} ->
+        case Attachments.describe(socket.assigns.scope, uuid) do
+          {:ok, chip} -> {[chip | chips], refused}
+          {:error, reason} -> {chips, [{file_label(uuid), reason} | refused]}
+        end
+      end)
+
+    socket =
+      chips
+      |> Enum.reverse()
+      |> Enum.reduce(assign(socket, :show_media_selector, false), &add_attachment(&2, &1))
+
+    {:noreply, refuse_picks(socket, Enum.reverse(refused))}
+  end
+
+  def handle_info({:media_selector_closed}, socket) do
+    {:noreply, assign(socket, :show_media_selector, false)}
+  end
+
+  # Picker choices that could not be attached, named — the picker shows every
+  # file, so the user must learn which of theirs did not make it and why.
+  defp refuse_picks(socket, []), do: socket
+
+  defp refuse_picks(socket, [{_name, reason} | _] = refused) do
+    names = Enum.map_join(refused, ", ", fn {name, _} -> name end)
+
+    put_flash(
+      socket,
+      :error,
+      Gettext.gettext(PhoenixKitWeb.Gettext, "Not attached: %{names}. %{reason}",
+        names: names,
+        reason: Errors.message(reason)
+      )
+    )
+  end
+
+  defp file_label(uuid) do
+    with {:ok, uuid} <- Ecto.UUID.cast(uuid),
+         %{} = file <- Storage.get_file(uuid) do
+      file.original_file_name || file.file_name
+    else
+      _ -> gettext_str("a file")
+    end
+  end
+
+  defp handle_progress(:attachments, %{done?: true} = entry, socket) do
+    result =
+      consume_uploaded_entry(socket, entry, fn %{path: path} ->
+        {:ok,
+         Attachments.store_upload(
+           socket.assigns.scope,
+           path,
+           entry.client_name,
+           entry.client_type
+         )}
+      end)
+
+    case result do
+      {:ok, file} ->
+        {:noreply,
+         add_attachment(socket, %{
+           file_uuid: to_string(file.uuid),
+           filename: file.original_file_name,
+           size_bytes: file.size || 0
+         })}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, Errors.message(reason))}
+    end
+  end
+
+  defp handle_progress(:attachments, _entry, socket), do: {:noreply, socket}
+
+  defp add_attachment(socket, %{file_uuid: uuid} = chip) do
+    attachments = socket.assigns.attachments
+
+    cond do
+      Enum.any?(attachments, &(&1.file_uuid == uuid)) ->
+        socket
+
+      length(attachments) >= Attachments.max_files() ->
+        Attachments.discard_upload(socket.assigns.scope, uuid)
+
+        put_flash(
+          socket,
+          :error,
+          Errors.message({:too_many_attachments, Attachments.max_files()})
+        )
+
+      true ->
+        assign(socket, :attachments, attachments ++ [chip])
+    end
+  end
+
+  defp chips_for(message_uuid) do
+    message_uuid
+    |> Attachments.list_for_message()
+    |> Enum.map(fn row ->
+      %{file_uuid: to_string(row.file_uuid), filename: row.filename, size_bytes: row.size_bytes}
+    end)
+  end
+
+  defp attachment_attrs(socket),
+    do: Enum.map(socket.assigns.attachments, &%{"file_uuid" => &1.file_uuid})
+
   defp save_draft(%{assigns: %{mailbox: nil}} = socket, _params), do: socket
 
   defp save_draft(socket, params) do
@@ -256,11 +410,15 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       |> Map.take(~w(to cc bcc subject body))
       |> Map.put("uuid", socket.assigns.draft_uuid)
       |> Map.put("parent_uuid", socket.assigns.parent_uuid)
+      |> Map.put("attachments", attachment_attrs(socket))
 
     case Messages.save_draft(socket.assigns.scope, mailbox, attrs) do
       {:ok, message} ->
+        # The chips now name the draft's own snapshots, so the next save
+        # keeps them instead of copying the originals again.
         socket
         |> assign(:draft_uuid, message.uuid)
+        |> assign(:attachments, chips_for(message.uuid))
         |> assign(:form, to_form(params))
         |> put_flash(:info, gettext_str("Draft saved."))
 
@@ -274,6 +432,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     |> Map.take(~w(to cc bcc subject body))
     |> Map.put("uuid", socket.assigns.draft_uuid)
     |> Map.put("parent_uuid", socket.assigns.parent_uuid)
+    |> Map.put("attachments", attachment_attrs(socket))
   end
 
   # Phoenix injects "_target"/"_csrf_token" into form payloads; they'd end up in
@@ -307,6 +466,21 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         recipients={@recipients}
         draft_uuid={@draft_uuid}
         back={back_path(assigns)}
+        attachments={@attachments}
+        uploads={@uploads}
+      />
+
+      <%!-- Mounted only while open: the picker reports back by message
+            ({:media_selected, uuids} / {:media_selector_closed}). --%>
+      <.live_component
+        :if={@module_access and @show_media_selector}
+        module={PhoenixKitWeb.Live.Components.MediaSelectorModal}
+        id="inbox-media-selector"
+        show={true}
+        mode={:multiple}
+        selected_uuids={[]}
+        title={gettext_str("Attach existing files")}
+        phoenix_kit_current_user={@current_user}
       />
     </div>
     """
@@ -318,12 +492,20 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   attr(:recipients, :list, required: true)
   attr(:draft_uuid, :any, required: true)
   attr(:back, :string, required: true)
+  attr(:attachments, :list, required: true)
+  attr(:uploads, :map, required: true)
 
   defp compose_form(assigns) do
     ~H"""
     <div class="card bg-base-100 shadow max-w-4xl">
       <div class="card-body gap-4">
-        <.form for={@form} phx-change="validate" phx-submit="send" class="flex flex-col gap-3">
+        <.form
+          for={@form}
+          id="compose-form"
+          phx-change="validate"
+          phx-submit="send"
+          class="flex flex-col gap-3"
+        >
           <div :if={length(@mailboxes) > 1} class="flex items-center gap-2">
             <span class="text-sm w-16 shrink-0">{gettext_str("From")}</span>
             <.select
@@ -366,6 +548,8 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
           <.input field={@form[:subject]} type="text" label={gettext_str("Subject")} />
           <.textarea field={@form[:body]} label={gettext_str("Message")} rows="14" />
 
+          <.attachment_picker attachments={@attachments} upload={@uploads.attachments} />
+
           <div class="card-actions justify-end flex-wrap gap-2 pt-2">
             <.link navigate={@back} class="btn btn-ghost btn-sm">
               {gettext_str("Cancel")}
@@ -397,6 +581,92 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     </div>
     """
   end
+
+  attr(:attachments, :list, required: true)
+  attr(:upload, :any, required: true)
+
+  defp attachment_picker(assigns) do
+    ~H"""
+    <div id="compose-attachments" class="flex flex-col gap-2">
+      <div
+        :if={@attachments != [] or @upload.entries != []}
+        class="flex flex-wrap gap-2"
+      >
+        <span
+          :for={attachment <- @attachments}
+          id={"attachment-#{attachment.file_uuid}"}
+          class="badge badge-outline badge-lg gap-2 max-w-full"
+        >
+          <.icon name="hero-paper-clip" class="w-4 h-4 shrink-0" />
+          <span class="truncate">{attachment.filename}</span>
+          <span class="text-xs opacity-60 shrink-0">{Format.bytes(attachment.size_bytes)}</span>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs btn-circle"
+            phx-click="remove_attachment"
+            phx-value-file={attachment.file_uuid}
+            aria-label={gettext_str("Remove attachment")}
+            title={gettext_str("Remove attachment")}
+          >
+            <.icon name="hero-x-mark" class="w-3 h-3" />
+          </button>
+        </span>
+
+        <span
+          :for={entry <- @upload.entries}
+          id={"upload-#{entry.ref}"}
+          class={[
+            "badge badge-ghost badge-lg gap-2 max-w-full",
+            entry.valid? == false && "badge-error"
+          ]}
+        >
+          <.icon name="hero-arrow-up-tray" class="w-4 h-4 shrink-0" />
+          <span class="truncate">{entry.client_name}</span>
+          <span :if={entry.valid?} class="text-xs opacity-60 shrink-0">{entry.progress}%</span>
+          <span :for={error <- upload_errors(@upload, entry)} class="text-xs shrink-0">
+            {upload_error_text(error)}
+          </span>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs btn-circle"
+            phx-click="cancel_upload"
+            phx-value-ref={entry.ref}
+            aria-label={gettext_str("Cancel upload")}
+          >
+            <.icon name="hero-x-mark" class="w-3 h-3" />
+          </button>
+        </span>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <label class="btn btn-ghost btn-sm">
+          <.icon name="hero-arrow-up-tray" class="w-4 h-4" />
+          {gettext_str("Upload files")}
+          <.live_file_input upload={@upload} class="hidden" />
+        </label>
+
+        <button
+          type="button"
+          id="attach-existing"
+          class="btn btn-ghost btn-sm"
+          phx-click="open_media_selector"
+        >
+          <.icon name="hero-paper-clip" class="w-4 h-4" />
+          {gettext_str("Attach existing file")}
+        </button>
+      </div>
+
+      <p :for={error <- upload_errors(@upload)} class="text-sm text-error">
+        {upload_error_text(error)}
+      </p>
+    </div>
+    """
+  end
+
+  defp upload_error_text(:too_large), do: gettext_str("Larger than the upload limit.")
+  defp upload_error_text(:too_many_files), do: gettext_str("Too many files.")
+  defp upload_error_text(:not_accepted), do: gettext_str("This file type is not accepted.")
+  defp upload_error_text(_), do: gettext_str("The upload failed.")
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -276,6 +276,25 @@ defmodule PhoenixKitInbox.Attachments do
     :ok
   end
 
+  @doc """
+  Whether `scope` may attach the Storage file `file_uuid`, checked exactly
+  as a send would check it, and what a compose chip shows for it:
+  `{:ok, %{file_uuid: uuid_to_submit, filename: name, size_bytes: size}}`.
+  For the media picker, which lists files without regard to who may read
+  them.
+  """
+  @spec describe(Scope.t(), term()) :: {:ok, map()} | {:error, term()}
+  def describe(%Scope{} = scope, file_uuid) do
+    with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
+         :ok <- authorize_inbox(scope),
+         {:ok, [item]} <-
+           plan(scope, user_uuid, nil, %{"attachments" => [%{"file_uuid" => file_uuid}]}, []) do
+      {:ok, %{file_uuid: item.key, filename: item.filename, size_bytes: item.size_bytes}}
+    end
+  end
+
+  def describe(_scope, _file_uuid), do: {:error, :forbidden}
+
   defp authorize_inbox(scope) do
     if Scope.can?(scope, "inbox"), do: :ok, else: {:error, :forbidden}
   end

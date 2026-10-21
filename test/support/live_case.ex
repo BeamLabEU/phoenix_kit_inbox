@@ -52,7 +52,8 @@ defmodule PhoenixKitInbox.LiveCase do
           scope_for: 2,
           storage_setup: 1,
           stored_file_fixture: 2,
-          stored_file_fixture: 3
+          stored_file_fixture: 3,
+          files_in_library: 1
         ]
 
       import PhoenixKitInbox.LiveCase
