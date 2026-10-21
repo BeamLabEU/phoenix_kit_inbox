@@ -457,8 +457,9 @@ defmodule PhoenixKitInbox.Messages do
     * `"uuid"` — promotes an existing draft instead of creating a new message
     * `"parent_uuid"` — set when replying; the thread is inherited from it
     * `"attachments"` — `[%{"file_uuid" => uuid}]`: a Storage file the sender
-      may read, an upload from `Attachments.store_upload/4`, or a file
-      attached to a message the sender sent or holds a copy of (a forward).
+      may read, a file of the module's library the sender stored (a saved
+      draft's), or a file attached to a message the sender sent or holds a
+      copy of (a forward). Uploads come in as `attachments_data:`.
       When promoting a draft, leaving the key out keeps the draft's own.
     * `"metadata"` — a map stored on the message. Its `"sender"` and
       `"recipients"` keys are always written by the send itself: a snapshot of

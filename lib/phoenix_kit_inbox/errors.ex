@@ -64,6 +64,11 @@ defmodule PhoenixKitInbox.Errors do
   def message({:attachment_store_failed, _reason}),
     do: gettext("An attachment could not be stored. Try again.")
 
+  def message(:storage_unsupported),
+    do: gettext("Attachments are not supported by this installation's file storage.")
+
+  def message(:uploads_in_progress), do: gettext("Wait for the uploads to finish.")
+
   def message({:library_unavailable, _reason}),
     do: gettext("Attachments are unavailable right now. Try again.")
 

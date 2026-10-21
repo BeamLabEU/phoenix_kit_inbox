@@ -8,6 +8,7 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
   use PhoenixKitInbox.LiveCase, async: false
 
   alias PhoenixKit.Modules.Storage
+  alias PhoenixKit.Modules.Storage.Libraries
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
@@ -48,47 +49,88 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
     |> render_submit()
   end
 
+  defp upload_scan(view) do
+    view
+    |> file_input("#compose-form", :attachments, [
+      %{name: "scan.pdf", content: "%PDF scanned", type: "application/pdf"}
+    ])
+    |> render_upload("scan.pdf")
+  end
+
+  defp inbox_files do
+    case Libraries.get_hidden_library_by_slug(Attachments.library_slug()) do
+      nil -> []
+      library -> files_in_library(library.uuid)
+    end
+  end
+
   defp received(mailbox) do
     [%{message: message}] = Messages.list_folder(mailbox.uuid, "inbox")
     Attachments.list_for_message(message.uuid)
   end
 
   describe "compose" do
-    test "an upload becomes a chip and goes out with the message, stored once", ctx do
+    test "an upload stays out of Storage until the send, then is stored once", ctx do
       {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+      upload_scan(view)
 
-      upload =
-        file_input(view, "#compose-form", :attachments, [
-          %{name: "scan.pdf", content: "%PDF scanned", type: "application/pdf"}
-        ])
-
-      render_upload(upload, "scan.pdf")
-
-      {:ok, library} = Attachments.ensure_library()
-      [file] = files_in_library(library.uuid)
-      assert has_element?(view, "#attachment-#{file.uuid}", "scan.pdf")
+      assert has_element?(view, "#compose-attachments [id^=upload-]", "scan.pdf")
+      assert inbox_files() == []
 
       assert {:error, {:live_redirect, _}} = submit(view, "@#{ctx.bob.username}")
 
       assert [%{file_uuid: file_uuid, filename: "scan.pdf"}] = received(ctx.bob_mb)
-      assert file_uuid == file.uuid
-      assert [_] = files_in_library(library.uuid)
+      assert [%{uuid: ^file_uuid}] = inbox_files()
     end
 
-    test "taking a fresh upload off deletes it", ctx do
+    test "an upload taken off before saving is cancelled; nothing is stored", ctx do
       {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+      upload_scan(view)
 
-      view
-      |> file_input("#compose-form", :attachments, [%{name: "oops.txt", content: "oops"}])
-      |> render_upload("oops.txt")
+      view |> element("#compose-attachments [id^=upload-] button") |> render_click()
 
-      {:ok, library} = Attachments.ensure_library()
-      [file] = files_in_library(library.uuid)
+      refute has_element?(view, "#compose-attachments [id^=upload-]")
+      assert inbox_files() == []
+    end
 
-      view |> element("#attachment-#{file.uuid} button") |> render_click()
+    test "leaving compose after an upload stores nothing", ctx do
+      {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+      upload_scan(view)
 
-      refute has_element?(view, "#attachment-#{file.uuid}")
-      assert Storage.get_file(file.uuid) == nil
+      assert {:error, {:live_redirect, _}} =
+               view |> element("#compose-form a", "Cancel") |> render_click()
+
+      assert inbox_files() == []
+    end
+
+    test "saving a draft stores the upload; the chip then names the draft's snapshot", ctx do
+      {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+      upload_scan(view)
+
+      view |> element("button[phx-click=save_draft]") |> render_click()
+
+      [%{message: draft}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
+      [row] = Attachments.list_for_message(draft.uuid)
+      assert row.filename == "scan.pdf"
+      assert has_element?(view, "#attachment-#{row.file_uuid}", "scan.pdf")
+      refute has_element?(view, "#compose-attachments [id^=upload-]")
+
+      view |> element("button[phx-click=save_draft]") |> render_click()
+      assert [%{uuid: uuid}] = Attachments.list_for_message(draft.uuid)
+      assert uuid == row.uuid
+      assert [_] = inbox_files()
+    end
+
+    test "a refused send keeps the upload for the next try", ctx do
+      {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+      upload_scan(view)
+
+      submit(view, "nobody@example.com")
+      assert has_element?(view, "#compose-attachments [id^=upload-]", "scan.pdf")
+      assert inbox_files() == []
+
+      assert {:error, {:live_redirect, _}} = submit(view, "@#{ctx.bob.username}")
+      assert [%{filename: "scan.pdf"}] = received(ctx.bob_mb)
     end
 
     test "an existing file the user may read is attached; another's is refused, by name", ctx do

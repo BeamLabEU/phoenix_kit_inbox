@@ -16,14 +16,17 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   ## Attachments
 
-  Files come from two places: an upload (`allow_upload/3`, stored in the
-  module's library as soon as it finishes, `Attachments.store_upload/4`) and
-  "Attach existing file" — core's media picker, which lists every file on
-  purpose, so each pick is checked with `Attachments.describe/2` and a file
-  the user may not read is refused by name. A forward and a reopened draft
-  start with the attachments they carry. The chips are the attachment list
-  the send or draft save submits; the checks that count are in
-  `Messages.send_message/4`.
+  Files come from two places. An upload (`allow_upload/3`) stays in the
+  LiveView's temporary upload until the draft is saved or the message sent,
+  and goes to `Messages` then as `attachments_data:` — nothing reaches
+  Storage before that, so an abandoned compose leaves nothing behind and
+  taking an upload off just cancels it. "Attach existing file" is core's
+  media picker, which lists every file on purpose, so each pick is checked
+  with `Attachments.describe/2` and a file the user may not read is refused
+  by name (a file uploaded inside the picker lands in Media first, as the
+  picker does everywhere, and is snapshotted at send). A forward and a
+  reopened draft start with the attachments they carry. The checks that
+  count are in `Messages.send_message/4`.
 
   ## Access
 
@@ -68,8 +71,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         accept: :any,
         max_entries: Attachments.max_files(),
         max_file_size: Attachments.max_upload_bytes(),
-        auto_upload: true,
-        progress: &handle_progress/3
+        auto_upload: true
       )
 
     {:ok, socket}
@@ -229,7 +231,9 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     # send_message/4 itself; the From picker only hides what would fail.
     with %{} = mailbox <- socket.assigns.mailbox,
          attrs <- send_attrs(socket, params),
-         {:ok, _message} <- Messages.send_message(socket.assigns.scope, mailbox, attrs) do
+         {:ok, uploads} <- pending_uploads(socket),
+         {:ok, _message} <-
+           Messages.send_message(socket.assigns.scope, mailbox, attrs, attachments_data: uploads) do
       {:noreply,
        socket
        |> put_flash(:info, gettext_str("Message sent."))
@@ -275,11 +279,9 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     {:noreply, assign(socket, :show_media_selector, true)}
   end
 
-  # Taking a chip off: a fresh upload nothing else names is deleted
-  # (`Attachments.discard_upload/2` leaves anything else alone).
+  # Taking a chip off only changes what the next save or send names; a
+  # draft's snapshot no other message names is deleted by that save.
   def handle_event("remove_attachment", %{"file" => file_uuid}, socket) do
-    Attachments.discard_upload(socket.assigns.scope, file_uuid)
-
     {:noreply,
      assign(
        socket,
@@ -340,33 +342,31 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     end
   end
 
-  defp handle_progress(:attachments, %{done?: true} = entry, socket) do
-    result =
-      consume_uploaded_entry(socket, entry, fn %{path: path} ->
+  # The finished uploads as `attachments_data:` entries. `:postpone` keeps
+  # each entry and its temporary file: a refused send keeps the uploads for
+  # the next try. The files are gone with the LiveView after a send.
+  defp pending_uploads(socket) do
+    case uploaded_entries(socket, :attachments) do
+      {_done, [_ | _]} ->
+        {:error, :uploads_in_progress}
+
+      {[], []} ->
+        {:ok, []}
+
+      _ ->
         {:ok,
-         Attachments.store_upload(
-           socket.assigns.scope,
-           path,
-           entry.client_name,
-           entry.client_type
-         )}
-      end)
-
-    case result do
-      {:ok, file} ->
-        {:noreply,
-         add_attachment(socket, %{
-           file_uuid: to_string(file.uuid),
-           filename: file.original_file_name,
-           size_bytes: file.size || 0
-         })}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, Errors.message(reason))}
+         consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
+           {:postpone,
+            %{path: path, filename: entry.client_name, content_type: entry.client_type}}
+         end)}
     end
   end
 
-  defp handle_progress(:attachments, _entry, socket), do: {:noreply, socket}
+  # After a draft save the uploads are the draft's snapshots: drop them here.
+  defp clear_uploads(socket) do
+    consume_uploaded_entries(socket, :attachments, fn _meta, _entry -> {:ok, nil} end)
+    socket
+  end
 
   defp add_attachment(socket, %{file_uuid: uuid} = chip) do
     attachments = socket.assigns.attachments
@@ -376,8 +376,6 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         socket
 
       length(attachments) >= Attachments.max_files() ->
-        Attachments.discard_upload(socket.assigns.scope, uuid)
-
         put_flash(
           socket,
           :error,
@@ -412,18 +410,19 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       |> Map.put("parent_uuid", socket.assigns.parent_uuid)
       |> Map.put("attachments", attachment_attrs(socket))
 
-    case Messages.save_draft(socket.assigns.scope, mailbox, attrs) do
-      {:ok, message} ->
-        # The chips now name the draft's own snapshots, so the next save
-        # keeps them instead of copying the originals again.
-        socket
-        |> assign(:draft_uuid, message.uuid)
-        |> assign(:attachments, chips_for(message.uuid))
-        |> assign(:form, to_form(params))
-        |> put_flash(:info, gettext_str("Draft saved."))
-
-      {:error, reason} ->
-        put_flash(socket, :error, Errors.message(reason))
+    with {:ok, uploads} <- pending_uploads(socket),
+         {:ok, message} <-
+           Messages.save_draft(socket.assigns.scope, mailbox, attrs, attachments_data: uploads) do
+      # The chips now name the draft's own snapshots (uploads included), so
+      # the next save keeps them instead of copying anything again.
+      socket
+      |> clear_uploads()
+      |> assign(:draft_uuid, message.uuid)
+      |> assign(:attachments, chips_for(message.uuid))
+      |> assign(:form, to_form(params))
+      |> put_flash(:info, gettext_str("Draft saved."))
+    else
+      {:error, reason} -> put_flash(socket, :error, Errors.message(reason))
     end
   end
 

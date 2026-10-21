@@ -325,72 +325,33 @@ defmodule PhoenixKitInbox.AttachmentsTest do
     end
   end
 
-  describe "an upload in compose" do
-    test "is stored in the Inbox library at once and sent as it is, not copied again", ctx do
-      path = Path.join(System.tmp_dir!(), "inbox_upload_#{System.unique_integer([:positive])}")
-      File.write!(path, "scanned page")
+  describe "a file already in the Inbox library" do
+    test "one's own (a saved draft's snapshot) is attached as it is, not copied again", ctx do
+      {:ok, draft} =
+        Messages.save_draft(ctx.scope, ctx.alice_box, %{"subject" => "WIP"},
+          attachments_data: [%{binary: "scanned page", filename: "scan.pdf"}]
+        )
 
-      {:ok, upload} = Attachments.store_upload(ctx.scope, path, "scan.pdf", "application/pdf")
+      [draft_row] = Attachments.list_for_message(draft.uuid)
 
-      assert upload.library_uuid == library_uuid()
-      assert upload.user_uuid == ctx.alice.uuid
-      assert [_] = inbox_files()
-
-      {:ok, message} = send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(upload.uuid))
+      {:ok, message} = send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(draft_row.file_uuid))
 
       [row] = Attachments.list_for_message(message.uuid)
-      assert row.file_uuid == upload.uuid
+      assert row.file_uuid == draft_row.file_uuid
       assert row.filename == "scan.pdf"
       assert [_] = inbox_files()
-      File.rm(path)
     end
 
-    test "is refused without the inbox permission", ctx do
-      path = Path.join(System.tmp_dir!(), "inbox_upload_#{System.unique_integer([:positive])}")
-      File.write!(path, "x")
+    test "someone else's is refused", ctx do
+      {:ok, draft} =
+        Messages.save_draft(scope_for(ctx.carol), ctx.carol_box, %{"subject" => "mine"},
+          attachments_data: [%{binary: "carol's", filename: "c.txt"}]
+        )
 
-      assert {:error, :forbidden} =
-               Attachments.store_upload(scope_for(ctx.alice, []), path, "x.txt", "text/plain")
-
-      assert inbox_files() == []
-      File.rm(path)
-    end
-
-    test "someone else's upload cannot be attached", ctx do
-      path = Path.join(System.tmp_dir!(), "inbox_upload_#{System.unique_integer([:positive])}")
-      File.write!(path, "carol's upload")
-      {:ok, upload} = Attachments.store_upload(scope_for(ctx.carol), path, "c.txt", "text/plain")
+      [row] = Attachments.list_for_message(draft.uuid)
 
       assert {:error, {:attachment_forbidden, _}} =
-               send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(upload.uuid))
-
-      File.rm(path)
-    end
-
-    test "a fresh upload taken off again is deleted; one in a message is not", ctx do
-      path = Path.join(System.tmp_dir!(), "inbox_upload_#{System.unique_integer([:positive])}")
-      File.write!(path, "maybe")
-
-      {:ok, dropped} = Attachments.store_upload(ctx.scope, path, "a.txt", "text/plain")
-      {:ok, kept} = Attachments.store_upload(ctx.scope, path, "b.txt", "text/plain")
-      {:ok, _} = send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(kept.uuid))
-
-      assert :ok = Attachments.discard_upload(ctx.scope, dropped.uuid)
-      assert :ok = Attachments.discard_upload(ctx.scope, kept.uuid)
-      assert :ok = Attachments.discard_upload(scope_for(ctx.carol), kept.uuid)
-
-      assert Storage.get_file(dropped.uuid) == nil
-      assert Storage.get_file(kept.uuid)
-      File.rm(path)
-    end
-  end
-
-  describe "discard_upload/2" do
-    test "never deletes a file outside the Inbox library, even one's own", ctx do
-      mine = stored_file_fixture(ctx.alice, "my original")
-
-      assert :ok = Attachments.discard_upload(ctx.scope, mine.uuid)
-      assert bytes(mine.uuid) == "my original"
+               send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(row.file_uuid))
     end
   end
 
@@ -460,14 +421,7 @@ defmodule PhoenixKitInbox.AttachmentsTest do
       assert {:error, {:attachment_too_large, "big.txt"}} =
                send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(mine.uuid))
 
-      path = Path.join(System.tmp_dir!(), "inbox_upload_#{System.unique_integer([:positive])}")
-      File.write!(path, String.duplicate("z", 11))
-
-      assert {:error, {:attachment_too_large, "z.bin"}} =
-               Attachments.store_upload(ctx.scope, path, "z.bin", nil)
-
       assert inbox_files() == []
-      File.rm(path)
     end
 
     test "the default limit is 200 MB" do
@@ -734,7 +688,8 @@ defmodule PhoenixKitInbox.AttachmentsTest do
         {:attachment_too_large, "big.bin"},
         {:attachment_refused, :money},
         {:attachment_store_failed, :timeout},
-        {:library_unavailable, :boom}
+        {:library_unavailable, :boom},
+        :storage_unsupported
       ]
 
       for reason <- reasons do

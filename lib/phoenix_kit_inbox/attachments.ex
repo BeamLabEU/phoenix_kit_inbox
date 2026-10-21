@@ -20,8 +20,11 @@ defmodule PhoenixKitInbox.Attachments do
   Everything is a **snapshot** in the Inbox library, so what was sent does not
   change when the file it came from is later edited, replaced or deleted:
 
-    1. an upload in compose (`store_upload/4`) is stored in the Inbox library
-       straight away, the uploader being the sender — it is its own snapshot;
+    1. an upload in compose stays in the LiveView's temporary upload until the
+       draft is saved or the message sent, and is then stored as the sender's
+       bytes (`attachments_data:`) — nothing reaches Storage before that. A
+       file of the Inbox library the sender stored this way (a saved draft's
+       snapshot) is attached again as it is, without a copy;
     2. an existing Storage file named in the form's `"attachments"` is copied,
        if the sender may read it (`Libraries.can?(scope, file, :read)`);
     3. a file the host checked itself is copied when its uuid comes in the
@@ -34,6 +37,15 @@ defmodule PhoenixKitInbox.Attachments do
   A file in the trash or a system-managed one is refused in paths 2 and 3
   (`{:error, {:attachment_unavailable, uuid}}`); anything else that does not
   qualify is `{:error, {:attachment_forbidden, uuid}}`.
+
+  ## Core requirement
+
+  Needs a PhoenixKit core with hidden system libraries
+  (`Libraries.create_system_library/2` `hidden: true`,
+  `get_hidden_library_by_slug/1`) and `Storage.store_file_in_buckets/7`
+  `dedup: false` — the first release after 2.63.0. On an older core every
+  attachment is refused with `{:error, :storage_unsupported}` (and a log
+  line); messages without attachments are unaffected.
 
   Snapshots are stored *before* the message transaction (Storage takes a
   directory lock for each, which must not be held across the send) and are
@@ -99,13 +111,33 @@ defmodule PhoenixKitInbox.Attachments do
   """
   @spec ensure_library() :: {:ok, Library.t()} | {:error, term()}
   def ensure_library do
-    case library() do
-      nil -> create_library()
-      library -> {:ok, library}
+    cond do
+      not hidden_libraries?() ->
+        Logger.error(
+          "[Inbox] attachments need a PhoenixKit core with hidden system libraries " <>
+            "(the first release after 2.63.0); refusing the attachment"
+        )
+
+        {:error, :storage_unsupported}
+
+      library = library() ->
+        {:ok, library}
+
+      true ->
+        create_library()
     end
   end
 
-  defp library, do: Libraries.get_hidden_library_by_slug(@library_slug)
+  defp library do
+    if hidden_libraries?(), do: Libraries.get_hidden_library_by_slug(@library_slug)
+  end
+
+  # The hidden-library API arrived with `dedup: false` in the same core
+  # release; an older core has neither.
+  defp hidden_libraries? do
+    Code.ensure_loaded?(Libraries) and
+      function_exported?(Libraries, :get_hidden_library_by_slug, 1)
+  end
 
   defp create_library do
     case Libraries.create_system_library(
@@ -235,46 +267,7 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
-  # ── uploads ─────────────────────────────────────────────────────────────────
-
-  @doc """
-  Stores an upload from compose (the temporary file at `path`) in the Inbox
-  library as `scope`'s user — the snapshot itself, attached later by its
-  uuid. Needs the `"inbox"` permission; refused over `max_upload_bytes/0`.
-  The file at `path` is left where it is.
-  """
-  @spec store_upload(Scope.t(), Path.t(), String.t() | nil, String.t() | nil) ::
-          {:ok, Storage.File.t()} | {:error, term()}
-  def store_upload(%Scope{} = scope, path, filename, content_type) do
-    filename = clean_filename(filename)
-
-    with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
-         :ok <- authorize_inbox(scope),
-         {:ok, %{size: size}} <- File.stat(path),
-         :ok <- check_size(filename, size),
-         {:ok, library} <- ensure_library() do
-      store_snapshot(path, filename, content_type, user_uuid, to_string(library.uuid))
-    end
-  end
-
-  def store_upload(_scope, _path, _filename, _content_type), do: {:error, :forbidden}
-
-  @doc """
-  Deletes an upload taken off a message before it was sent or saved: only
-  `scope`'s own file in the Inbox library that no attachment row names.
-  Anything else is left alone. Always `:ok`.
-  """
-  @spec discard_upload(Scope.t(), term()) :: :ok
-  def discard_upload(scope, file_uuid) do
-    with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
-         {:ok, uuid} <- Ecto.UUID.cast(file_uuid),
-         %Storage.File{} = file <- Storage.get_file(uuid),
-         true <- to_string(file.user_uuid) == user_uuid do
-      release([uuid])
-    end
-
-    :ok
-  end
+  # ── compose ─────────────────────────────────────────────────────────────────
 
   @doc """
   Whether `scope` may attach the Storage file `file_uuid`, checked exactly
@@ -572,10 +565,6 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
-  defp check_size(filename, size) do
-    if size > max_upload_bytes(), do: {:error, {:attachment_too_large, filename}}, else: :ok
-  end
-
   defp collect(list, fun) do
     list
     |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
@@ -757,18 +746,28 @@ defmodule PhoenixKitInbox.Attachments do
     )
     |> case do
       {:ok, %{library_uuid: stored} = file} ->
-        if to_string(stored) == library_uuid,
-          do: {:ok, file},
-          else: {:error, {:attachment_store_failed, :wrong_library}}
+        if to_string(stored) == library_uuid, do: {:ok, file}, else: unsupported_store()
 
       {:error, reason} ->
         {:error, {:attachment_store_failed, reason}}
 
-      other ->
-        {:error, {:attachment_store_failed, other}}
+      # `{:ok, existing, :duplicate}`: a core that ignores `dedup: false`.
+      _other ->
+        unsupported_store()
     end
   rescue
     e -> {:error, {:attachment_store_failed, Exception.message(e)}}
+  end
+
+  # Storage handed back something other than a new file in the Inbox library:
+  # a core without `dedup: false`. The file it returned is not ours to delete.
+  defp unsupported_store do
+    Logger.error(
+      "[Inbox] Storage did not store a separate snapshot (dedup: false unsupported); " <>
+        "attachments need the first PhoenixKit release after 2.63.0"
+    )
+
+    {:error, :storage_unsupported}
   end
 
   @doc false

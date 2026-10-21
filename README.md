@@ -163,7 +163,11 @@ Attachments.list_for_message(message.uuid)   #=> [%Attachment{filename: …, fil
 Paths.attachment(attachment.uuid)            #=> "/admin/inbox/files/<uuid>"
 ```
 
-Every file becomes a **snapshot** in the module's hidden Storage library (slug `phoenix-kit-inbox`, created on first use): it isn't listed in Media, has no permanent URL, and doesn't change when the file it was copied from is edited or deleted. A file gets in as an upload in compose, a Storage file the sender may read, a file the host vouched for (`attachments_authorized:`), bytes the host made (`attachments_data:`), or a forward of a file on a message the sender sent or still has a copy of. Trashed and system-managed files are refused; anything else is `{:error, {:attachment_forbidden, uuid}}`. At most 50 files per message, each up to `inbox_max_upload_bytes`.
+Every file becomes a **snapshot** in the module's hidden Storage library (slug `phoenix-kit-inbox`, created on first use): it isn't listed in Media, has no permanent URL, and doesn't change when the file it was copied from is edited or deleted. A file gets in as an upload in compose (kept in the browser session's temporary upload until the draft is saved or the message sent — an abandoned compose stores nothing), a Storage file the sender may read, a file the host vouched for (`attachments_authorized:`), bytes the host made (`attachments_data:`), or a forward of a file on a message the sender sent or still has a copy of. Trashed and system-managed files are refused; anything else is `{:error, {:attachment_forbidden, uuid}}`. At most 50 files per message, each up to `inbox_max_upload_bytes`.
+
+"Attach existing file" is core's media picker: it lists every file, so each pick is checked and a file the sender may not read is refused by name. A file uploaded *inside* the picker lands in Media first (as the picker does everywhere) and is snapshotted at send.
+
+**Requires** a PhoenixKit core with hidden system libraries (core #949) and `Storage.store_file_in_buckets/7` `dedup: false` — the first release after 2.63.0. On an older core every attachment is refused with `{:error, :storage_unsupported}` (logged); messages without attachments work as before.
 
 Downloads go through the module's own route, `GET /admin/inbox/files/:attachment_uuid` (`route_module/0`), behind core's admin pipeline: the sender and anyone holding a non-deleted copy of the message get the file as a download, everyone else a 404.
 
