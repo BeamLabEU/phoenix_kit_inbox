@@ -133,7 +133,7 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
       assert [%{filename: "scan.pdf"}] = received(ctx.bob_mb)
     end
 
-    test "an existing file the user may read is attached; another's is refused, by name", ctx do
+    test "an existing file the user may read is attached; another's is refused, unnamed", ctx do
       mine = stored_file_fixture(ctx.alice, "my photo", filename: "mine.jpg")
       theirs = stored_file_fixture(ctx.carol, "her contract", filename: "contract.pdf")
 
@@ -142,7 +142,9 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
 
       assert has_element?(view, "#attachment-#{mine.uuid}", "mine.jpg")
       refute has_element?(view, "#attachment-#{theirs.uuid}")
-      assert has_element?(view, "#flash-error", "contract.pdf")
+      # A forged pick of another user's file must not tell its name.
+      assert has_element?(view, "#flash-error", "a file")
+      refute render(view) =~ "contract.pdf"
 
       assert {:error, {:live_redirect, _}} = submit(view, "@#{ctx.bob.username}")
       assert [%{source_file_uuid: source}] = received(ctx.bob_mb)
@@ -158,6 +160,28 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
 
       refute has_element?(view, "#attachment-#{mine.uuid}")
       assert Storage.get_file(mine.uuid)
+    end
+
+    test "the media picker lists the user's own files, not another user's", ctx do
+      stored_file_fixture(ctx.alice, "my photo", filename: "mine.jpg")
+      stored_file_fixture(ctx.carol, "her contract", filename: "contract.pdf")
+
+      {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+      html = view |> element("#attach-existing") |> render_click()
+
+      assert html =~ "mine.jpg"
+      refute html =~ "contract.pdf"
+    end
+
+    test "a system role's media picker lists the whole library", ctx do
+      stored_file_fixture(ctx.carol, "her contract", filename: "contract.pdf")
+      admin = %{scope_for(ctx.alice) | cached_roles: ["Admin"]}
+      conn = put_test_scope(ctx.conn, admin)
+
+      {:ok, view, _html} = live(conn, "/en/admin/inbox/compose")
+      html = view |> element("#attach-existing") |> render_click()
+
+      assert html =~ "contract.pdf"
     end
 
     test "the attach-existing button opens the media picker", ctx do

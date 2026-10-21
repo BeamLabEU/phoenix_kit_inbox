@@ -38,6 +38,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   use PhoenixKitWeb, :live_view
 
   alias PhoenixKit.Modules.Storage
+  alias PhoenixKit.Modules.Storage.Libraries
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Utils.Format
   alias PhoenixKitInbox.Attachments
@@ -299,8 +300,11 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     {chips, refused} =
       Enum.reduce(List.wrap(file_uuids), {[], []}, fn uuid, {chips, refused} ->
         case Attachments.describe(socket.assigns.scope, uuid) do
-          {:ok, chip} -> {[chip | chips], refused}
-          {:error, reason} -> {chips, [{file_label(uuid), reason} | refused]}
+          {:ok, chip} ->
+            {[chip | chips], refused}
+
+          {:error, reason} ->
+            {chips, [{file_label(socket.assigns.scope, uuid), reason} | refused]}
         end
       end)
 
@@ -316,8 +320,8 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     {:noreply, assign(socket, :show_media_selector, false)}
   end
 
-  # Picker choices that could not be attached, named — the picker shows every
-  # file, so the user must learn which of theirs did not make it and why.
+  # Picker choices that could not be attached, named when the user may read
+  # them (`file_label/2`), so they learn which did not make it and why.
   defp refuse_picks(socket, []), do: socket
 
   defp refuse_picks(socket, [{_name, reason} | _] = refused) do
@@ -333,13 +337,25 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     )
   end
 
-  defp file_label(uuid) do
+  # A refused pick's name, only for a file the user may read: the uuid comes
+  # from the client, so another user's file name must not come back in a flash.
+  defp file_label(scope, uuid) do
     with {:ok, uuid} <- Ecto.UUID.cast(uuid),
-         %{} = file <- Storage.get_file(uuid) do
+         %{} = file <- Storage.get_file(uuid),
+         true <- Libraries.can?(scope, file, :read) do
       file.original_file_name || file.file_name
     else
       _ -> gettext_str("a file")
     end
+  end
+
+  # The picker lists the user's own Media files; a system role (Owner, Admin),
+  # who may read every file, gets the whole library. Core's `MediaSelectorModal`
+  # without `user_uuid` lists every user's files, names and thumbnails included.
+  defp media_selector(scope) do
+    if Scope.system_role?(scope),
+      do: PhoenixKitWeb.Live.Components.MediaSelectorModal,
+      else: PhoenixKitWeb.Live.Components.UserMediaSelectorModal
   end
 
   # The finished uploads as `attachments_data:` entries. `:postpone` keeps
@@ -473,7 +489,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
             ({:media_selected, uuids} / {:media_selector_closed}). --%>
       <.live_component
         :if={@module_access and @show_media_selector}
-        module={PhoenixKitWeb.Live.Components.MediaSelectorModal}
+        module={media_selector(@scope)}
         id="inbox-media-selector"
         show={true}
         mode={:multiple}
