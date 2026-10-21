@@ -422,6 +422,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     attrs =
       params
       |> Map.take(~w(to cc bcc subject body))
+      |> Map.put("body_format", "markdown")
       |> Map.put("uuid", socket.assigns.draft_uuid)
       |> Map.put("parent_uuid", socket.assigns.parent_uuid)
       |> Map.put("attachments", attachment_attrs(socket))
@@ -445,6 +446,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   defp send_attrs(socket, params) do
     params
     |> Map.take(~w(to cc bcc subject body))
+    |> Map.put("body_format", "markdown")
     |> Map.put("uuid", socket.assigns.draft_uuid)
     |> Map.put("parent_uuid", socket.assigns.parent_uuid)
     |> Map.put("attachments", attachment_attrs(socket))
@@ -562,6 +564,9 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
           </datalist>
           <.input field={@form[:subject]} type="text" label={gettext_str("Subject")} />
           <.textarea field={@form[:body]} label={gettext_str("Message")} rows="14" />
+          <p class="text-xs text-base-content/60 -mt-2">
+            {gettext_str("Markdown: **bold**, _italic_, [link](https://…), - lists.")}
+          </p>
 
           <.attachment_picker attachments={@attachments} upload={@uploads.attachments} />
 
