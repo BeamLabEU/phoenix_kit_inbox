@@ -47,7 +47,7 @@ defmodule PhoenixKitInbox.Attachments do
   `attachments_data:`); a forward copies it. A host that must keep some
   files from some recipients sets
 
-      config :phoenix_kit_inbox, attachment_policy: {MyApp.Inbox, :attachments_allowed}
+      config :phoenix_kit_inbox, attachment_policy: {MyApp.Inbox, :check_attachments}
 
   The function is called on every send and forward that carries attachments
   with the sender's scope, every user the message reaches (the owners of the

@@ -30,6 +30,7 @@ Neighbouring modules, so you pick the right one:
 - **Drafts** — saved as real messages and *promoted* on send, so the uuid stays stable
 - **Search** — case-insensitive over subject and body
 - **Threading** — replies carry their root's `thread_uuid`; `list_thread/1` returns a conversation in one indexed query
+- **Attachments** — uploads, existing Storage files and forwards, each kept as a snapshot in the module's own hidden Storage library and downloaded only by the people on the message
 - **Notifications** — new messages raise an activity event, which core turns into an in-app notification with a deep link
 - **Module-owned migrations** — tables ship and version here, not in core
 - **Auto-discovery** — implements `PhoenixKit.Module`; PhoenixKit finds it at startup with zero config
@@ -53,14 +54,15 @@ Then enable **Inbox** on the admin Modules page (or call `PhoenixKitInbox.enable
 
 ## Data model
 
-Four tables. The split that matters is **message vs. delivery**: a message body is stored once, and each recipient mailbox gets its own delivery row carrying that mailbox's folder/seen/starred state. It's how every webmail works, and it's why "mark as read" doesn't leak across recipients.
+Five tables. The split that matters is **message vs. delivery**: a message body is stored once, and each recipient mailbox gets its own delivery row carrying that mailbox's folder/seen/starred state. It's how every webmail works, and it's why "mark as read" doesn't leak across recipients.
 
 ```
 phoenix_kit_inbox_mailboxes          one per user (kind: "user") + shared ones (kind: "shared")
  └─ phoenix_kit_inbox_mailbox_grants who may read/write/administer a mailbox they don't own
 
 phoenix_kit_inbox_messages           subject, body, thread_uuid, parent_uuid, sender  (stored ONCE)
- └─ phoenix_kit_inbox_deliveries     one row per recipient mailbox: folder, seen_at, starred
+ ├─ phoenix_kit_inbox_deliveries     one row per recipient mailbox: folder, seen_at, starred
+ └─ phoenix_kit_inbox_attachments    one row per attached file: a reference, not the bytes
 ```
 
 All primary keys are UUIDv7 and every schema carries `use PhoenixKit.SchemaPrefix`, so named-schema (`--prefix`) installs work.
@@ -70,7 +72,7 @@ All primary keys are UUIDv7 and every schema carries `use PhoenixKit.SchemaPrefi
 Older PhoenixKit modules shipped their DDL inside core's versioned chain (the V90+ scheme). Inbox follows the newer pattern already used by `phoenix_kit_boards`, `phoenix_kit_web_analytics`, `phoenix_kit_legal`, and `phoenix_kit_stats`:
 
 - `PhoenixKitInbox.Migrations` is the coordinator, returned from `migration_module/0`
-- `PhoenixKitInbox.Migrations.V01` creates the tables; `V02` makes a user's deletion keep their mailboxes and every message (owner `ON DELETE SET NULL`, mailbox references `RESTRICT`) and makes shared addresses unique regardless of case. Shipped versions are immutable
+- `PhoenixKitInbox.Migrations.V01` creates the tables; `V02` makes a user's deletion keep their mailboxes and every message (owner `ON DELETE SET NULL`, mailbox references `RESTRICT`) and makes shared addresses unique regardless of case; `V03` adds message attachments. Shipped versions are immutable
 - Version is tracked in a `COMMENT ON TABLE` on `phoenix_kit_inbox_mailboxes`, so the coordinator can tell "not installed" from "installed at V1"
 - `mix phoenix_kit.update` discovers the coordinator, compares versions, and generates the host migration
 
@@ -146,6 +148,34 @@ Messages.move_to_folder(scope, mailbox, message_uuid, "archive")   # write
 Messages.purge(scope, mailbox, message_uuid)   # write; removes only THIS mailbox's copy
 ```
 
+### Attachments
+
+```elixir
+{:ok, message} = Messages.send_message(scope, from_mailbox, %{
+  "to" => "@bob",
+  "subject" => "Drawings",
+  "attachments" => [%{"file_uuid" => file.uuid}]   # a Storage file the sender may read
+}, attachments_authorized: [checked_file_uuid],     # server-side only: the host checked it
+   attachment_flags: %{checked_file_uuid => %{"reviewed" => true}},
+   attachments_data: [%{binary: pdf, filename: "offer.pdf", content_type: "application/pdf"}])
+
+Attachments.list_for_message(message.uuid)   #=> [%Attachment{filename: …, file_uuid: …, flags: …}]
+Paths.attachment(attachment.uuid)            #=> "/admin/inbox/files/<uuid>"
+```
+
+Every file becomes a **snapshot** in the module's hidden Storage library (slug `phoenix-kit-inbox`, created on first use): it isn't listed in Media, has no permanent URL, and doesn't change when the file it was copied from is edited or deleted. A file gets in as an upload in compose, a Storage file the sender may read, a file the host vouched for (`attachments_authorized:`), bytes the host made (`attachments_data:`), or a forward of a file on a message the sender sent or still has a copy of. Trashed and system-managed files are refused; anything else is `{:error, {:attachment_forbidden, uuid}}`. At most 50 files per message, each up to `inbox_max_upload_bytes`.
+
+Downloads go through the module's own route, `GET /admin/inbox/files/:attachment_uuid` (`route_module/0`), behind core's admin pipeline: the sender and anyone holding a non-deleted copy of the message get the file as a download, everyone else a 404.
+
+`flags` are set only by server code and copied on forward. A host that must keep some files away from some recipients sets a policy, asked on every send and forward carrying attachments:
+
+```elixir
+config :phoenix_kit_inbox, attachment_policy: {MyApp.Inbox, :check_attachments}
+# (scope, recipient_users, attachment_rows) -> :ok | {:error, reason}
+```
+
+The older `send_message(from_mailbox, sender_user_uuid, attrs)` form refuses attachments with `{:error, :attachments_need_scope}`.
+
 ### Drafts
 
 ```elixir
@@ -165,6 +195,7 @@ Messages.draft_recipients(draft)   #=> %{"to" => "@bob", "cc" => "", "bcc" => ""
 |---|---|---|
 | `inbox_enabled` | `false` | Module on/off (the admin Modules page toggle) |
 | `inbox_email_nudges_enabled` | `false` | Send a "new message" email to recipients — needs `phoenix_kit_emails` |
+| `inbox_max_upload_bytes` | `200000000` | Largest attachment accepted, in bytes |
 
 ```elixir
 PhoenixKitInbox.set_email_nudges(true)
@@ -196,6 +227,7 @@ All navigation goes through `PhoenixKitInbox.Paths`, never a hardcoded string �
 | `/admin/inbox?folder=sent&message=<uuid>` | same LiveView, patched |
 | `/admin/inbox/compose` | `Web.ComposeLive` (also `?reply_to=`, `?forward=`, `?draft=`) |
 | `/admin/inbox/mailboxes` | `Web.MailboxesLive` — shared mailboxes and grants |
+| `/admin/inbox/files/<attachment uuid>` | `Web.AttachmentController` — an attachment download (no locale segment) |
 
 Folder, message, search, and page are query params, not path segments, so the whole mailbox stays one LiveView: switching folders is a `push_patch`, not a remount.
 
