@@ -174,7 +174,9 @@ defmodule PhoenixKitInbox.Messages do
     from(m in Message,
       where: m.thread_uuid == ^thread_uuid,
       where: m.status == "sent",
-      order_by: [asc: m.inserted_at]
+      # `inserted_at` has second precision; the UUIDv7 key breaks a tie in
+      # creation order instead of whatever order the rows come back in.
+      order_by: [asc: m.inserted_at, asc: m.uuid]
     )
     |> repo().all()
     |> Enum.map(&for_viewer(&1, nil))
