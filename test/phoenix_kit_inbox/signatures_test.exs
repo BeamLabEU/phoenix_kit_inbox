@@ -171,6 +171,25 @@ defmodule PhoenixKitInbox.SignaturesTest do
       assert %{body: [_ | _]} = errors_on(too_long)
     end
 
+    test "an id that is not a uuid is not found, not a crash", ctx do
+      forged = %Signature{uuid: "not-a-uuid"}
+
+      assert {:error, :not_found} =
+               Signatures.update_signature(scope_for(ctx.alice), forged, %{"label" => "X"})
+
+      assert {:error, :not_found} = Signatures.delete_signature(scope_for(ctx.alice), forged)
+    end
+
+    test "a label set to nil is an error on the label, not a crash", ctx do
+      {:ok, sig} =
+        Signatures.create_signature(scope_for(ctx.alice), ctx.alice_mb, %{"label" => "Work"})
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Signatures.update_signature(scope_for(ctx.alice), sig, %{"label" => nil})
+
+      assert %{label: [_ | _]} = errors_on(changeset)
+    end
+
     test "the mailbox comes from the argument, never the form", ctx do
       {:ok, sig} =
         Signatures.create_signature(scope_for(ctx.alice), ctx.alice_mb, %{

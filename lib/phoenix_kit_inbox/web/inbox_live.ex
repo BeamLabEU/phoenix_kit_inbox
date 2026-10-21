@@ -840,8 +840,20 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   defp message_actions(assigns) do
     ~H"""
     <div class="card-actions justify-end flex-wrap gap-2">
+      <%!-- A draft is opened to be written on: it is nobody's to reply to or
+            forward until it is sent. --%>
       <.link
-        :if={@access in ~w(write admin)}
+        :if={@message.status == "draft" and @access in ~w(write admin)}
+        id="edit-draft"
+        navigate={Paths.compose(mailbox: @mailbox.uuid, draft: @message.uuid)}
+        class="btn btn-primary btn-sm"
+      >
+        <.icon name="hero-pencil-square" class="w-4 h-4" />
+        {gettext("Edit draft")}
+      </.link>
+
+      <.link
+        :if={@message.status != "draft" and @access in ~w(write admin)}
         navigate={Paths.compose(mailbox: @mailbox.uuid, reply_to: @message.uuid)}
         class="btn btn-primary btn-sm"
       >
@@ -850,7 +862,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
       </.link>
 
       <.link
-        :if={@access in ~w(write admin)}
+        :if={@message.status != "draft" and @access in ~w(write admin)}
         navigate={Paths.compose(mailbox: @mailbox.uuid, forward: @message.uuid)}
         class="btn btn-ghost btn-sm"
       >

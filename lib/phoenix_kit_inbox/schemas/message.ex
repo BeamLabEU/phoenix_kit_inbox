@@ -90,8 +90,15 @@ defmodule PhoenixKitInbox.Schemas.Message do
     |> validate_required([:sender_mailbox_uuid, :status])
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:body_format, @body_formats)
+    |> update_change(:subject, &single_line/1)
     |> validate_length(:subject, max: 500)
   end
+
+  # The subject becomes a mail header (external recipients, the nudge): a line
+  # break in it would add headers of its own — a Bcc the outbound filter never
+  # saw, as it looks at the addressing of the struct.
+  defp single_line(nil), do: nil
+  defp single_line(subject), do: subject |> String.replace(~r/[\r\n]+/, " ") |> String.trim()
 
   @doc """
   Changeset applied at send time. A sent message must carry a subject or a

@@ -573,6 +573,17 @@ defmodule PhoenixKitInbox.MailboxesTest do
       refute "@myself" in handles
     end
 
+    test "% and _ in the typed term are not wildcards" do
+      me = user_fixture()
+      user_fixture(%{username: "someone", email: "someone@example.com"})
+      _ = shared_mailbox_fixture(me, %{name: "Helpdesk"})
+
+      assert Mailboxes.search_recipients(me.uuid, "%") == []
+      assert Mailboxes.search_recipients(me.uuid, "_") == []
+      assert Mailboxes.search_recipients(me.uuid, "some_ne") == []
+      assert [%{handle: "@someone"}] = Mailboxes.search_recipients(me.uuid, "someone")
+    end
+
     test "filters on username, email and name" do
       me = user_fixture()
 

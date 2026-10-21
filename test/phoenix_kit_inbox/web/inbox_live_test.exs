@@ -51,6 +51,39 @@ defmodule PhoenixKitInbox.Web.InboxLiveTest do
     assert html =~ "Are you there?"
   end
 
+  test "a draft is opened for editing, not for replying", ctx do
+    {:ok, draft} =
+      Messages.save_draft(scope_for(ctx.alice), ctx.alice_mb, %{
+        "to" => ctx.bob.email,
+        "subject" => "Half written"
+      })
+
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox?folder=drafts&message=#{draft.uuid}")
+
+    assert has_element?(
+             view,
+             "#edit-draft[href*='/admin/inbox/compose?'][href*='draft=#{draft.uuid}']"
+           )
+
+    refute render(view) =~ "Reply"
+    refute render(view) =~ "Forward"
+  end
+
+  test "a received message is offered Reply and Forward, not Edit draft", ctx do
+    {:ok, message} =
+      Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+        "to" => ctx.alice.email,
+        "subject" => "Ping",
+        "body" => "Hi"
+      })
+
+    {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox?message=#{message.uuid}")
+
+    assert render(view) =~ "Reply"
+    assert render(view) =~ "Forward"
+    refute has_element?(view, "#edit-draft")
+  end
+
   test "opening a message renders it and marks it seen", %{conn: conn, alice: alice, bob: bob} do
     {:ok, bob_mb} = Mailboxes.ensure_user_mailbox(bob)
     {:ok, alice_mb} = Mailboxes.ensure_user_mailbox(alice)

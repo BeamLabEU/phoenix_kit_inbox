@@ -29,6 +29,18 @@ defmodule PhoenixKitInbox.MessagesTest do
   end
 
   describe "send_message/3" do
+    test "a line break in the subject is flattened: it would become a mail header", ctx do
+      assert {:ok, message} =
+               Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+                 "to" => ctx.bob.email,
+                 "subject" => "Hello\r\nBcc: someone@elsewhere.test\nX-Evil: 1",
+                 "body" => "Body"
+               })
+
+      assert message.subject == "Hello Bcc: someone@elsewhere.test X-Evil: 1"
+      refute message.subject =~ ~r/[\r\n]/
+    end
+
     test "delivers to the recipient's inbox and the sender's sent folder", ctx do
       assert {:ok, message} =
                Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
@@ -985,6 +997,22 @@ defmodule PhoenixKitInbox.MessagesTest do
 
     test "a blank search term is ignored rather than matching nothing", ctx do
       assert length(Messages.list_folder(ctx.bob_mb.uuid, "inbox", search: "   ")) == 3
+    end
+
+    test "% and _ in a search term are matched as typed, not as wildcards", ctx do
+      {:ok, _} =
+        Messages.send_message(ctx.alice_mb, ctx.alice.uuid, %{
+          "to" => ctx.bob.email,
+          "subject" => "Save 50% on_sale"
+        })
+
+      assert [%{message: found}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox", search: "50%")
+      assert found.subject == "Save 50% on_sale"
+
+      assert [_] = Messages.list_folder(ctx.bob_mb.uuid, "inbox", search: "on_sale")
+      assert Messages.list_folder(ctx.bob_mb.uuid, "inbox", search: "%%") == []
+      assert Messages.list_folder(ctx.bob_mb.uuid, "inbox", search: "Message_") == []
+      assert Messages.count_folder(ctx.bob_mb.uuid, "inbox", search: "Message_") == 0
     end
 
     test "unseen_only filters read messages out", ctx do

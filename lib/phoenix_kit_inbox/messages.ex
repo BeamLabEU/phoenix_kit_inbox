@@ -126,12 +126,15 @@ defmodule PhoenixKitInbox.Messages do
         query
 
       trimmed ->
-        pattern = "%#{trimmed}%"
+        pattern = "%#{escape_like(trimmed)}%"
         where(query, [_d, m], ilike(m.subject, ^pattern) or ilike(m.body, ^pattern))
     end
   end
 
   defp maybe_search(query, _), do: query
+
+  # What was typed is matched literally: `%` and `_` in it are not wildcards.
+  defp escape_like(term), do: String.replace(term, ["\\", "%", "_"], &("\\" <> &1))
 
   @doc """
   Fetches one message *as seen by one mailbox*.

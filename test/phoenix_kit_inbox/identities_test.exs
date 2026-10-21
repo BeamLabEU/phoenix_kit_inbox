@@ -233,6 +233,27 @@ defmodule PhoenixKitInbox.IdentitiesTest do
       assert Repo.get(Identity, identity.uuid) == nil
     end
 
+    test "clearing a field in the form is not a crash", ctx do
+      identity =
+        shared!(ctx,
+          label: "Desk",
+          from_name: "Company Desk",
+          integration_uuid: ctx.system_smtp
+        )
+
+      assert {:ok, %Identity{from_name: nil, label: "Desk"}} =
+               Identities.update_identity(scope_for(ctx.admin, @manage), identity, %{
+                 "from_name" => ""
+               })
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Identities.update_identity(scope_for(ctx.admin, @manage), identity, %{
+                 "label" => ""
+               })
+
+      assert %{label: [_ | _]} = errors_on(changeset)
+    end
+
     test "a personal identity is its owner's alone", ctx do
       own = mail_integration_fixture({:user, ctx.alice.uuid})
 

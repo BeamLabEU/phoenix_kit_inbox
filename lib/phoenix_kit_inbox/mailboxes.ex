@@ -365,14 +365,15 @@ defmodule PhoenixKitInbox.Mailboxes do
 
   # A blank term lists everything (up to the cap) rather than nothing, so the
   # suggestion list is useful before the first keystroke.
+  # What was typed is matched literally: `%` and `_` in it are not wildcards.
   defp filter_by_term(query, term, apply_filter) do
     case String.trim(to_string(term)) do
       "" -> query
-      trimmed -> apply_filter.(query, "%#{trimmed}%")
+      trimmed -> apply_filter.(query, "%#{escape_like(trimmed)}%")
     end
   end
 
-  def search_mailboxes(_, _, _), do: []
+  defp escape_like(term), do: String.replace(term, ["\\", "%", "_"], &("\\" <> &1))
 
   # ── personal mailboxes ──────────────────────────────────────────────────────
 

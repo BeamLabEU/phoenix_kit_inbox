@@ -148,6 +148,7 @@ lib/phoenix_kit_inbox.ex                  # PhoenixKit.Module callbacks
 lib/phoenix_kit_inbox/
 ├── paths.ex                              # ALL URL building — never hardcode a path
 ├── errors.ex                             # error atom -> gettext string
+├── gettext.ex                            # the module's Gettext backend (priv/gettext)
 ├── mailboxes.ex                          # mailbox lifecycle + access control
 ├── members.ex                            # recipient circle (who is addressable)
 ├── messages.ex                           # compose, send, list, file
@@ -177,7 +178,7 @@ lib/phoenix_kit_inbox/
 - **URL paths** use hyphens, never underscores
 - **Navigation** always via `PhoenixKitInbox.Paths`, never a relative or hardcoded path. Notification links are the exception: store the **raw** path (`Paths.raw_message_path/2`) because core prefixes stored links itself — a pre-prefixed one double-prefixes.
 - **`enabled?/0`** rescues and returns `false`; it runs before the DB is guaranteed up
-- **Wrap user-facing strings in gettext** via the local `gettext_str/1` helper (`Gettext.gettext(PhoenixKitWeb.Gettext, ...)`) — including `page_title`, flashes, button labels, empty-state copy
+- **Wrap user-facing strings in gettext** with the module's own backend (`use Gettext, backend: PhoenixKitInbox.Gettext`; catalogues `en`, `et`, `ru` under `priv/gettext/`) — including `page_title`, flashes, button labels, empty-state copy. A new string needs its `et` and `ru` translation: `mix gettext.extract --merge`, then fill the empty `msgstr`s (`test/phoenix_kit_inbox/gettext_catalogue_test.exs` fails on an untranslated one). Core sets the locale; the backend reads the process-wide one
 - **No page-level width cap** — the page root gets spacing only (`flex flex-col px-4 py-6 gap-4`); the admin layout owns page width
 - **One header, from `page_title`** — set it in `mount/3`; don't also render an in-body `<h1>`
 - **Prefer core components** — `<.input>`, `<.select>`, `<.textarea>`, `<.empty_state>`, `<.icon>` over raw markup
@@ -209,6 +210,8 @@ PHOENIX_KIT_PATH=../phoenix_kit mix test
 - `test/support/live_case.ex` — `fake_scope/1` + `put_test_scope/2` for permission-gated LiveView tests
 - `test/support/test_migration.ex` — wraps `PhoenixKitInbox.Migrations` so `Ecto.Migrator` can run it. The suite applies **the real coordinator**, so it can't pass against a schema that differs from what installs get.
 - `test/test_helper.exs` — runs `PhoenixKit.Migration.ensure_current/2` (core's tables, incl. `phoenix_kit_users`) **then** this module's migration. Order matters: our FKs reference core's tables.
+
+**Attachments need a core with hidden system libraries** (unreleased past 2.63.0). Against the Hex-pinned core the attachment suites fail with `{:error, :storage_unsupported}` (about 70 tests: `AttachmentsTest`, `AttachmentControllerTest`, `AttachmentsLiveTest`, part of `ExternalSendTest`) — that is the environment, not a regression. Run `PHOENIX_KIT_PATH=../phoenix_kit mix test` to get a green suite.
 
 Test URLs are `/en/admin/inbox…` — `Routes.path/1` defaults to no prefix in tests and admin paths always carry the default locale.
 

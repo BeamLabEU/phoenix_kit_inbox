@@ -63,8 +63,8 @@ defmodule PhoenixKitInbox.Schemas.Identity do
   def changeset(identity, attrs) do
     identity
     |> cast(attrs, [:label, :from_name])
-    |> update_change(:label, &String.trim/1)
-    |> update_change(:from_name, &String.trim/1)
+    |> update_change(:label, &trim/1)
+    |> update_change(:from_name, &trim/1)
     |> validate_required([:label, :kind, :integration_uuid])
     |> validate_length(:label, max: 255)
     |> validate_length(:from_name, max: 255)
@@ -75,4 +75,8 @@ defmodule PhoenixKitInbox.Schemas.Identity do
     |> validate_inclusion(:status, @statuses)
     |> check_constraint(:kind, name: :phoenix_kit_inbox_identities_kind_check)
   end
+
+  # A field cleared in a form arrives as `nil`: left for `validate_required/2`.
+  defp trim(nil), do: nil
+  defp trim(value), do: String.trim(value)
 end

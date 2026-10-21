@@ -37,11 +37,15 @@ defmodule PhoenixKitInbox.Schemas.Signature do
   def changeset(signature, attrs) do
     signature
     |> cast(attrs, [:label, :body, :is_default], empty_values: [])
-    |> update_change(:label, &String.trim/1)
+    |> update_change(:label, &trim/1)
     |> update_change(:body, &(&1 |> to_string() |> String.trim_trailing()))
     |> validate_required([:mailbox_uuid, :label])
     |> validate_length(:label, min: 1, max: 255)
     |> validate_length(:body, max: @max_body)
     |> unique_constraint(:is_default, name: :phoenix_kit_inbox_signatures_default_index)
   end
+
+  # A label set to `nil` is left for `validate_required/2`.
+  defp trim(nil), do: nil
+  defp trim(value), do: String.trim(value)
 end

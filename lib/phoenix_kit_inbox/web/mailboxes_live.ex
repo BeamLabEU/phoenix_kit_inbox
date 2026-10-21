@@ -85,11 +85,19 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
     end
   end
 
+  # Who holds access is for the mailbox's admins: the button is only drawn for
+  # them, so an event for any other mailbox (a read grantee's own row, a
+  # forged uuid) shows nothing.
   def handle_event("toggle_grants", %{"uuid" => uuid}, socket) do
-    if socket.assigns.expanded == uuid do
-      {:noreply, assign(socket, expanded: nil, grants: [])}
-    else
-      {:noreply, assign(socket, expanded: uuid, grants: Mailboxes.list_grants(uuid))}
+    cond do
+      socket.assigns.expanded == uuid ->
+        {:noreply, assign(socket, expanded: nil, grants: [])}
+
+      admin_of?(socket, uuid) ->
+        {:noreply, assign(socket, expanded: uuid, grants: Mailboxes.list_grants(uuid))}
+
+      true ->
+        {:noreply, socket}
     end
   end
 
@@ -129,6 +137,9 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
       {:error, reason} -> {:noreply, put_flash(socket, :error, Errors.message(reason))}
     end
   end
+
+  defp admin_of?(socket, uuid),
+    do: Enum.any?(socket.assigns.mailboxes, &(&1.mailbox.uuid == uuid and &1.access == "admin"))
 
   defp expanded_mailbox(%{assigns: %{expanded: nil}}), do: {:error, :mailbox_not_found}
   defp expanded_mailbox(%{assigns: %{expanded: uuid}}), do: Mailboxes.fetch_mailbox(uuid)

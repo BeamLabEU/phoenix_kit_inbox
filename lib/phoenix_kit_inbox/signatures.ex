@@ -132,9 +132,12 @@ defmodule PhoenixKitInbox.Signatures do
 
   # The stored row decides the mailbox, never the struct handed in.
   defp fetch(uuid) do
-    case repo().get(Signature, uuid) do
-      nil -> {:error, :not_found}
-      signature -> {:ok, signature}
+    # An event's uuid is whatever the browser sent: not a uuid is not found.
+    with {:ok, uuid} <- Ecto.UUID.cast(uuid),
+         %Signature{} = signature <- repo().get(Signature, uuid) do
+      {:ok, signature}
+    else
+      _ -> {:error, :not_found}
     end
   end
 
