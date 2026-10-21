@@ -99,7 +99,8 @@ Consequences worth remembering before changing anything:
 - **Media-picker uploads** land in Media first (core's picker behaviour, accepted) and are snapshotted at send like any picked file.
 - **Snapshots are stored before the transaction** with `dedup: false` (without it Storage returns the uploader's existing file in its own library — no snapshot) and are deleted if the transaction rolls back. `store_file_in_buckets` takes a directory lock; don't move it inside the `Multi`.
 - **Deleting a snapshot goes through `Attachments.release/1`**: only an Inbox-library file no attachment row names. Sent messages are permanent, so their snapshots are never deleted; a discarded draft or a dropped draft attachment releases its own.
-- **The host's `attachment_policy`** (`{Mod, :fun}`, `(scope, recipient_users, rows)`) is asked before anything is stored, on every send and forward carrying attachments; anything but `:ok` refuses.
+- **The host's `attachment_policy`** (`{Mod, :fun}`, `(scope, users, rows)`) must see everyone who can read the files: at send/forward (before anything is stored) the readers of the recipient mailboxes **and of the sending mailbox**, the sender left out; at a draft save, the readers of a shared mailbox; at download, the viewer alone (not the sender) — that covers grants given later. Anything but `:ok` refuses. A new way to reach an attachment must ask it too.
+- **Known leaks, not swept yet**: snapshots stored before a transaction whose process dies before the commit, and every snapshot after a rollback to before V03 (the rows go, the files stay — hidden libraries are outside Storage's orphan cleanup).
 - **Downloads only through `Web.AttachmentController`** (`route_module/0` → `Web.Routes`), streamed with `Content-Disposition: attachment`; never hand out a Storage URL. Access is `Attachments.fetch_for_download/2`: module on, `"inbox"`, sender or holder of a non-deleted delivery in a readable mailbox.
 
 ## Access control

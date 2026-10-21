@@ -16,6 +16,7 @@ defmodule PhoenixKitInbox.AttachmentsTest do
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
+  alias PhoenixKitInbox.Schemas.Attachment
   alias PhoenixKitInbox.Schemas.Message
 
   defmodule Policy do
@@ -30,6 +31,13 @@ defmodule PhoenixKitInbox.AttachmentsTest do
     end
 
     def refuse(_scope, _users, _rows), do: {:error, :money}
+
+    # Refuses whenever the user registered by the test is among the users.
+    def refuse_user(_scope, users, _rows) do
+      refused = Application.get_env(:phoenix_kit_inbox, :policy_refused_user)
+      if Enum.any?(users, &(&1.uuid == refused)), do: {:error, :money}, else: :ok
+    end
+
     def explode(_scope, _users, _rows), do: raise("policy bug")
     def odd(_scope, _users, _rows), do: :maybe
   end
@@ -50,6 +58,7 @@ defmodule PhoenixKitInbox.AttachmentsTest do
     on_exit(fn ->
       Application.delete_env(:phoenix_kit_inbox, :attachment_policy)
       Application.delete_env(:phoenix_kit_inbox, :policy_test_pid)
+      Application.delete_env(:phoenix_kit_inbox, :policy_refused_user)
     end)
 
     %{
@@ -96,6 +105,11 @@ defmodule PhoenixKitInbox.AttachmentsTest do
       trashed_at: DateTime.utc_now() |> DateTime.truncate(:second)
     )
     |> Repo.update!()
+  end
+
+  defp refuse_user!(user) do
+    put_policy(:refuse_user)
+    Application.put_env(:phoenix_kit_inbox, :policy_refused_user, user.uuid)
   end
 
   defp put_policy(fun) do
@@ -186,6 +200,36 @@ defmodule PhoenixKitInbox.AttachmentsTest do
         send_to(ctx.scope, ctx.alice_box, ctx.bob, attach([mine.uuid, mine.uuid]))
 
       assert [_one] = Attachments.list_for_message(message.uuid)
+    end
+
+    test "the same file attached twice gives two snapshots of their own", ctx do
+      mine = stored_file_fixture(ctx.alice, "attached twice")
+
+      {:ok, first} = send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(mine.uuid))
+      {:ok, draft} = Messages.save_draft(ctx.scope, ctx.alice_box, attach(mine.uuid))
+
+      [%{file_uuid: one}] = Attachments.list_for_message(first.uuid)
+      [%{file_uuid: two}] = Attachments.list_for_message(draft.uuid)
+      assert one != two
+      assert Enum.map(inbox_files(), &to_string(&1.uuid)) |> Enum.sort() == Enum.sort([one, two])
+
+      :ok = Messages.delete_draft(ctx.scope, ctx.alice_box, draft.uuid)
+      assert Storage.get_file(two) == nil
+      assert bytes(one) == "attached twice"
+    end
+
+    test "a file of another module's hidden library is refused, even to its uploader", ctx do
+      {:ok, other} =
+        Libraries.create_system_library(%{"name" => "Other Module", "slug" => "other-module"},
+          hidden: true
+        )
+
+      private = stored_file_fixture(ctx.alice, "other module's", library_uuid: other.uuid)
+
+      assert {:error, {:attachment_forbidden, uuid}} =
+               send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(private.uuid))
+
+      assert uuid == private.uuid
     end
 
     test "rows keep the order they were given in", ctx do
@@ -293,6 +337,22 @@ defmodule PhoenixKitInbox.AttachmentsTest do
     end
   end
 
+  describe "content types" do
+    test "only a plain type/subtype is stored; anything else is octet-stream", ctx do
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: [
+            %{binary: "a", filename: "a.pdf", content_type: "application/pdf"},
+            %{binary: "b", filename: "b.bin", content_type: "text/html; charset=\"x\""},
+            %{binary: "c", filename: "c.bin", content_type: "<script>"}
+          ]
+        )
+
+      assert ["application/pdf", "application/octet-stream", "application/octet-stream"] ==
+               message.uuid |> Attachments.list_for_message() |> Enum.map(& &1.content_type)
+    end
+  end
+
   describe "flags" do
     test "are never taken from the form", ctx do
       mine = stored_file_fixture(ctx.alice, "a photo")
@@ -304,6 +364,15 @@ defmodule PhoenixKitInbox.AttachmentsTest do
 
       assert [%{flags: flags}] = Attachments.list_for_message(message.uuid)
       assert flags == %{}
+    end
+
+    test "the schema's changeset does not cast them" do
+      changeset =
+        Attachment.changeset(%Attachment{}, %{
+          "flags" => %{"money_free" => true}
+        })
+
+      assert Ecto.Changeset.get_change(changeset, :flags) == nil
     end
 
     test "come from attachment_flags, keyed by the file named", ctx do
@@ -340,6 +409,20 @@ defmodule PhoenixKitInbox.AttachmentsTest do
       assert row.file_uuid == draft_row.file_uuid
       assert row.filename == "scan.pdf"
       assert [_] = inbox_files()
+    end
+
+    test "one's own draft snapshot keeps its flags when attached again", ctx do
+      {:ok, draft} =
+        Messages.save_draft(ctx.scope, ctx.alice_box, %{"subject" => "WIP"},
+          attachments_data: [
+            %{binary: "sheet", filename: "w.pdf", flags: %{"money_free" => true}}
+          ]
+        )
+
+      [draft_row] = Attachments.list_for_message(draft.uuid)
+      {:ok, message} = send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(draft_row.file_uuid))
+
+      assert [%{flags: %{"money_free" => true}}] = Attachments.list_for_message(message.uuid)
     end
 
     test "someone else's is refused", ctx do
@@ -538,6 +621,83 @@ defmodule PhoenixKitInbox.AttachmentsTest do
     end
   end
 
+  describe "the policy and everyone who can read the files" do
+    setup ctx do
+      dave = user_fixture()
+      desk = shared_mailbox_fixture(ctx.carol, %{slug: "desk"})
+      grant_fixture(desk, ctx.alice, "write")
+      grant_fixture(desk, dave, "read")
+      %{dave: dave, desk: desk}
+    end
+
+    test "a send from a shared mailbox asks about its readers too (not the sender)", ctx do
+      put_policy(:record)
+
+      {:ok, _} =
+        send_to(ctx.scope, ctx.desk, ctx.bob, %{},
+          attachments_data: [%{binary: "pdf", filename: "p.pdf"}]
+        )
+
+      assert_received {:policy, _scope, users, _rows}
+
+      assert users |> Enum.map(& &1.uuid) |> Enum.sort() ==
+               Enum.sort([ctx.bob.uuid, ctx.carol.uuid, ctx.dave.uuid])
+
+      refuse_user!(ctx.dave)
+
+      assert {:error, {:attachment_refused, :money}} =
+               send_to(ctx.scope, ctx.desk, ctx.bob, %{},
+                 attachments_data: [%{binary: "pdf", filename: "p.pdf"}]
+               )
+    end
+
+    test "a draft in a shared mailbox asks about its readers; a personal one asks no one", ctx do
+      refuse_user!(ctx.dave)
+
+      assert {:error, {:attachment_refused, :money}} =
+               Messages.save_draft(ctx.scope, ctx.desk, %{"subject" => "WIP"},
+                 attachments_data: [%{binary: "pdf", filename: "p.pdf"}]
+               )
+
+      assert inbox_files() == []
+
+      put_policy(:refuse)
+
+      assert {:ok, _} =
+               Messages.save_draft(ctx.scope, ctx.alice_box, %{"subject" => "WIP"},
+                 attachments_data: [%{binary: "pdf", filename: "p.pdf"}]
+               )
+    end
+
+    test "a reader granted after the send is asked at download", ctx do
+      {:ok, message} =
+        Messages.send_message(ctx.scope, ctx.alice_box, %{"to" => "desk", "subject" => "x"},
+          attachments_data: [%{binary: "priced", filename: "offer.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+      erin = user_fixture()
+      grant_fixture(ctx.desk, erin, "read")
+      refuse_user!(erin)
+
+      assert {:error, :not_found} = Attachments.fetch_for_download(scope_for(erin), row.uuid)
+      assert {:ok, _} = Attachments.fetch_for_download(scope_for(ctx.dave), row.uuid)
+    end
+
+    test "the sender downloads their own attachment without asking the policy", ctx do
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: [%{binary: "mine", filename: "m.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+      put_policy(:refuse)
+
+      assert {:ok, _} = Attachments.fetch_for_download(ctx.scope, row.uuid)
+      assert {:error, :not_found} = Attachments.fetch_for_download(scope_for(ctx.bob), row.uuid)
+    end
+  end
+
   describe "drafts" do
     test "snapshot at save; a save without the key keeps them; a smaller list drops the rest",
          ctx do
@@ -674,6 +834,24 @@ defmodule PhoenixKitInbox.AttachmentsTest do
                Attachments.fetch_for_download(ctx.scope, Ecto.UUID.generate())
 
       assert {:error, :not_found} = Attachments.fetch_for_download(ctx.scope, "nope")
+    end
+  end
+
+  describe "read_file/1" do
+    test "refuses a row naming a file outside the Inbox library", ctx do
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: [%{binary: "real", filename: "r.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+      assert {:ok, path} = Attachments.read_file(row)
+      File.rm(path)
+
+      media = stored_file_fixture(ctx.carol, "carol's media file")
+      forged = row |> Ecto.Changeset.change(file_uuid: media.uuid) |> Repo.update!()
+
+      assert {:error, :not_found} = Attachments.read_file(forged)
     end
   end
 

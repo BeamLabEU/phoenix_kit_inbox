@@ -5,7 +5,8 @@ defmodule PhoenixKitInbox.Web.AttachmentController do
   The only way an attachment leaves the module. The file sits in the
   module's hidden Storage library, which has no permanent URL, so the bytes
   are read here (`Storage.retrieve_file/1`) and streamed back with
-  `Content-Disposition: attachment` — never a redirect to a Storage URL.
+  `Content-Disposition: attachment`, `nosniff` and `Content-Security-Policy:
+  sandbox` — never a redirect to a Storage URL.
 
   Allowed when the module is on, the viewer holds `"inbox"`, and they sent
   the message or hold a non-deleted copy of it in a mailbox they can read
@@ -26,10 +27,11 @@ defmodule PhoenixKitInbox.Web.AttachmentController do
          {:ok, path} <- Attachments.read_file(attachment) do
       try do
         conn
-        |> put_resp_content_type(attachment.content_type || "application/octet-stream", nil)
+        |> put_resp_content_type(Attachments.safe_content_type(attachment.content_type), nil)
         |> put_resp_header("content-disposition", disposition(attachment.filename))
         |> put_resp_header("cache-control", "private, no-store")
         |> put_resp_header("x-content-type-options", "nosniff")
+        |> put_resp_header("content-security-policy", "sandbox")
         |> send_file(200, path)
       after
         File.rm(path)

@@ -171,12 +171,16 @@ Every file becomes a **snapshot** in the module's hidden Storage library (slug `
 
 Downloads go through the module's own route, `GET /admin/inbox/files/:attachment_uuid` (`route_module/0`), behind core's admin pipeline: the sender and anyone holding a non-deleted copy of the message get the file as a download, everyone else a 404.
 
-`flags` are set only by server code and copied on forward. A host that must keep some files away from some recipients sets a policy, asked on every send and forward carrying attachments:
+`flags` are set only by server code and copied on forward. A host that must keep some files away from some people sets a policy:
 
 ```elixir
 config :phoenix_kit_inbox, attachment_policy: {MyApp.Inbox, :check_attachments}
-# (scope, recipient_users, attachment_rows) -> :ok | {:error, reason}
+# (scope, users, attachment_rows) -> :ok | {:error, reason}
 ```
+
+It is asked on every send and forward carrying attachments about everyone who will be able to read them (the users of the To/Cc/Bcc mailboxes, the owner and grantees of every shared mailbox involved — the sending one included — the sender left out), on a draft saved in a shared mailbox about that mailbox's readers, and at every download about the viewer alone (anyone but the message's sender), so a reader granted a mailbox later is covered too. Anything but `:ok`, a raise included, refuses; at download that is a 404.
+
+Snapshots are stored before the message's transaction and deleted if it rolls back. A process killed between the two leaves its snapshots in the library with nothing naming them (Storage's orphan cleanup skips hidden libraries), and rolling back to before V03 drops the attachment rows but not the snapshots; neither is swept by the module yet.
 
 The older `send_message(from_mailbox, sender_user_uuid, attrs)` form refuses attachments with `{:error, :attachments_need_scope}`.
 

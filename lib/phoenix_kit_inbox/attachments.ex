@@ -49,7 +49,12 @@ defmodule PhoenixKitInbox.Attachments do
 
   Snapshots are stored *before* the message transaction (Storage takes a
   directory lock for each, which must not be held across the send) and are
-  deleted again if the transaction rolls back. Snapshots of a sent message
+  deleted again if the transaction rolls back. A process that dies between
+  storing the snapshots and the commit leaves them in the library with no
+  row naming them, and Storage's orphan cleanup skips hidden libraries — a
+  sweep of unnamed Inbox-library files would reclaim them (not part of this
+  module yet). Rolling back to before V03 drops the attachment rows and
+  leaves every snapshot in the library. Snapshots of a sent message
   are never deleted — sent messages are permanent; a discarded draft takes
   its snapshots with it unless another row still names them.
 
@@ -62,9 +67,14 @@ defmodule PhoenixKitInbox.Attachments do
       config :phoenix_kit_inbox, attachment_policy: {MyApp.Inbox, :check_attachments}
 
   The function is called on every send and forward that carries attachments
-  with the sender's scope, every user the message reaches (the owners of the
-  personal mailboxes addressed in To/Cc/Bcc, and the owner and grantees of
-  each shared mailbox addressed) and the attachment rows with their flags.
+  with the sender's scope, every user who will be able to read the files —
+  the owners of the personal mailboxes addressed in To/Cc/Bcc, the owner and
+  grantees of each shared mailbox addressed, and of the sending mailbox when
+  it is a shared one (the sender left out) — and the attachment rows with
+  their flags. A draft saved in a shared mailbox asks about that mailbox's
+  readers. At download it is asked again for the viewer alone (anyone but
+  the message's sender), so a reader granted a mailbox later is covered; a
+  refusal there is a 404.
   It is called before any snapshot is stored, so a row about to be copied
   has no `file_uuid` yet. `:ok` lets the send go ahead; `{:error, reason}`
   refuses it with `{:error, {:attachment_refused, reason}}`; a raise or any
@@ -208,9 +218,10 @@ defmodule PhoenixKitInbox.Attachments do
   `{:error, :not_found}` — the same answer whether the row is missing or
   someone else's.
 
-  Allowed when the module is on, the scope holds `"inbox"`, and its user
-  sent the message or holds a non-deleted copy of it (a delivery) in a
-  mailbox they can read.
+  Allowed when the module is on, the scope holds `"inbox"`, its user sent
+  the message or holds a non-deleted copy of it (a delivery) in a mailbox
+  they can read, and — for anyone but the sender — the host's
+  `attachment_policy` accepts this row for this viewer.
   """
   @spec fetch_for_download(Scope.t() | nil, term()) ::
           {:ok, Attachment.t()} | {:error, :not_found}
@@ -220,10 +231,28 @@ defmodule PhoenixKitInbox.Attachments do
          {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
          {:ok, uuid} <- Ecto.UUID.cast(attachment_uuid),
          %Attachment{} = attachment <- repo().get(Attachment, uuid),
-         true <- participant?(attachment.message_uuid, user_uuid) do
+         true <- participant?(attachment.message_uuid, user_uuid),
+         :ok <- download_policy(scope, user_uuid, attachment) do
       {:ok, attachment}
     else
       _ -> {:error, :not_found}
+    end
+  end
+
+  # The policy again, at download, for the viewer alone: a reader granted a
+  # mailbox after the send was never among the users asked then. The
+  # message's sender attached the file and is not asked.
+  defp download_policy(scope, user_uuid, attachment) do
+    sender? =
+      from(m in Message,
+        where: m.uuid == ^attachment.message_uuid and m.sender_user_uuid == ^user_uuid
+      )
+      |> repo().exists?()
+
+    case {sender?, repo().get(User, user_uuid)} do
+      {true, _} -> :ok
+      {false, %User{} = viewer} -> ask_policy(scope, [viewer], [attachment])
+      {false, nil} -> {:error, :not_found}
     end
   end
 
@@ -377,7 +406,7 @@ defmodule PhoenixKitInbox.Attachments do
     uuid = to_string(file.uuid)
 
     cond do
-      row = forwardable_row(uuid, context.user_uuid) ->
+      row = forwardable_row(uuid, context.user_uuid) || own_row(uuid, context.user_uuid) ->
         {:ok, reuse_item(row)}
 
       to_string(file.user_uuid) == context.user_uuid ->
@@ -393,11 +422,17 @@ defmodule PhoenixKitInbox.Attachments do
     uuid = to_string(file.uuid)
 
     cond do
+      # Another module's private files are not Inbox's to pass on, whoever
+      # may read them; a host that means it uses attachments_authorized.
+      other_hidden_library?(file) -> {:error, {:attachment_forbidden, uuid}}
       not Libraries.can?(context.scope, file, :read) -> {:error, {:attachment_forbidden, uuid}}
       unavailable?(file) -> {:error, {:attachment_unavailable, uuid}}
       true -> {:ok, file_item(file, Map.get(context.flags, uuid, %{}))}
     end
   end
+
+  defp other_hidden_library?(file),
+    do: hidden_libraries?() and Libraries.hidden?(to_string(file.library_uuid))
 
   # Path 3: the host vouched for these; only the state of the file is checked.
   defp authorized_items(uuids, context) when is_list(uuids),
@@ -527,6 +562,19 @@ defmodule PhoenixKitInbox.Attachments do
     |> repo().one()
   end
 
+  # A row of the user's own message (a draft too) naming the file: attaching
+  # one's own snapshot again keeps its flags, as a forward does.
+  defp own_row(file_uuid, user_uuid) do
+    from(a in Attachment,
+      join: m in Message,
+      on: m.uuid == a.message_uuid,
+      where: a.file_uuid == ^file_uuid and m.sender_user_uuid == ^user_uuid,
+      order_by: [asc: a.inserted_at],
+      limit: 1
+    )
+    |> repo().one()
+  end
+
   defp unavailable?(file),
     do: file.status == "trashed" or not is_nil(file.trashed_at) or file.system_managed == true
 
@@ -593,22 +641,36 @@ defmodule PhoenixKitInbox.Attachments do
   # ── policy ──────────────────────────────────────────────────────────────────
 
   @doc false
-  # Asks the host's attachment_policy about `items` going to `recipients`
-  # (`%{mailbox: Mailbox}` maps, as resolved by Messages). Nothing to ask
-  # when there are no attachments or no policy.
-  @spec check_policy(Scope.t(), [map()], [map()]) :: :ok | {:error, term()}
-  def check_policy(_scope, _recipients, []), do: :ok
+  # Asks the host's attachment_policy about `items` reaching everyone who can
+  # read `mailboxes` — the sending mailbox and the recipients' — leaving out
+  # the scope's own user, who attached the files. Nothing to ask without
+  # attachments, without anyone else, or without a policy.
+  @spec check_policy(Scope.t(), [Mailbox.t()], [map()]) :: :ok | {:error, term()}
+  def check_policy(_scope, _mailboxes, []), do: :ok
 
-  def check_policy(scope, recipients, items) do
+  def check_policy(scope, mailboxes, items) do
+    me =
+      case Mailboxes.scope_user_uuid(scope) do
+        {:ok, uuid} -> uuid
+        _ -> nil
+      end
+
+    case Enum.reject(readers(mailboxes), &(to_string(&1.uuid) == me)) do
+      [] -> :ok
+      users -> ask_policy(scope, users, Enum.map(items, &to_row/1))
+    end
+  end
+
+  defp ask_policy(scope, users, rows) do
     case Application.get_env(:phoenix_kit_inbox, :attachment_policy) do
       nil -> :ok
-      {mod, fun} when is_atom(mod) and is_atom(fun) -> ask(mod, fun, scope, recipients, items)
+      {mod, fun} when is_atom(mod) and is_atom(fun) -> ask(mod, fun, scope, users, rows)
       other -> {:error, {:attachment_refused, {:invalid_policy, other}}}
     end
   end
 
-  defp ask(mod, fun, scope, recipients, items) do
-    case apply(mod, fun, [scope, recipient_users(recipients), Enum.map(items, &to_row/1)]) do
+  defp ask(mod, fun, scope, users, rows) do
+    case apply(mod, fun, [scope, users, rows]) do
       :ok -> :ok
       {:error, reason} -> {:error, {:attachment_refused, reason}}
       other -> {:error, {:attachment_refused, {:unexpected, other}}}
@@ -623,11 +685,9 @@ defmodule PhoenixKitInbox.Attachments do
       {:error, {:attachment_refused, :policy_failed}}
   end
 
-  # Everyone the message reaches: the owner of each personal mailbox, and
+  # Everyone who can read the mailboxes: the owner of each personal one, and
   # the owner and every grantee of each shared one.
-  defp recipient_users(recipients) do
-    mailboxes = Enum.map(recipients, & &1.mailbox)
-
+  defp readers(mailboxes) do
     owners =
       mailboxes
       |> Enum.map(& &1.owner_uuid)
@@ -816,7 +876,7 @@ defmodule PhoenixKitInbox.Attachments do
       file_uuid: item.file_uuid,
       source_file_uuid: item.source_file_uuid,
       filename: item.filename,
-      content_type: item.content_type,
+      content_type: safe_content_type(item.content_type),
       size_bytes: item.size_bytes,
       position: position
     })
@@ -855,6 +915,20 @@ defmodule PhoenixKitInbox.Attachments do
   end
 
   # ── helpers ─────────────────────────────────────────────────────────────────
+
+  @doc """
+  `content_type` if it is a plain `type/subtype` token, else
+  `"application/octet-stream"` — what is stored and served. A browser's or
+  host's value is never trusted as it is.
+  """
+  @spec safe_content_type(term()) :: String.t()
+  def safe_content_type(content_type) when is_binary(content_type) do
+    if Regex.match?(~r{\A[\w.+-]+/[\w.+-]+\z}, content_type),
+      do: content_type,
+      else: "application/octet-stream"
+  end
+
+  def safe_content_type(_), do: "application/octet-stream"
 
   # The browser's (or host's) name, reduced to a base name without control
   # characters, fit for the 255-character column with its extension kept.

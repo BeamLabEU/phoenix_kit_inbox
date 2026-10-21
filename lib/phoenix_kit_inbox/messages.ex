@@ -285,8 +285,9 @@ defmodule PhoenixKitInbox.Messages do
   stored exactly as `send_message/4` does, so a draft holds its snapshots.
   Without an `"attachments"` key the draft keeps the ones it has; with one,
   that list replaces them, and a snapshot no longer named by any message is
-  deleted. The host's `attachment_policy` is asked at send, when the
-  recipients are known.
+  deleted. The host's `attachment_policy` is asked here about the readers
+  of a shared mailbox (a personal draft has none but its author), and again
+  at send, when the recipients are known.
   """
   @spec save_draft(Scope.t(), Mailbox.t(), map(), keyword()) ::
           {:ok, Message.t()} | {:error, Ecto.Changeset.t() | term()}
@@ -298,6 +299,7 @@ defmodule PhoenixKitInbox.Messages do
       existing = draft_from_attrs(fresh, attrs)
 
       with {:ok, items} <- Attachments.plan(scope, user_uuid, existing, attrs, opts),
+           :ok <- Attachments.check_policy(scope, [fresh], items),
            {:ok, items, created} <- Attachments.store_snapshots(items, user_uuid) do
         fresh
         |> do_save_draft(user_uuid, attrs, existing, items)
@@ -526,7 +528,8 @@ defmodule PhoenixKitInbox.Messages do
          :ok <- ensure_any_recipient(recipients),
          existing = draft_from_attrs(mailbox, attrs),
          {:ok, items} <- plan_attachments(scope, sender_user_uuid, existing, attrs, opts),
-         :ok <- Attachments.check_policy(scope, recipients, items),
+         :ok <-
+           Attachments.check_policy(scope, [mailbox | Enum.map(recipients, & &1.mailbox)], items),
          {:ok, items, created} <- Attachments.store_snapshots(items, sender_user_uuid),
          {:ok, message} <-
            mailbox

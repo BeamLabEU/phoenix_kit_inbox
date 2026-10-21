@@ -11,8 +11,8 @@ defmodule PhoenixKitInbox.Schemas.Attachment do
 
   `flags` is a map the host's server code sets (`attachment_flags:` and
   `attachments_data:` in `Messages.send_message/4`) and the host's
-  `attachment_policy` reads; it is never cast from form params, and a
-  forward copies it.
+  `attachment_policy` reads; `changeset/2` does not cast it — the module
+  puts it explicitly — and a forward copies it.
 
   Tables are created by `PhoenixKitInbox.Migrations`, never by this schema.
   """
@@ -50,8 +50,7 @@ defmodule PhoenixKitInbox.Schemas.Attachment do
       :filename,
       :content_type,
       :size_bytes,
-      :position,
-      :flags
+      :position
     ])
     |> validate_required([:message_uuid, :file_uuid, :filename])
     |> validate_length(:filename, max: 255)
