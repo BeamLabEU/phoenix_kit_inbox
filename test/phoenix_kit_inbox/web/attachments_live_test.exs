@@ -107,6 +107,17 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
       assert source == mine.uuid
     end
 
+    test "taking a picked file off leaves the original alone", ctx do
+      mine = stored_file_fixture(ctx.alice, "keep me", filename: "keep.txt")
+
+      {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+      send(view.pid, {:media_selected, [mine.uuid]})
+      view |> element("#attachment-#{mine.uuid} button") |> render_click()
+
+      refute has_element?(view, "#attachment-#{mine.uuid}")
+      assert Storage.get_file(mine.uuid)
+    end
+
     test "the attach-existing button opens the media picker", ctx do
       {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
 

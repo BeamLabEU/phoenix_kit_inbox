@@ -385,6 +385,15 @@ defmodule PhoenixKitInbox.AttachmentsTest do
     end
   end
 
+  describe "discard_upload/2" do
+    test "never deletes a file outside the Inbox library, even one's own", ctx do
+      mine = stored_file_fixture(ctx.alice, "my original")
+
+      assert :ok = Attachments.discard_upload(ctx.scope, mine.uuid)
+      assert bytes(mine.uuid) == "my original"
+    end
+  end
+
   describe "forwarding" do
     setup ctx do
       {:ok, original} =
