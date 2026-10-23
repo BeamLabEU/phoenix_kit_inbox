@@ -224,7 +224,6 @@ Not oversights — decided against for the first release:
 - **No threaded reading pane.** The data supports it (`thread_uuid`, `list_thread/1`); the UI shows one message at a time.
 - **No user-defined labels/folders.** Folders are a fixed six-value column.
 - **No full-text index.** Search is `ILIKE`. `pg_trgm` is already a core-required extension, so a trigram index is a cheap V02 when volume justifies it.
-- **Grants take a raw user UUID in the admin UI.** A user picker (like `phoenix_kit_calendar`'s participant search) is the obvious next step.
 
 ## Versioning & Releases
 

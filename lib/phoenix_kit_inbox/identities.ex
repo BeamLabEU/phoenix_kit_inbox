@@ -458,7 +458,9 @@ defmodule PhoenixKitInbox.Identities do
            %{
              describe_base(identity, from_address)
              | from_name:
-                 if(blank?(identity.from_name), do: identity.label, else: identity.from_name)
+                 header_name(
+                   if(blank?(identity.from_name), do: identity.label, else: identity.from_name)
+                 )
            }}
 
         {:error, _identity, _problem} ->
@@ -485,16 +487,25 @@ defmodule PhoenixKitInbox.Identities do
     end
   end
 
-  defp fetch(uuid) when is_binary(uuid) do
-    with {:ok, uuid} <- Ecto.UUID.cast(uuid),
-         %Identity{} = identity <- repo().get(Identity, uuid) do
-      {:ok, identity}
-    else
-      _ -> {:error, :not_found}
+  defp fetch(uuid, opts \\ [])
+
+  defp fetch(uuid, opts) when is_binary(uuid) do
+    case Ecto.UUID.cast(uuid) do
+      {:ok, uuid} ->
+        query = from(i in Identity, where: i.uuid == ^uuid)
+        query = if Keyword.get(opts, :lock), do: lock(query, "FOR UPDATE"), else: query
+
+        case repo().one(query) do
+          %Identity{} = identity -> {:ok, identity}
+          nil -> {:error, :not_found}
+        end
+
+      :error ->
+        {:error, :not_found}
     end
   end
 
-  defp fetch(_), do: {:error, :not_found}
+  defp fetch(_, _opts), do: {:error, :not_found}
 
   defp authorize_use(scope, user, identity) do
     allowed? =
@@ -530,7 +541,14 @@ defmodule PhoenixKitInbox.Identities do
   # From name: a bound identity its own (else the mailbox's name); the common
   # sender "<user> | <from_name>"; a personal one its own (else the user's).
   defp describe(identity, from_address, user),
-    do: %{describe_base(identity, from_address) | from_name: from_name(identity, user)}
+    do: %{
+      describe_base(identity, from_address)
+      | from_name: header_name(from_name(identity, user))
+    }
+
+  # Profile names, mailbox names and labels bypass the identity's from_name
+  # validation, but also become mail headers when used as fallback names.
+  defp header_name(name), do: name |> String.replace(~r/[\r\n]+/, " ") |> String.trim()
 
   defp describe_base(identity, from_address) do
     %{
@@ -747,14 +765,21 @@ defmodule PhoenixKitInbox.Identities do
   def update_identity(%Scope{} = scope, %Identity{uuid: uuid}, attrs) when is_map(attrs) do
     attrs = normalize_attrs(attrs)
 
-    with {:ok, identity} <- fetch(uuid),
-         :ok <- authorize_manage(scope, identity),
-         {:ok, changes} <- structural_changes(identity, attrs) do
-      identity
-      |> Ecto.Changeset.change(changes)
-      |> Identity.changeset(attrs)
-      |> write_with_roles(&update/1, &update_roles(&1, attrs))
-    end
+    # Role-only edits may produce no identity UPDATE at all. Lock before
+    # reading its binding so concurrent replacements cannot merge their
+    # allow-lists or put roles back onto a newly bound sender.
+    repo().transaction(fn ->
+      with {:ok, identity} <- fetch(uuid, lock: true),
+           :ok <- authorize_manage(scope, identity),
+           {:ok, changes} <- structural_changes(identity, attrs),
+           changeset = identity |> Ecto.Changeset.change(changes) |> Identity.changeset(attrs),
+           {:ok, identity} <- repo().update(changeset),
+           :ok <- update_roles(identity, attrs) do
+        identity
+      else
+        {:error, reason} -> repo().rollback(reason)
+      end
+    end)
   end
 
   defp update_roles(%Identity{kind: "shared", mailbox_uuid: bound} = identity, _attrs)
@@ -818,8 +843,6 @@ defmodule PhoenixKitInbox.Identities do
   end
 
   defp insert(changeset), do: repo().insert(changeset)
-  defp update(changeset), do: repo().update(changeset)
-
   # The identity (`write` of its changeset) and then its roles, in one
   # transaction.
   defp write_with_roles(changeset, write, put_roles) do

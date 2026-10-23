@@ -306,6 +306,11 @@ defmodule PhoenixKitInbox.Messages do
   and `"bcc"` is kept as text (`draft_recipients/1` reads it back) so a
   reopened draft still has its recipients.
 
+  An explicit `"uuid"` must name a draft in this mailbox, otherwise
+  `{:error, :message_not_found}`. Saving, sending and discarding lock the
+  draft inside their transaction, so a stale writer cannot change or
+  delete a message that another writer already sent.
+
   Saving needs the `"inbox"` permission and `"write"` on the mailbox; the
   draft's author is the scope's user. A `"parent_uuid"` is kept only when the
   user can read that message (see `send_message/4`); otherwise the draft
@@ -325,9 +330,8 @@ defmodule PhoenixKitInbox.Messages do
     attrs = normalize_attrs(attrs)
 
     with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
-         {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write") do
-      existing = draft_from_attrs(fresh, attrs)
-
+         {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write"),
+         {:ok, existing} <- draft_from_attrs(fresh, attrs) do
       with {:ok, items} <- Attachments.plan(scope, user_uuid, existing, attrs, opts),
            :ok <- Attachments.check_policy(scope, [fresh], items),
            {:ok, items, created} <- Attachments.store_snapshots(items, user_uuid) do
@@ -364,11 +368,7 @@ defmodule PhoenixKitInbox.Messages do
       })
 
     Multi.new()
-    |> Multi.run(:message, fn repo, _ ->
-      if existing,
-        do: repo.update(changeset),
-        else: repo.insert(ensure_thread_uuid(changeset))
-    end)
+    |> Multi.run(:message, fn repo, _ -> write_message(repo, changeset, existing) end)
     |> Multi.run(:thread, &backfill_thread_uuid/2)
     |> Multi.run(:delivery, fn repo, %{thread: message} ->
       upsert_delivery(repo, message.uuid, mailbox.uuid, "from", "drafts")
@@ -447,11 +447,37 @@ defmodule PhoenixKitInbox.Messages do
 
   defp draft_from_attrs(mailbox, attrs) do
     case Map.get(attrs, "uuid") do
-      uuid when is_binary(uuid) and uuid != "" ->
-        repo().get_by(Message, uuid: uuid, sender_mailbox_uuid: mailbox.uuid, status: "draft")
+      blank when blank in [nil, ""] -> {:ok, nil}
+      uuid -> fetch_draft(repo(), mailbox.uuid, uuid)
+    end
+  end
 
-      _ ->
-        nil
+  defp fetch_draft(repo, mailbox_uuid, uuid, opts \\ []) do
+    with {:ok, uuid} <- cast_message_uuid(uuid) do
+      query =
+        from(m in Message,
+          where: m.uuid == ^uuid and m.sender_mailbox_uuid == ^mailbox_uuid,
+          where: m.status == "draft"
+        )
+
+      query = if Keyword.get(opts, :lock), do: lock(query, "FOR UPDATE"), else: query
+
+      case repo.one(query) do
+        %Message{} = draft -> {:ok, draft}
+        nil -> {:error, :message_not_found}
+      end
+    end
+  end
+
+  defp write_message(repo, changeset, nil), do: repo.insert(ensure_thread_uuid(changeset))
+
+  # Planning and Storage run before the transaction. Another writer may
+  # have sent or discarded this draft meanwhile; never overwrite sent mail
+  # or fan it out again. Hold the row lock until the whole Multi commits.
+  defp write_message(repo, changeset, existing) do
+    with {:ok, _draft} <-
+           fetch_draft(repo, existing.sender_mailbox_uuid, existing.uuid, lock: true) do
+      repo.update(changeset)
     end
   end
 
@@ -463,22 +489,23 @@ defmodule PhoenixKitInbox.Messages do
   @spec delete_draft(Scope.t(), Mailbox.t(), binary()) ::
           :ok | {:error, :message_not_found | :forbidden | :mailbox_access_denied | term()}
   def delete_draft(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid) do
-    with {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write"),
-         {:ok, message_uuid} <- cast_message_uuid(message_uuid),
-         %Message{} = draft <-
-           repo().get_by(Message,
-             uuid: message_uuid,
-             sender_mailbox_uuid: fresh.uuid,
-             status: "draft"
-           ),
+    with {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write") do
+      repo().transaction(fn -> delete_locked_draft(fresh.uuid, message_uuid) end)
+      |> case do
+        {:ok, files} -> Attachments.release(files)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp delete_locked_draft(mailbox_uuid, message_uuid) do
+    with {:ok, draft} <- fetch_draft(repo(), mailbox_uuid, message_uuid, lock: true),
          files = Enum.map(Attachments.list_for_message(draft.uuid), &to_string(&1.file_uuid)),
          # Deliveries and attachment rows cascade via their FKs.
          {:ok, _} <- repo().delete(draft) do
-      Attachments.release(files)
-      :ok
+      files
     else
-      nil -> {:error, :message_not_found}
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> repo().rollback(reason)
     end
   end
 
@@ -523,7 +550,8 @@ defmodule PhoenixKitInbox.Messages do
       address) — what external recipients are sent as.
     * `"reply_to"` — one of `Identities.reply_to_options/2`
       (`{:error, :reply_to_not_allowed}`), recorded in `metadata["reply_to"]`
-    * `"uuid"` — promotes an existing draft instead of creating a new message
+    * `"uuid"` — promotes an existing draft instead of creating a new message;
+      a missing, already sent or foreign draft is `{:error, :message_not_found}`
     * `"parent_uuid"` — set when replying; the thread is inherited from it
     * `"attachments"` — `[%{"file_uuid" => uuid}]`: a Storage file the sender
       may read, a file of the module's library the sender stored (a saved
@@ -600,7 +628,7 @@ defmodule PhoenixKitInbox.Messages do
          {:ok, recipients, externals} <- resolve_recipients(attrs),
          {:ok, externals} <- admit_externals(scope, mailbox, sender_record, externals),
          :ok <- ensure_any_recipient(recipients ++ externals),
-         existing = draft_from_attrs(mailbox, attrs),
+         {:ok, existing} <- draft_from_attrs(mailbox, attrs),
          {:ok, items} <- plan_attachments(scope, sender_user_uuid, existing, attrs, opts),
          :ok <- check_external_size(externals, items),
          :ok <-
@@ -813,11 +841,7 @@ defmodule PhoenixKitInbox.Messages do
       })
 
     Multi.new()
-    |> Multi.run(:message, fn repo, _ ->
-      if existing,
-        do: repo.update(changeset),
-        else: repo.insert(ensure_thread_uuid(changeset))
-    end)
+    |> Multi.run(:message, fn repo, _ -> write_message(repo, changeset, existing) end)
     |> Multi.run(:thread, &backfill_thread_uuid/2)
     |> Multi.run(:sender_copy, fn repo, %{thread: message} ->
       # Moves the draft's own delivery row from "drafts" to "sent" when

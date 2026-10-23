@@ -352,6 +352,9 @@ defmodule PhoenixKitInbox.Mailboxes do
   # A host rule can't be expressed in SQL, so with one the limit applies
   # after it.
   defp other_members(user_uuid, term, limit) do
+    # The picker's hint accepts @username, while the stored username has no @.
+    term = term |> to_string() |> String.trim() |> String.replace_prefix("@", "")
+
     query =
       from(u in User,
         where: u.uuid != ^user_uuid,

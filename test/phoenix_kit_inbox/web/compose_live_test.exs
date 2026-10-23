@@ -225,6 +225,64 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     refute has_element?(view, "select[name='mailbox'] option[selected][value='#{archived.uuid}']")
   end
 
+  test "a URL patch cannot read a draft after mailbox access is revoked", ctx do
+    shared = shared_mailbox_fixture(ctx.bob, %{name: "Private desk"})
+    grant_fixture(shared, ctx.alice, "write")
+    {:ok, view, _} = live(ctx.conn, "/en/admin/inbox/compose")
+
+    Repo.delete_all(MailboxGrant)
+
+    {:ok, draft} =
+      Messages.save_draft(scope_for(ctx.bob), shared, %{
+        "subject" => "After revocation",
+        "body" => "Private new draft"
+      })
+
+    html =
+      render_patch(view, "/en/admin/inbox/compose?mailbox=#{shared.uuid}&draft=#{draft.uuid}")
+
+    refute html =~ "Private new draft"
+    refute has_element?(view, "select[name='mailbox'] option[value='#{shared.uuid}']")
+  end
+
+  test "switching mailbox after saving starts a new draft and preserves the original", ctx do
+    desk = shared_mailbox_fixture(ctx.alice, %{name: "Desk"})
+    {:ok, view, _} = live(ctx.conn, "/en/admin/inbox/compose")
+
+    view
+    |> form("#compose-form", %{subject: "Original draft", body: "Still writing"})
+    |> render_change()
+
+    view |> element("button[phx-click='save_draft']") |> render_click()
+    assert [%{message: original}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
+
+    view |> element("select[name='mailbox']") |> render_change(%{"mailbox" => desk.uuid})
+    view |> element("button[phx-click='save_draft']") |> render_click()
+
+    assert [%{message: another}] = Messages.list_folder(desk.uuid, "drafts")
+    assert another.uuid != original.uuid
+    assert another.body == "Still writing"
+    assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
+    assert uuid == original.uuid
+  end
+
+  test "switching mailboxes cannot load signatures after access is revoked", ctx do
+    shared = shared_mailbox_fixture(ctx.bob, %{name: "Private desk"})
+    grant_fixture(shared, ctx.alice, "write")
+    {:ok, view, _} = live(ctx.conn, "/en/admin/inbox/compose")
+    Repo.delete_all(MailboxGrant)
+
+    {:ok, _} =
+      PhoenixKitInbox.Signatures.create_signature(
+        scope_for(ctx.bob, ["inbox", "inbox.manage_shared"]),
+        shared,
+        %{label: "Secret", body: "New private signature", is_default: true}
+      )
+
+    html = render_hook(view, "select_mailbox", %{"mailbox" => shared.uuid})
+    refute html =~ "New private signature"
+  end
+
   defp scope_for_user(user), do: PhoenixKitInbox.DataCase.scope_for(user)
 
   test "a user without the inbox permission can't compose", %{conn: conn} do

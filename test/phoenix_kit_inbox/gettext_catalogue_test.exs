@@ -30,6 +30,21 @@ defmodule PhoenixKitInbox.GettextCatalogueTest do
                "#{unquote(locale)}: placeholders differ in #{inspect(id)}"
       end
     end
+
+    test "every plural form is translated into #{locale}, placeholders intact" do
+      locale = unquote(locale)
+
+      for %Expo.Message.Plural{msgid: msgid, msgid_plural: plural, msgstr: translations} <-
+            messages(locale),
+          index <- 0..(Gettext.Plural.nplurals(locale) - 1) do
+        id = IO.iodata_to_binary(msgid)
+        str = translations |> Map.get(index, []) |> IO.iodata_to_binary()
+
+        assert str != "", "#{locale}: no plural form #{index} for #{inspect(id)}"
+        assert placeholders(id) == placeholders(str)
+        assert placeholders(IO.iodata_to_binary(plural)) == placeholders(str)
+      end
+    end
   end
 
   test "Errors speak the process locale of the backend" do

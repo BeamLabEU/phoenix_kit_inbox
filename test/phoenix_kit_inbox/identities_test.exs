@@ -37,6 +37,34 @@ defmodule PhoenixKitInbox.IdentitiesTest do
     identity
   end
 
+  test "generated From names flatten line breaks in profiles, mailboxes and labels", ctx do
+    alice = Repo.update!(Ecto.Changeset.change(ctx.alice, first_name: "Alice\r\nInjected"))
+    scope = scope_for(alice, @external, [ctx.senders])
+    common = shared!(ctx, label: "Common\r\nInjected", integration_uuid: ctx.system_smtp)
+    assert {:ok, resolved} = Identities.resolve(scope, common.uuid)
+    assert resolved.from_name == "Alice Injected Smith"
+
+    assert {:ok, system} = Identities.resolve_system(common.uuid)
+    assert system.from_name == "Common Injected"
+
+    desk = Repo.update!(Ecto.Changeset.change(ctx.desk, name: "Desk\r\nInjected"))
+    grant_fixture(desk, alice, "write")
+
+    bound =
+      shared!(ctx, label: "Bound", integration_uuid: ctx.system_smtp, mailbox_uuid: desk.uuid)
+
+    assert {:ok, resolved} = Identities.resolve(scope, bound.uuid, desk)
+    assert resolved.from_name == "Desk Injected"
+
+    integration = mail_integration_fixture({:user, alice.uuid})
+
+    {:ok, personal} =
+      Identities.create_personal(scope, %{label: "Mine", integration_uuid: integration})
+
+    assert {:ok, resolved} = Identities.resolve(scope, personal.uuid)
+    assert resolved.from_name == "Alice Injected Smith"
+  end
+
   describe "create_shared/2" do
     test "needs inbox.manage_shared — a forged submit without it is refused", ctx do
       attrs = %{"label" => "Desk", "integration_uuid" => ctx.system_smtp}

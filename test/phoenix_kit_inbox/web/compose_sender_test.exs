@@ -140,6 +140,26 @@ defmodule PhoenixKitInbox.Web.ComposeSenderTest do
   end
 
   describe "Reply-To" do
+    test "the sole Reply-To is submitted when its picker is hidden", ctx do
+      :ok =
+        Mailboxes.revoke_access(
+          scope_for(%{uuid: ctx.desk.owner_uuid}),
+          ctx.desk,
+          ctx.alice.uuid
+        )
+
+      {:ok, view, _} = live(ctx.conn, "/en/admin/inbox/compose")
+      refute has_element?(view, "select[name='reply_to']")
+
+      assert {:error, {:live_redirect, _}} =
+               view
+               |> form("#compose-form", %{"to" => ctx.bob.email, "subject" => "Reply here"})
+               |> render_submit()
+
+      assert [%{message: message}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
+      assert message.metadata["reply_to"] == ctx.alice.email
+    end
+
     test "offers the user's email and the shared addresses they write to", ctx do
       {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
 

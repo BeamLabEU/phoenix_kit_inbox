@@ -85,15 +85,15 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     socket =
       socket
       |> assign(:page_title, gettext("New message"))
-      |> assign(:module_access, scope && Scope.has_module_access?(scope, "inbox"))
+      |> assign(:module_access, Scope.can?(scope, "inbox"))
       |> assign(:scope, scope)
       |> assign(:current_user, user)
-      |> assign(:mailboxes, sendable_mailboxes(user))
+      |> assign(:mailboxes, [])
       |> assign(:mailbox, nil)
       |> assign(:draft_uuid, nil)
       |> assign(:parent_uuid, nil)
       |> assign(:saving, false)
-      |> assign(:recipients, recipient_suggestions(user))
+      |> assign(:recipients, [])
       |> assign(:form, to_form(blank_params()))
       |> assign(:attachments, [])
       |> assign(:signatures, [])
@@ -112,9 +112,9 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     {:ok, socket}
   end
 
-  # Loaded once at mount, not per keystroke. The list is every addressable user
-  # plus every shared mailbox, which is small enough to hand to the browser
-  # whole — a <datalist> then filters client-side with no round trip. If an
+  # Loaded on navigation and mailbox changes, not per keystroke. The list is
+  # addressable users and shared mailboxes, handed to the browser whole — a
+  # <datalist> filters client-side with no round trip. If an
   # installation ever grows past the cap, this becomes a phx-change lookup
   # against the same `Mailboxes.search_recipients/3`.
   defp recipient_suggestions(%{uuid: uuid}) when is_binary(uuid) do
@@ -138,7 +138,10 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    if socket.assigns.module_access do
+    access = Scope.can?(socket.assigns.scope, "inbox")
+    socket = assign(socket, :module_access, access)
+
+    if access do
       {:noreply,
        socket
        |> assign_mailbox(params["mailbox"])
@@ -150,14 +153,26 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   end
 
   defp assign_mailbox(socket, uuid) do
+    # The socket can outlive a grant. Re-read before loading messages or
+    # signatures, including when the From picker changes without a patch.
+    mailboxes =
+      if Scope.can?(socket.assigns.scope, "inbox"),
+        do: sendable_mailboxes(socket.assigns.current_user),
+        else: []
+
     mailbox =
       Enum.find(
-        socket.assigns.mailboxes,
-        List.first(socket.assigns.mailboxes),
+        mailboxes,
+        List.first(mailboxes),
         &(&1.uuid == uuid)
       )
 
     socket
+    |> assign(:mailboxes, mailboxes)
+    |> assign(
+      :recipients,
+      if(mailbox, do: recipient_suggestions(socket.assigns.current_user), else: [])
+    )
     |> assign(:mailbox, mailbox)
     |> assign(:signatures, mailbox_signatures(mailbox))
     |> assign(:reply_to_options, reply_to_options(socket.assigns.scope, mailbox))
@@ -396,11 +411,19 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   def handle_event("select_mailbox", %{"mailbox" => uuid} = params, socket) do
     body = form_body(socket, params)
+    previous_uuid = socket.assigns.mailbox && socket.assigns.mailbox.uuid
 
     socket =
       socket
       |> put_form_params(strip_meta(params))
       |> assign_mailbox(uuid)
+
+    # A saved draft belongs to its original mailbox. Switching starts a
+    # new draft there; the original remains available in its Drafts folder.
+    socket =
+      if socket.assigns.mailbox && socket.assigns.mailbox.uuid == previous_uuid,
+        do: socket,
+        else: assign(socket, :draft_uuid, nil)
 
     {:noreply,
      socket
@@ -737,6 +760,12 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
               class="select-sm"
             />
           </div>
+          <input
+            :if={length(@reply_to_options) <= 1}
+            type="hidden"
+            name="reply_to"
+            value={@form.params["reply_to"] || ""}
+          />
 
           <.input field={@form[:subject]} type="text" label={gettext("Subject")} />
           <.textarea field={@form[:body]} label={gettext("Message")} rows="14" />

@@ -36,6 +36,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Paths
   alias PhoenixKitInbox.Schemas.Mailbox
+  alias PhoenixKitInbox.Signatures
   alias PhoenixKitInbox.Web.SignatureEditor
 
   @impl true
@@ -47,7 +48,7 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
       socket
       |> assign(:page_title, gettext("Mailboxes"))
       |> assign(:page_subtitle, gettext("Shared mailboxes and who can use them"))
-      |> assign(:module_access, scope && Scope.has_module_access?(scope, "inbox"))
+      |> assign(:module_access, Scope.can?(scope, "inbox"))
       |> assign(:scope, scope)
       |> assign(:can_manage_shared, Mailboxes.can_manage_shared?(scope))
       |> assign(:current_user, user)
@@ -125,9 +126,16 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
   def handle_event("grant_search", params, socket) do
     term = Map.get(params, "q", "")
 
-    if term == socket.assigns.grant_form.params["q"],
-      do: {:noreply, socket},
-      else: {:noreply, search_candidates(socket, term)}
+    cond do
+      not admin_of?(socket, socket.assigns.expanded) ->
+        {:noreply, assign(socket, expanded: nil, grants: [], candidates: [])}
+
+      term == socket.assigns.grant_form.params["q"] ->
+        {:noreply, socket}
+
+      true ->
+        {:noreply, search_candidates(socket, term)}
+    end
   end
 
   def handle_event("grant", %{"user_uuid" => target, "access" => access}, socket) do
@@ -179,8 +187,12 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
     end
   end
 
-  defp admin_of?(socket, uuid),
-    do: Enum.any?(socket.assigns.mailboxes, &(&1.mailbox.uuid == uuid and &1.access == "admin"))
+  defp admin_of?(socket, uuid) do
+    match?(
+      {:ok, %Mailbox{kind: "shared"}},
+      Mailboxes.authorize_scope(socket.assigns.scope, %Mailbox{uuid: uuid}, "admin")
+    )
+  end
 
   defp search_candidates(socket, term) do
     candidates =
@@ -195,14 +207,15 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
   end
 
   # A listed active mailbox whose signatures the viewer may write, or nil.
-  defp signing_mailbox(%{assigns: %{can_manage_shared: true, mailboxes: mailboxes}}, uuid) do
-    Enum.find_value(mailboxes, fn
-      %{mailbox: %{uuid: ^uuid, status: "active"} = mailbox, access: "admin"} -> mailbox
+  defp signing_mailbox(socket, uuid) do
+    with {:ok, %Mailbox{kind: "shared", status: "active"} = mailbox} <-
+           Mailboxes.fetch_mailbox(uuid),
+         true <- Signatures.can_manage?(socket.assigns.scope, mailbox) do
+      mailbox
+    else
       _ -> nil
-    end)
+    end
   end
-
-  defp signing_mailbox(_socket, _uuid), do: nil
 
   defp close_signatures(%{assigns: %{sig_mailbox: %{uuid: uuid}}} = socket, uuid),
     do: SignatureEditor.assign_editor(socket, nil)

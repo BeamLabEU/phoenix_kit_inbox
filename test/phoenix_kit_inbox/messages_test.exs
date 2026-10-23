@@ -686,6 +686,26 @@ defmodule PhoenixKitInbox.MessagesTest do
   end
 
   describe "drafts" do
+    test "a malformed, missing or already sent draft never becomes a new message", ctx do
+      {:ok, draft} = Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{subject: "Ready"})
+      attrs = %{"uuid" => draft.uuid, "to" => ctx.bob.email, "subject" => "Ready"}
+      {:ok, sent} = Messages.send_message(ctx.alice_scope, ctx.alice_mb, attrs)
+
+      for uuid <- ["not-a-uuid", Ecto.UUID.generate(), sent.uuid] do
+        attrs = Map.put(attrs, "uuid", uuid)
+
+        assert {:error, :message_not_found} =
+                 Messages.save_draft(ctx.alice_scope, ctx.alice_mb, attrs)
+
+        assert {:error, :message_not_found} =
+                 Messages.send_message(ctx.alice_scope, ctx.alice_mb, attrs)
+      end
+
+      assert Messages.list_folder(ctx.alice_mb.uuid, "drafts") == []
+      assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
+      assert uuid == sent.uuid
+    end
+
     test "saving creates one delivery in the author's drafts folder", ctx do
       assert {:ok, draft} =
                Messages.save_draft(ctx.alice_scope, ctx.alice_mb, %{

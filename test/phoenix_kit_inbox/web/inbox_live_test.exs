@@ -266,4 +266,36 @@ defmodule PhoenixKitInbox.Web.InboxLiveTest do
     assert html =~ "You don&#39;t have permission to use Inbox."
     refute html =~ "Empty list."
   end
+
+  test "a failed mailbox switch clears the reading pane and its related state", ctx do
+    {:ok, message} =
+      Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+        "to" => ctx.alice.email,
+        "subject" => "Opened message",
+        "body" => "Previously selected body"
+      })
+
+    {:ok, view, _} = live(ctx.conn, "/en/admin/inbox?message=#{message.uuid}")
+    html = render_patch(view, "/en/admin/inbox?mailbox=#{ctx.bob_mb.uuid}")
+
+    refute html =~ "Previously selected body"
+    assert :sys.get_state(view.pid).socket.assigns.selected == nil
+    assert :sys.get_state(view.pid).socket.assigns.recipients == []
+  end
+
+  test "disabling Inbox stops a live socket from loading new messages", ctx do
+    {:ok, view, _} = live(ctx.conn, "/en/admin/inbox")
+
+    {:ok, message} =
+      Messages.send_message(ctx.bob_mb, ctx.bob.uuid, %{
+        "to" => ctx.alice.email,
+        "subject" => "After the page opened",
+        "body" => "Must stay hidden"
+      })
+
+    PhoenixKitInbox.disable_system()
+    html = render_patch(view, "/en/admin/inbox?message=#{message.uuid}")
+    refute html =~ "Must stay hidden"
+    refute has_element?(view, "#message-body")
+  end
 end

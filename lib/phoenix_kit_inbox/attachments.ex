@@ -142,8 +142,12 @@ defmodule PhoenixKitInbox.Attachments do
   end
 
   defp library do
-    if hidden_libraries?(), do: Libraries.get_hidden_library_by_slug(@library_slug)
+    if hidden_libraries?(), do: hidden_library()
   end
+
+  # Optional core APIs must also remain optional at compile time.
+  # credo:disable-for-next-line Credo.Check.Refactor.Apply
+  defp hidden_library, do: apply(Libraries, :get_hidden_library_by_slug, [@library_slug])
 
   # The hidden-library API arrived with `dedup: false` in the same core
   # release; an older core has neither.
@@ -153,10 +157,11 @@ defmodule PhoenixKitInbox.Attachments do
   end
 
   defp create_library do
-    case Libraries.create_system_library(
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
+    case apply(Libraries, :create_system_library, [
            %{"name" => @library_name, "slug" => @library_slug},
-           hidden: true
-         ) do
+           [hidden: true]
+         ]) do
       {:ok, library} ->
         {:ok, library}
 
@@ -438,8 +443,10 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
-  defp other_hidden_library?(file),
-    do: hidden_libraries?() and Libraries.hidden?(to_string(file.library_uuid))
+  defp other_hidden_library?(file) do
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
+    hidden_libraries?() and apply(Libraries, :hidden?, [to_string(file.library_uuid)])
+  end
 
   # Path 3: the host vouched for these; only the state of the file is checked.
   defp authorized_items(uuids, context) when is_list(uuids),

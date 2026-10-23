@@ -26,7 +26,7 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
   @impl true
   def mount(_params, _session, socket) do
     scope = socket.assigns[:phoenix_kit_current_scope]
-    module_access = scope && Scope.has_module_access?(scope, "inbox")
+    module_access = Scope.can?(scope, "inbox")
     manage = module_access && Mailboxes.can_manage_shared?(scope)
 
     socket =

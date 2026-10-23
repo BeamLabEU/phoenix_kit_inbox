@@ -8,15 +8,21 @@ defmodule PhoenixKitInbox.IdentityRolesTest do
 
   use PhoenixKitInbox.DataCase, async: false
 
+  alias Ecto.Adapters.SQL.Sandbox
   alias PhoenixKit.Users.Role
   alias PhoenixKitInbox.Identities
   alias PhoenixKitInbox.Mailboxes
+  alias PhoenixKitInbox.Schemas.Identity
   alias PhoenixKitInbox.Schemas.IdentityRole
 
   @manage ["inbox", "inbox.manage_shared"]
   @external ["inbox", "inbox.send_external"]
 
-  setup do
+  setup context do
+    if context[:unboxed], do: :ok, else: setup_roles()
+  end
+
+  defp setup_roles do
     enable_inbox!()
     admin = user_fixture()
     alice = user_fixture(%{first_name: "Alice", last_name: "Smith"})
@@ -59,6 +65,100 @@ defmodule PhoenixKitInbox.IdentityRolesTest do
   end
 
   defp usable(scope), do: scope |> Identities.list_usable() |> Enum.map(& &1.identity_uuid)
+
+  # Runs synchronously in the querying process, between deleting and
+  # inserting roles. The competing editor uses a separate DB connection.
+  def pause_role_replacement(_event, _measurements, metadata, parent) do
+    if Process.get(:inbox_pause_roles) and
+         String.starts_with?(metadata.query, "DELETE FROM \"phoenix_kit_inbox_identity_roles\"") do
+      send(parent, {:roles_deleted, self()})
+
+      receive do
+        :resume_roles -> :ok
+      after
+        5_000 -> raise "role replacement was not resumed"
+      end
+    end
+  end
+
+  @tag :unboxed
+  test "concurrent role-only edits replace the allow-list rather than merging it" do
+    # Committed fixtures let two real transactions see the same identity;
+    # each task checks out its own connection outside the shared sandbox.
+    Sandbox.unboxed_run(Repo, fn ->
+      enabled = PhoenixKitInbox.enabled?()
+      enable_inbox!()
+      admin = user_fixture(%{inbox_member: false})
+      manager = scope_for(admin, @manage)
+      suffix = System.unique_integer([:positive])
+      one = Repo.insert!(%Role{name: "concurrent-one-#{suffix}"})
+      two = Repo.insert!(%Role{name: "concurrent-two-#{suffix}"})
+
+      identity =
+        Repo.insert!(%Identity{
+          kind: "shared",
+          label: "Concurrent",
+          integration_uuid: Ecto.UUID.generate()
+        })
+
+      handler = "inbox-concurrent-roles-#{suffix}"
+      parent = self()
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          Repo.config()[:telemetry_prefix] ++ [:query],
+          &__MODULE__.pause_role_replacement/4,
+          parent
+        )
+
+      try do
+        first =
+          Task.async(fn ->
+            Process.put(:inbox_pause_roles, true)
+
+            Sandbox.unboxed_run(Repo, fn ->
+              Identities.update_identity(manager, identity, %{role_uuids: [one.uuid]})
+            end)
+          end)
+
+        try do
+          assert_receive {:roles_deleted, writer}, 2_000
+
+          second =
+            Task.async(fn ->
+              send(parent, :second_editor_started)
+
+              Sandbox.unboxed_run(Repo, fn ->
+                Identities.update_identity(manager, identity, %{role_uuids: [two.uuid]})
+              end)
+            end)
+
+          try do
+            assert_receive :second_editor_started
+            assert Task.yield(second, 200) == nil
+            send(writer, :resume_roles)
+            assert {:ok, _} = Task.await(first)
+            assert {:ok, _} = Task.await(second)
+            assert role_uuids(identity) == [two.uuid]
+          after
+            send(first.pid, :resume_roles)
+            Task.shutdown(second, :brutal_kill)
+          end
+        after
+          send(first.pid, :resume_roles)
+          Task.shutdown(first, :brutal_kill)
+        end
+      after
+        :telemetry.detach(handler)
+        Repo.delete!(identity)
+        Repo.delete!(one)
+        Repo.delete!(two)
+        Repo.delete!(admin)
+        if not enabled, do: PhoenixKitInbox.disable_system()
+      end
+    end)
+  end
 
   describe "create_shared/2" do
     test "without \"role_uuids\" it opens to the roles that may send externally, not Owner",

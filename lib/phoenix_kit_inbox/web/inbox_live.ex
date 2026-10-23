@@ -72,7 +72,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
       socket
       |> assign(:page_title, gettext("Inbox"))
       |> assign(:page_subtitle, gettext("Messages between users of this application"))
-      |> assign(:module_access, scope && Scope.has_module_access?(scope, "inbox"))
+      |> assign(:module_access, Scope.can?(scope, "inbox"))
       |> assign(:scope, scope)
       |> assign(:current_user, user)
       |> assign(:mailboxes, [])
@@ -100,10 +100,13 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    if socket.assigns.module_access do
+    access = Scope.can?(socket.assigns.scope, "inbox")
+    socket = assign(socket, :module_access, access)
+
+    if access do
       {:noreply, apply_params(socket, params)}
     else
-      {:noreply, socket}
+      {:noreply, clear_mailbox(socket)}
     end
   end
 
@@ -136,7 +139,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   defp apply_params(socket, params) do
     with {:ok, mailbox} <- resolve_mailbox(socket, params["mailbox"]),
-         :ok <- authorize(socket, mailbox, "read") do
+         {:ok, mailbox} <- Mailboxes.authorize_scope(socket.assigns.scope, mailbox, "read") do
       socket
       |> assign(:mailbox, mailbox)
       |> assign(:access, Mailboxes.access_level(mailbox, current_user_uuid(socket)))
@@ -149,10 +152,15 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     else
       {:error, reason} ->
         socket
-        |> assign(:mailbox, nil)
-        |> assign(:entries, [])
+        |> clear_mailbox()
         |> put_flash(:error, Errors.message(reason))
     end
+  end
+
+  defp clear_mailbox(socket) do
+    socket
+    |> close_selected()
+    |> assign(mailbox: nil, access: nil, entries: [], total: 0, unseen_counts: %{})
   end
 
   defp resolve_mailbox(socket, nil) do
@@ -163,10 +171,6 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   end
 
   defp resolve_mailbox(_socket, uuid), do: Mailboxes.fetch_mailbox(uuid)
-
-  defp authorize(socket, mailbox, level) do
-    Mailboxes.authorize(mailbox, current_user_uuid(socket), level)
-  end
 
   defp normalize_folder(folder) when folder in ~w(inbox sent drafts spam trash archive),
     do: folder
@@ -207,7 +211,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     |> assign(:unseen_counts, Mailboxes.unseen_counts(assigns.mailbox.uuid))
   end
 
-  defp select_message(socket, nil), do: assign(socket, selected: nil, recipients: [])
+  defp select_message(socket, nil), do: close_selected(socket)
 
   defp select_message(%{assigns: %{mailbox: nil}} = socket, _), do: socket
 
@@ -230,7 +234,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
       {:error, reason} ->
         socket
-        |> assign(selected: nil, recipients: [])
+        |> close_selected()
         |> put_flash(:error, Errors.message(reason))
     end
   end
@@ -356,8 +360,13 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
-  defp refresh_externals(%{assigns: %{selected: %{message: message}, mailbox: %{}}} = socket),
-    do: assign_externals(socket, message)
+  defp refresh_externals(%{assigns: %{selected: %{message: message}, mailbox: mailbox}} = socket)
+       when is_map(mailbox) do
+    case Mailboxes.authorize_scope(socket.assigns.scope, mailbox, "read") do
+      {:ok, _} -> assign_externals(socket, message)
+      {:error, _} -> clear_mailbox(socket)
+    end
+  end
 
   defp refresh_externals(socket), do: socket
 
@@ -384,11 +393,20 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   defp refresh_selected(%{assigns: %{selected: %{message: message}}} = socket) do
     case Messages.fetch_for_mailbox(socket.assigns.mailbox.uuid, message.uuid) do
       {:ok, entry} -> assign(socket, :selected, entry)
-      {:error, _} -> assign(socket, selected: nil, recipients: [])
+      {:error, _} -> close_selected(socket)
     end
   end
 
-  defp close_selected(socket), do: assign(socket, selected: nil, recipients: [])
+  defp close_selected(socket) do
+    assign(socket,
+      selected: nil,
+      recipients: [],
+      attachments: [],
+      externals: [],
+      externals_sender: false,
+      retry_available: false
+    )
+  end
 
   # Every navigation in this LiveView is "the current view, with these bits
   # changed" — so the caller passes only what differs and the rest is read off

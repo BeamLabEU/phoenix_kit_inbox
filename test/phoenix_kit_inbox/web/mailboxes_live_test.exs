@@ -94,6 +94,10 @@ defmodule PhoenixKitInbox.Web.MailboxesLiveTest do
 
       assert has_element?(ctx.view, "#grant-user option[value='#{ctx.other.uuid}']")
       refute has_element?(ctx.view, "#grant-user option[value='#{ctx.colleague.uuid}']")
+
+      ctx.view |> element("#grant-form") |> render_change(%{"q" => "@cora"})
+      assert has_element?(ctx.view, "#grant-user option[value='#{ctx.colleague.uuid}']")
+      refute has_element?(ctx.view, "#grant-user option[value='#{ctx.other.uuid}']")
     end
 
     test "a picked colleague gets access and is listed by name", ctx do
@@ -197,6 +201,17 @@ defmodule PhoenixKitInbox.Web.MailboxesLiveTest do
       render_hook(view, "toggle_signatures", %{"uuid" => ctx.desk.uuid})
       refute has_element?(view, "#mailbox-signatures")
     end
+
+    test "a stale admin button cannot open signatures after demotion", ctx do
+      other = shared_mailbox_fixture(user_fixture(), %{name: "Elsewhere"})
+      grant_fixture(other, ctx.alice, "admin")
+      conn = as(ctx.conn, ctx.alice, ["inbox", "inbox.manage_shared"])
+      {:ok, view, _} = live(conn, "/en/admin/inbox/mailboxes")
+      grant_fixture(other, ctx.alice, "write")
+
+      render_hook(view, "toggle_signatures", %{"uuid" => other.uuid})
+      refute has_element?(view, "#mailbox-signatures")
+    end
   end
 
   describe "admin events after the grantee lost admin" do
@@ -234,6 +249,22 @@ defmodule PhoenixKitInbox.Web.MailboxesLiveTest do
       render_hook(ctx.view, "archive", %{"uuid" => ctx.shared.uuid})
 
       assert {:ok, %{status: "active"}} = Mailboxes.fetch_mailbox(ctx.shared.uuid)
+    end
+
+    test "reopening Access cannot load newly granted users", ctx do
+      render_hook(ctx.view, "toggle_grants", %{"uuid" => ctx.shared.uuid})
+      grant_fixture(ctx.shared, ctx.target, "read")
+      render_hook(ctx.view, "toggle_grants", %{"uuid" => ctx.shared.uuid})
+
+      refute has_element?(ctx.view, "#grant-#{ctx.target.uuid}")
+      refute has_element?(ctx.view, "#grant-form")
+    end
+
+    test "searching closes an Access panel after demotion", ctx do
+      render_hook(ctx.view, "grant_search", %{"q" => ctx.target.email})
+
+      refute has_element?(ctx.view, "#grant-form")
+      assert :sys.get_state(ctx.view.pid).socket.assigns.candidates == []
     end
   end
 

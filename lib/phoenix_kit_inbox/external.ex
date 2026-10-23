@@ -303,7 +303,8 @@ defmodule PhoenixKitInbox.External do
 
       rows ->
         result =
-          with {:ok, identity} <- current_identity(scope, mailbox, message),
+          with {:ok, fresh} <- authorize_sender(scope, mailbox),
+               {:ok, identity} <- current_identity(scope, fresh, message),
                :ok <- check_allowed(scope, identity),
                {:ok, email} <- build_email(message, rows, identity) do
             Outbound.deliver(email, context(message, identity, scope))
@@ -493,7 +494,7 @@ defmodule PhoenixKitInbox.External do
   @spec retry(Scope.t(), Mailbox.t(), binary()) ::
           {:ok, :pending} | {:error, term()}
   def retry(%Scope{} = scope, mailbox, message_uuid) do
-    with {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write"),
+    with {:ok, fresh} <- authorize_sender(scope, mailbox),
          {:ok, message} <- sent_message(fresh, message_uuid),
          :ok <- retry_check(message),
          {:ok, identity} <- current_identity(scope, fresh, message),
@@ -506,6 +507,12 @@ defmodule PhoenixKitInbox.External do
   end
 
   def retry(_scope, _mailbox, _message_uuid), do: {:error, :forbidden}
+
+  defp authorize_sender(scope, mailbox) do
+    with {:ok, fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write") do
+      if fresh.status == "active", do: {:ok, fresh}, else: {:error, :mailbox_archived}
+    end
+  end
 
   defp sent_message(mailbox, message_uuid) do
     with {:ok, uuid} <- Ecto.UUID.cast(message_uuid),

@@ -40,6 +40,11 @@ defmodule PhoenixKitInbox.AttachmentsTest do
 
     def explode(_scope, _users, _rows), do: raise("policy bug")
     def odd(_scope, _users, _rows), do: :maybe
+
+    def before_write(_scope, _users, _rows) do
+      if callback = Process.delete(:inbox_before_write), do: callback.()
+      :ok
+    end
   end
 
   setup :storage_setup
@@ -771,6 +776,35 @@ defmodule PhoenixKitInbox.AttachmentsTest do
   end
 
   describe "drafts" do
+    test "a send winning before the transaction prevents a stale save or send from changing it",
+         ctx do
+      desk = shared_mailbox_fixture(ctx.alice)
+      grant_fixture(desk, ctx.bob, "read")
+
+      for operation <- [:save_draft, :send_message] do
+        {:ok, draft} = Messages.save_draft(ctx.scope, desk, %{subject: "Original"})
+        attrs = %{"uuid" => draft.uuid, "subject" => "Winner", "to" => ctx.bob.email}
+        put_policy(:before_write)
+
+        Process.put(:inbox_before_write, fn ->
+          assert {:ok, _} = Messages.send_message(ctx.scope, desk, attrs)
+        end)
+
+        assert {:error, :message_not_found} =
+                 apply(Messages, operation, [
+                   ctx.scope,
+                   desk,
+                   Map.put(attrs, "subject", "Stale writer"),
+                   [attachments_data: [%{binary: "late bytes", filename: "late.txt"}]]
+                 ])
+
+        assert %{status: "sent", subject: "Winner"} = Repo.get!(Message, draft.uuid)
+        assert Attachments.list_for_message(draft.uuid) == []
+      end
+
+      assert inbox_files() == []
+    end
+
     test "snapshot at save; a save without the key keeps them; a smaller list drops the rest",
          ctx do
       a = stored_file_fixture(ctx.alice, "a")

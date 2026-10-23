@@ -515,6 +515,22 @@ defmodule PhoenixKitInbox.ExternalSendTest do
   end
 
   describe "the task" do
+    test "an archived personal mailbox cannot send or retry through a common sender", ctx do
+      {message, uuids} = pending_send(ctx)
+      Repo.update!(Ecto.Changeset.change(ctx.alice_mb, status: "archived"))
+
+      External.deliver_now(message, uuids, ctx.scope, ctx.alice_mb)
+      assert Enum.all?(rows(message), &(&1.status == "failed" and &1.error =~ "mailbox_archived"))
+      refute_received {:outbound, _, _, _}
+
+      emails_module_enabled!()
+
+      assert {:error, :mailbox_archived} =
+               Messages.retry_external(ctx.scope, ctx.alice_mb, message.uuid)
+
+      refute_received {:outbound, _, _, _}
+    end
+
     test "checks the sender again: broken between commit and task, nothing goes", ctx do
       {message, uuids} = pending_send(ctx)
       :ok = Integrations.remove_connection(ctx.system_smtp, nil, owner: :system)
