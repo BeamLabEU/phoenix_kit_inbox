@@ -5,6 +5,131 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.3.0 - 2026-10-24
+
+PRs #1–#7 and their Claude and Codex review fixes.
+
+### Upgrade notes
+
+- **Five new migrations, V02–V06.** Run `mix phoenix_kit.update`, then
+  `mix ecto.migrate`.
+  - **V02 can stop on existing data.** It adds a case-insensitive unique
+    index on shared-mailbox addresses. If two shared mailboxes already share
+    an address (ignoring case), the migration raises and lists them. Nothing
+    is renamed automatically: give each one a distinct address, or clear one,
+    and run it again. Check before upgrading:
+    `SELECT lower(address), count(*) FROM phoenix_kit_inbox_mailboxes WHERE kind = 'shared' AND address IS NOT NULL GROUP BY 1 HAVING count(*) > 1;`
+  - V02's `down` refuses while any mailbox has lost its owner.
+  - V06 seeds data once, on the step from 5 to 6: every existing common
+    sender is opened to the roles that hold `inbox.send_external` or `"*"`,
+    so nobody loses a sender they could use before.
+- **Requires `phoenix_kit ~> 2.16`** (was `~> 2.0`): sub-permissions and
+  `Scope.can?/2`, the `before_user_delete/1` callback and
+  `Activity.log(permanent:)`. Adds a `gettext ~> 1.0` dependency.
+- **Attachments need core 2.64.0 or later** (hidden system libraries and
+  `store_file_in_buckets/7` `dedup: false`). The requirement is not
+  enforced: on an older core every attachment is refused with
+  `{:error, :storage_unsupported}` and messages without attachments work as
+  before.
+- **Breaking: every context function that changes data takes the caller's
+  `%Scope{}` and checks it** (#1): `Mailboxes.create_shared_mailbox/2`,
+  `grant_access/4`, `revoke_access/3`, `update_mailbox/3`,
+  `archive_mailbox/2`, `restore_mailbox/2`; `Messages.save_draft/4`,
+  `delete_draft/3`, `mark_seen/3`, `mark_unseen/3`, `toggle_star/3`,
+  `move_to_folder/4` and `purge/3` now take `(scope, %Mailbox{}, …)`
+  instead of mailbox uuids or a bare owner uuid. `send_message/3` with a
+  sender uuid still works and checks the same grant, but refuses
+  attachments and external addresses.
+- **Email nudges need a nudge sender now.** A nudge goes out only when
+  `inbox_email_nudges_enabled` is on, a shared identity is set as the nudge
+  sender (`set_nudge_identity/2`, `inbox_nudge_identity_uuid`), external
+  sending is open (`inbox_external_enabled`) and the host has configured
+  `outbound_filter` (or set it to `:none` explicitly). A host that had nudges
+  on under 0.2.x sends none after upgrading until those are set.
+- **Only members can be addressed.** Recipients and suggestions are limited
+  to users with a role carrying `"inbox"` or `"*"`, plus the Owner. To
+  change the rule, set `config :phoenix_kit_inbox, recipient_filter: {Mod, :fun}`.
+
+### Added
+
+- **Attachments** (#2, V03): uploads, existing Storage files (core's media
+  picker, limited to the user's own Media files), host-provided files and
+  bytes, and forwards. Each one is kept as a snapshot in the module's hidden
+  Storage library and downloaded through the module's route,
+  `GET /admin/inbox/files/:attachment_uuid`, only by people on the message.
+  At most 50 files per message (`inbox_max_upload_bytes` each). Compose
+  uploads stay out of Storage until the draft is saved or the message sent.
+  A host can set `attachment_policy` to refuse files for chosen readers.
+- **Sending identities, Reply-To and signatures** (#3, V04): shared and
+  personal sending identities backed by mail integrations, checked on every
+  send; Reply-To choices; per-mailbox Markdown signatures with one default,
+  inserted after a `-- ` line and swapped while untouched. Message bodies are
+  written in Markdown and shown sanitized, with remote images as links.
+- **External recipients** (#4, V05): email addresses in To/Cc/Bcc next to
+  internal recipients, sent as one email through the sender's integration
+  after the message commits, with a status per address and a retry that
+  never sends twice (`retry_external/3`). Every email the module sends goes
+  through `PhoenixKitInbox.Outbound` and the host's `outbound_filter`. New
+  settings `inbox_external_enabled` (off by default) and
+  `inbox_external_max_bytes` (25 MB of base64 by default). Host-sent mail can
+  be recorded in Sent with `Messages.record_sent/4`.
+- **Shared mail opened to chosen roles** (#7, V06): a common sender bound to
+  no mailbox has its own list of roles, edited on a new "Mail" page in core's
+  admin Settings (`/admin/settings/inbox`). Shared-mailbox signatures are
+  edited from the mailbox's row on the Mailboxes page. Users get "Mail" and
+  "Mail settings" (`/dashboard/inbox-settings`: signatures, default Reply-To,
+  personal senders) in the avatar menu.
+- **`@username` addressing**, a recipient circle limited to members, and
+  sub-permissions `inbox.manage_shared` and `inbox.send_external` (#1).
+- **Correspondence survives user deletion** (#1, V02): a deleted user's
+  mailboxes are archived, or a shared one is handed to an active admin
+  (`before_user_delete/1`). A mailbox with mail in it can be archived but no
+  longer deleted.
+- Each send records a snapshot of its sender and recipients, and one
+  permanent `inbox.message_sent` activity.
+- **Translations** (#5): the module's own Gettext backend with `en`, `et`
+  and `ru` catalogues, including permission labels. Notifications and nudges
+  use the recipient's locale.
+
+### Fixed
+
+- **Bcc recipients were shown to every reader.** They are now visible only
+  in the sender's copy, in the recipient list, the snapshot and the
+  external-status pane.
+- **Access checks**: `send_message` no longer trusts the sender passed in;
+  Compose, Inbox and Mailboxes re-check grants on every navigation and panel
+  open instead of trusting the list loaded at mount, so a revoked or demoted
+  user can no longer load new drafts, messages, grants or signatures from an
+  open page; a disabled module stops serving open sockets; Inbox no longer
+  creates a mailbox for a user without Inbox access; the grants panel is
+  admin-only and no longer crashes on a non-uuid.
+- **Drafts**: saving keeps the recipients and the typed text; save, send and
+  discard lock and recheck the draft, so a competing send cannot be
+  overwritten, sent twice or have its attachments replaced; a draft uuid
+  that does not name a draft in the sending mailbox is refused; discarding no
+  longer reports success when the delete was refused; saved drafts can be
+  reopened from the UI.
+- Replies from another mailbox no longer fail the parent check, and a reply
+  to a reply stays in the root's thread. Threads with messages inserted in
+  the same second keep their order.
+- Shared-mailbox notifications reach every grantee, not only the creator.
+- A nil caller metadata no longer crashes send and save draft.
+- `%` and `_` in a search term are matched literally.
+- Colleague search accepts the `@username` form its hint advertises.
+- Line breaks in a subject or generated From name can no longer add mail
+  headers.
+- External sends and retries refuse an archived sending mailbox.
+- The only available Reply-To is submitted when the picker is hidden, so it
+  is no longer lost.
+- Concurrent edits of a shared sender's roles no longer merge into the union
+  of both lists.
+- The sidebar mailbox switcher works: picking another mailbox did nothing
+  (#6).
+
+### Changed
+
+- Dependency refresh: `phoenix_kit` 2.64.1 and its transitive set.
+
 ## 0.2.1 - 2026-08-11
 
 ### Changed
