@@ -247,7 +247,7 @@ Version must be updated in **three** places:
 
 ### Commit Message Rules
 
-Start with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`. **No AI attribution or `Co-Authored-By` footers.**
+Start with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`.
 
 ## Pull Requests
 
