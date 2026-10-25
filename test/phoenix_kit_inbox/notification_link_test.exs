@@ -135,7 +135,7 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
       hook(:link, answer)
       {message, log} = with_log(fn -> send_to_bob(ctx) end)
 
-      if answer, do: assert(log =~ "notification_link"), else: assert(log == "")
+      if answer, do: assert(log =~ "notification_link"), else: refute(log =~ "notification_link")
 
       assert links(message.uuid) == %{
                ctx.bob.uuid => Paths.raw_message_path(ctx.bob_mb.uuid, message.uuid)

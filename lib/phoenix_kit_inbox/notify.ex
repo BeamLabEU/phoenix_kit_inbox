@@ -223,8 +223,9 @@ defmodule PhoenixKitInbox.Notify do
   end
 
   # A path on this site: a browser opens "//host", "/\\host" and a path with
-  # a tab or newline after the slash as another site's address.
-  defp local_path?("/" <> rest) when is_binary(rest) do
+  # a tab or newline after the slash as another site's address, so no control
+  # character is allowed anywhere.
+  defp local_path?("/" <> rest) do
     not String.starts_with?(rest, ["/", "\\"]) and
       not String.match?(rest, ~r/[\x00-\x1f\x7f]/)
   end
