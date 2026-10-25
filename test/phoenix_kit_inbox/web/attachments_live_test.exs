@@ -330,6 +330,12 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
     if Enum.any?(rows, &(&1.filename == refused)), do: {:error, :money}, else: :ok
   end
 
+  # Answers by the scope alone: only one holding inbox.send_external may see
+  # the files.
+  def by_scope(scope, _users, _rows) do
+    if Scope.can?(scope, "inbox.send_external"), do: :ok, else: {:error, :money}
+  end
+
   # Holds the send until the test lets it go.
   def hold(_scope, _users, _rows) do
     send(Application.get_env(:phoenix_kit_inbox, :hold_test_pid), {:held, self()})
@@ -744,6 +750,41 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
       submit_ok(view, "@#{ctx.carol.username}")
 
       assert [%{filename: "plan.pdf"}] = received(ctx.carol_mb)
+    end
+  end
+
+  describe "an access change under an open message" do
+    test "asks the host's policy again with the new scope", ctx do
+      {:ok, message} =
+        Messages.send_message(
+          scope_for(ctx.alice),
+          ctx.alice_mb,
+          %{"to" => "@#{ctx.bob.username}", "subject" => "Offer"},
+          attachments_data: [%{binary: "priced", filename: "priced.pdf"}]
+        )
+
+      [priced] = Attachments.list_for_message(message.uuid)
+      put_policy(:by_scope)
+
+      bob_conn = put_test_scope(build_conn() |> init_test_session(%{}), scope_for(ctx.bob))
+
+      {:ok, view, _html} =
+        live(bob_conn, "/en/admin/inbox?mailbox=#{ctx.bob_mb.uuid}&message=#{message.uuid}")
+
+      assert has_element?(view, "#message-attachment-#{priced.uuid}", "Attachment not available")
+
+      refresh_scope(view, scope_for(ctx.bob, ["inbox", "inbox.send_external"]))
+
+      assert has_element?(
+               view,
+               ~s(#message-attachments a[href="#{Paths.attachment(priced.uuid)}"]),
+               "priced.pdf"
+             )
+
+      refresh_scope(view, scope_for(ctx.bob))
+
+      assert has_element?(view, "#message-attachment-#{priced.uuid}", "Attachment not available")
+      refute render(view) =~ "priced.pdf"
     end
   end
 

@@ -169,10 +169,19 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   end
 
   # The open message read again — not reopened, which would mark it seen —
-  # with what its sender may do on it (Retry needs write).
+  # with what its sender may do on it (Retry needs write) and which of its
+  # attachments the viewer may download: the host's policy is asked with the
+  # scope, so a refreshed scope can show or withhold a file.
   defp reselect(%{assigns: %{selected: %{message: message}}} = socket) do
     socket = refresh_selected(socket)
-    if socket.assigns.selected, do: assign_externals(socket, message), else: socket
+
+    if socket.assigns.selected do
+      socket
+      |> assign(:attachments, Attachments.list_for_viewer(socket.assigns.scope, message.uuid))
+      |> assign_externals(message)
+    else
+      socket
+    end
   end
 
   defp reselect(socket), do: socket
@@ -693,7 +702,12 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     ~H"""
     <div class="card bg-base-100 shadow">
       <div class="card-body p-3 gap-3">
-        <form phx-change="search" phx-submit="search" class="flex items-center gap-2">
+        <form
+          id="inbox-search-form"
+          phx-change="search"
+          phx-submit="search"
+          class="flex items-center gap-2"
+        >
           <.icon name="hero-magnifying-glass" class="w-4 h-4 opacity-60 shrink-0" />
           <input
             type="search"
