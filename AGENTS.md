@@ -142,6 +142,12 @@ Levels are ordered `read < write < admin` via `MailboxGrant.covers?/2`.
 
 **Re-check on every param change, not just at mount** — a user can hand-edit `?mailbox=` in the URL. `InboxLive.apply_params/2` and the `mutate/3` helper both do.
 
+**And when access changes under an open page.** Each page copies core's scope into its own `:scope`, so it must hear about changes:
+
+- **Core's scope refresh** (roles/permissions changed, a role switch) calls `phoenix_kit_scope_changed/1`, which every page exports: `Web.ScopeRefresh.assign_scope/1` copies `:phoenix_kit_current_scope`/`:phoenix_kit_current_user` again, then the page recomputes **every** gate and what it derived from them with the same functions its `mount/3` uses (`assign_module_access`/`assign_gates`) — a new gate goes there, or a refresh forgets it. Core evicts an admin page that lost its permission itself; the page only makes its state correct. `MySettingsLive` is outside the admin area, so it navigates to `Paths.dashboard/0` itself — except when core evicts anyway (the user lost the admin area altogether: `scope_refresh_decision/4` → `:evict_admin_area` fires on any page), where a second `push_navigate` would crash the socket. The test hook (`test/support/hooks.ex`) runs core's decision after the page, so a double navigation fails the suite.
+- **Inbox's own rows** (grants, mailbox status/address, senders) are invisible to core: `PhoenixKitInbox.AccessEvents` broadcasts `{:inbox_access_changed, :mailboxes | :senders}` after the write — per user (grant holder; owner + holders on create/archive/restore/`update_mailbox/3`; a personal sender's owner) and on a global senders topic (shared sender create/update/delete). Pages subscribe on connected mount (`ScopeRefresh.subscribe/2`) and run the same refresh. A new write that changes who reaches a mailbox or a sender must broadcast too.
+- What a refresh does: Inbox reloads the mailbox list (and its `External` subscriptions — listed mailboxes plus the open one) and patches a no-longer-readable open mailbox to the personal one; Compose re-reads mailboxes/identities/Reply-To options, keeps the typed form and attachments, and falls back (personal mailbox, inside-only, default Reply-To) with a flash; Mailboxes closes an Access/Signatures panel the viewer may no longer use. Actions still check the context — the refresh is for what the page shows.
+
 ## Code Organization
 
 ```
@@ -160,12 +166,14 @@ lib/phoenix_kit_inbox/
 ├── notify.ex                             # activity log + optional email nudge
 ├── outbound.ex, outbound/mailer.ex       # THE way mail leaves: checks, filter, core call
 ├── external.ex                           # external recipients: rows, task, status, retry
+├── access_events.ex                      # PubSub: grant/mailbox/sender changes for open pages
 ├── email_log.ex                          # reads phoenix_kit_emails' log (soft dependency)
 ├── migrations.ex                         # version coordinator
 ├── migrations/v01.ex … v06.ex            # immutable
 ├── schemas/{mailbox,mailbox_grant,message,delivery,attachment,identity,identity_role,signature,external_recipient}.ex
 └── web/{inbox_live,compose_live,mailboxes_live,settings_live,my_settings_live}.ex
     web/{signature_editor,identity_editor}.ex   # editors the pages share
+    web/scope_refresh.ex                  # scope copy + access-event subscriptions the pages share
 ```
 
 - **Contexts own every query.** LiveViews call context functions; no `Repo` or `Ecto.Query` in `web/`.

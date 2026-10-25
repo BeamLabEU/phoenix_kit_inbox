@@ -24,14 +24,20 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     1. `Scope.has_module_access?(scope, "inbox")` — can they use Inbox at all
     2. `Mailboxes.authorize/3` — can they open *this* mailbox
 
+  Both are also re-checked when they change under an open page: on core's
+  scope refresh (`phoenix_kit_scope_changed/1`) and on Inbox's own access
+  events (`PhoenixKitInbox.AccessEvents`) — the mailbox list is reloaded, and
+  a mailbox no longer readable is left for the personal one
+  (`PhoenixKitInbox.Web.ScopeRefresh`).
+
   ## External recipients
 
   The reading pane lists a message's external recipients with their status
   (`PhoenixKitInbox.External`) — Bcc ones to the sending mailbox only — and
   follows a send still under way: the LiveView subscribes to the external
-  updates of the user's mailboxes. "Retry" is shown to the sending mailbox's
-  writers when `Messages.retry_available?/1` says so; `Messages.retry_external/3`
-  checks again.
+  updates of the user's mailboxes and of the one open. "Retry" is shown to
+  the sending mailbox's writers when `Messages.retry_available?/1` says so;
+  `Messages.retry_external/3` checks again.
   """
 
   use PhoenixKitWeb, :live_view
@@ -49,6 +55,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Paths
   alias PhoenixKitInbox.Schemas.Delivery
+  alias PhoenixKitInbox.Web.ScopeRefresh
 
   @folder_icons %{
     "inbox" => "hero-inbox-arrow-down",
@@ -65,16 +72,12 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    scope = socket.assigns[:phoenix_kit_current_scope]
-    user = socket.assigns[:phoenix_kit_current_user]
-
     socket =
       socket
       |> assign(:page_title, gettext("Inbox"))
       |> assign(:page_subtitle, gettext("Messages between users of this application"))
-      |> assign(:module_access, Scope.can?(scope, "inbox"))
-      |> assign(:scope, scope)
-      |> assign(:current_user, user)
+      |> ScopeRefresh.assign_scope()
+      |> assign_module_access()
       |> assign(:mailboxes, [])
       |> assign(:mailbox, nil)
       |> assign(:access, nil)
@@ -91,32 +94,116 @@ defmodule PhoenixKitInbox.Web.InboxLive do
       |> assign(:externals, [])
       |> assign(:externals_sender, false)
       |> assign(:retry_available, false)
+      |> assign(:followed, MapSet.new())
       |> load_mailboxes()
-
-    if connected?(socket), do: Enum.each(socket.assigns.mailboxes, &External.subscribe(&1.uuid))
+      |> ScopeRefresh.subscribe([:user])
 
     {:ok, socket}
   end
 
   @impl true
   def handle_params(params, _uri, socket) do
-    access = Scope.can?(socket.assigns.scope, "inbox")
-    socket = assign(socket, :module_access, access)
+    socket = assign_module_access(socket)
 
-    if access do
-      {:noreply, apply_params(socket, params)}
-    else
-      {:noreply, clear_mailbox(socket)}
+    socket =
+      if socket.assigns.module_access,
+        do: apply_params(socket, params),
+        else: clear_mailbox(socket)
+
+    {:noreply, follow_externals(socket)}
+  end
+
+  @doc false
+  # Core's scope refresh: the scope changed under the page.
+  def phoenix_kit_scope_changed(socket) do
+    socket
+    |> ScopeRefresh.assign_scope()
+    |> refresh_access()
+  end
+
+  defp assign_module_access(socket),
+    do: assign(socket, :module_access, Scope.can?(socket.assigns.scope, "inbox"))
+
+  # Everything derived from the scope and the grants, again: the gate, the
+  # mailbox list with the external updates followed for it, the open
+  # mailbox. A mailbox no longer readable is left for the personal one; a
+  # page that just gained Inbox opens it. Losing Inbox only clears the page —
+  # core moves the visitor off an admin page that lost its permission.
+  defp refresh_access(socket) do
+    had_access? = socket.assigns.module_access
+
+    socket =
+      socket
+      |> assign_module_access()
+      |> load_mailboxes()
+
+    socket =
+      cond do
+        not socket.assigns.module_access -> clear_mailbox(socket)
+        socket.assigns.mailbox -> recheck_mailbox(socket, socket.assigns.mailbox)
+        not had_access? -> push_patch(socket, to: Paths.inbox())
+        true -> socket
+      end
+
+    follow_externals(socket)
+  end
+
+  defp recheck_mailbox(socket, mailbox) do
+    case Mailboxes.authorize_scope(socket.assigns.scope, mailbox, "read") do
+      {:ok, fresh} ->
+        socket
+        |> assign(:mailbox, fresh)
+        |> assign(:access, Mailboxes.access_level(fresh, current_user_uuid(socket)))
+        |> load_messages()
+        |> reselect()
+
+      {:error, _reason} ->
+        socket
+        |> clear_mailbox()
+        |> put_flash(
+          :error,
+          gettext("You no longer have access to “%{name}”.", name: mailbox.name)
+        )
+        |> push_patch(to: Paths.inbox())
     end
   end
 
-  # Mailbox list is stable for the life of the socket — grants change rarely
-  # and a re-read on every patch would be a query per folder click.
+  # The open message read again — not reopened, which would mark it seen —
+  # with what its sender may do on it (Retry needs write).
+  defp reselect(%{assigns: %{selected: %{message: message}}} = socket) do
+    socket = refresh_selected(socket)
+    if socket.assigns.selected, do: assign_externals(socket, message), else: socket
+  end
+
+  defp reselect(socket), do: socket
+
+  # The external updates followed (`:followed`): those of the listed
+  # mailboxes and of the open one — an archived mailbox left open, or opened
+  # by its URL, is not listed. Each topic is subscribed to once; one neither
+  # listed nor open any more is dropped. Run after mount's params and on
+  # every param or access change.
+  defp follow_externals(socket) do
+    if connected?(socket) do
+      open = if mailbox = socket.assigns.mailbox, do: [mailbox.uuid], else: []
+      wanted = MapSet.new(open ++ Enum.map(socket.assigns.mailboxes, & &1.uuid))
+      followed = socket.assigns.followed
+
+      wanted |> MapSet.difference(followed) |> Enum.each(&External.subscribe/1)
+      followed |> MapSet.difference(wanted) |> Enum.each(&External.unsubscribe/1)
+      assign(socket, :followed, wanted)
+    else
+      socket
+    end
+  end
+
+  # The mailbox list is read at mount and on an access change
+  # (`refresh_access/1`), not per patch — that would be a query per folder
+  # click.
   #
   # Without Inbox access nothing is loaded: the personal mailbox is created
   # lazily here, and a user who can't use Inbox must not get one by visiting.
   defp load_mailboxes(%{assigns: %{module_access: access}} = socket) when access != true,
-    do: assign(socket, :personal_mailbox, nil)
+    do: assign(socket, mailboxes: [], personal_mailbox: nil)
 
   defp load_mailboxes(%{assigns: %{current_user: user}} = socket) when is_map(user) do
     case Mailboxes.ensure_user_mailbox(user) do
@@ -357,6 +444,9 @@ defmodule PhoenixKitInbox.Web.InboxLive do
       _ -> {:noreply, socket}
     end
   end
+
+  def handle_info({:inbox_access_changed, _what}, socket),
+    do: {:noreply, refresh_access(socket)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 

@@ -77,6 +77,7 @@ defmodule PhoenixKitInbox.Identities do
   alias PhoenixKit.Users.Role
   alias PhoenixKit.Users.RolePermission
   alias PhoenixKit.Users.Roles
+  alias PhoenixKitInbox.AccessEvents
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Schemas.Identity
   alias PhoenixKitInbox.Schemas.IdentityRole
@@ -718,6 +719,7 @@ defmodule PhoenixKitInbox.Identities do
       %Identity{kind: "shared", mailbox_uuid: mailbox_uuid, integration_uuid: integration_uuid}
       |> Identity.changeset(attrs)
       |> write_with_roles(&insert/1, &put_roles(&1, initial_roles(attrs)))
+      |> tell_senders()
     end
   end
 
@@ -744,6 +746,7 @@ defmodule PhoenixKitInbox.Identities do
       %Identity{kind: "personal", owner_uuid: user.uuid, integration_uuid: integration_uuid}
       |> Identity.changeset(attrs)
       |> repo().insert()
+      |> tell_senders()
     end
   end
 
@@ -780,6 +783,7 @@ defmodule PhoenixKitInbox.Identities do
         {:error, reason} -> repo().rollback(reason)
       end
     end)
+    |> tell_senders()
   end
 
   defp update_roles(%Identity{kind: "shared", mailbox_uuid: bound} = identity, _attrs)
@@ -886,10 +890,21 @@ defmodule PhoenixKitInbox.Identities do
   def delete_identity(%Scope{} = scope, %Identity{uuid: uuid}) do
     with {:ok, identity} <- fetch(uuid),
          :ok <- authorize_manage(scope, identity),
-         {:ok, _} <- repo().delete(identity) do
+         {:ok, _} <- identity |> repo().delete() |> tell_senders() do
       :ok
     end
   end
+
+  # Open pages offer senders by these rows (`AccessEvents`): a personal one
+  # concerns its owner, a shared one anyone its roles or mailbox may reach.
+  # `recheck/2` is not told: what a page offers is checked live, not read
+  # from the stored status.
+  defp tell_senders({:ok, %Identity{} = identity} = result) do
+    AccessEvents.senders_changed(if identity.kind == "personal", do: identity.owner_uuid)
+    result
+  end
+
+  defp tell_senders(error), do: error
 
   defp authorize_manage(scope, %Identity{kind: "shared"}), do: authorize_manage_shared(scope)
 

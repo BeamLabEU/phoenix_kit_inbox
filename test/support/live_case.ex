@@ -141,6 +141,25 @@ defmodule PhoenixKitInbox.LiveCase do
   end
 
   @doc """
+  Changes the scope under a running LiveView the way core's scope refresh
+  does when the user's roles or permissions change: the test hook reassigns
+  `:phoenix_kit_current_scope` / `:phoenix_kit_current_user` and calls core's
+  `PhoenixKitWeb.Users.Auth.refresh_view_scope_assigns/1`, which calls the
+  page's `phoenix_kit_scope_changed/1`. Returns the rendered page; use
+  `send_scope_refresh/2` when the page is expected to navigate away.
+  """
+  def refresh_scope(view, scope) do
+    send_scope_refresh(view, scope)
+    Phoenix.LiveViewTest.render(view)
+  end
+
+  @doc "Sends the refresh of `refresh_scope/2` without rendering."
+  def send_scope_refresh(view, scope) do
+    send(view.pid, {:inbox_test_scope_refresh, scope})
+    :ok
+  end
+
+  @doc """
   Asks the test `:assign_scope` hook to install `locale` for the LiveView
   the way core's locale hook does in production.
   """

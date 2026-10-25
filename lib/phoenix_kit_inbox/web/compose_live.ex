@@ -76,18 +76,15 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   alias PhoenixKitInbox.Paths
   alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Signatures
+  alias PhoenixKitInbox.Web.ScopeRefresh
 
   @impl true
   def mount(_params, _session, socket) do
-    scope = socket.assigns[:phoenix_kit_current_scope]
-    user = socket.assigns[:phoenix_kit_current_user]
-
     socket =
       socket
       |> assign(:page_title, gettext("New message"))
-      |> assign(:module_access, Scope.can?(scope, "inbox"))
-      |> assign(:scope, scope)
-      |> assign(:current_user, user)
+      |> ScopeRefresh.assign_scope()
+      |> assign_module_access()
       |> assign(:mailboxes, [])
       |> assign(:mailbox, nil)
       |> assign(:draft_uuid, nil)
@@ -108,6 +105,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         max_file_size: Attachments.max_upload_bytes(),
         auto_upload: true
       )
+      |> ScopeRefresh.subscribe([:user, :senders])
 
     {:ok, socket}
   end
@@ -138,10 +136,9 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    access = Scope.can?(socket.assigns.scope, "inbox")
-    socket = assign(socket, :module_access, access)
+    socket = assign_module_access(socket)
 
-    if access do
+    if socket.assigns.module_access do
       {:noreply,
        socket
        |> assign_mailbox(params["mailbox"])
@@ -151,6 +148,98 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       {:noreply, socket}
     end
   end
+
+  @doc false
+  # Core's scope refresh: the scope changed under the page. Inbox's own
+  # access events (grants, senders) run the same `refresh_sender/1`.
+  def phoenix_kit_scope_changed(socket) do
+    socket
+    |> ScopeRefresh.assign_scope()
+    |> refresh_sender()
+  end
+
+  defp assign_module_access(socket),
+    do: assign(socket, :module_access, Scope.can?(socket.assigns.scope, "inbox"))
+
+  # What the sender may choose, read again, keeping what was typed (the
+  # form and the attachments stay): a sending mailbox no longer writable
+  # gives way to the first one left — the personal mailbox; a chosen
+  # identity or Reply-To no longer offered gives way to the default. Each
+  # change is named in a flash. A saved draft belongs to its mailbox (the
+  # send looks it up there), so unless the mailbox stayed the same — passing
+  # through none counts as a change — the next save starts a new draft.
+  defp refresh_sender(socket) do
+    previous = socket.assigns.mailbox
+
+    socket =
+      socket
+      |> assign_module_access()
+      |> assign_mailbox(previous && previous.uuid)
+
+    case {previous, socket.assigns.mailbox} do
+      {%{uuid: uuid}, %{uuid: uuid}} ->
+        keep_choices(socket)
+
+      {_previous, nil} ->
+        assign(socket, draft_uuid: nil, show_media_selector: false)
+
+      {nil, _mailbox} ->
+        socket
+        |> assign(:draft_uuid, nil)
+        |> sender_defaults(form_body(socket, %{}))
+
+      {lost, mailbox} ->
+        socket
+        |> assign(:draft_uuid, nil)
+        |> sender_defaults(form_body(socket, %{}))
+        |> put_flash(
+          :error,
+          gettext("You can no longer send from “%{lost}”, so this message is now from “%{name}”.",
+            lost: lost.name,
+            name: mailbox.name
+          )
+        )
+    end
+  end
+
+  defp keep_choices(socket) do
+    params = socket.assigns.form.params
+
+    resets =
+      Enum.reject(
+        [
+          {offered?(socket.assigns.identities, :identity_uuid, params["identity_uuid"]),
+           %{"identity_uuid" => ""},
+           gettext("The sender you chose is no longer available, so it was reset.")},
+          {offered?(socket.assigns.reply_to_options, :address, params["reply_to"]),
+           %{"reply_to" => default_reply_to(socket)},
+           gettext("The Reply-To you chose is no longer available, so it was reset.")}
+        ],
+        &elem(&1, 0)
+      )
+
+    case resets do
+      [] ->
+        socket
+
+      _ ->
+        socket
+        |> put_form_params(resets |> Enum.map(&elem(&1, 1)) |> Enum.reduce(&Map.merge/2))
+        |> put_flash(:error, Enum.map_join(resets, " ", &elem(&1, 2)))
+    end
+  end
+
+  # Blank ("inside the application only", "no Reply-To") is always a
+  # choice; anything else must still be on offer. An address compares as
+  # the send compares it, ignoring case.
+  defp offered?(_choices, _key, value) when value in [nil, ""], do: true
+
+  defp offered?(choices, :address, value) do
+    wanted = value |> String.trim() |> String.downcase()
+    Enum.any?(choices, &(String.downcase(&1.address) == wanted))
+  end
+
+  defp offered?(choices, key, value), do: Enum.any?(choices, &(Map.get(&1, key) == value))
 
   defp assign_mailbox(socket, uuid) do
     # The socket can outlive a grant. Re-read before loading messages or
@@ -236,6 +325,15 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
           gettext("The signature in the message was edited, so it was left as it is.")
         )
     end
+  end
+
+  # A new sending mailbox: its default Reply-To and signature, and a chosen
+  # identity that does not fit it let go.
+  defp sender_defaults(socket, body) do
+    socket
+    |> put_form_params(%{"reply_to" => default_reply_to(socket)})
+    |> keep_identity()
+    |> switch_signature(default_signature(socket), body)
   end
 
   # A chosen identity that does not fit the new mailbox is let go.
@@ -425,11 +523,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         do: socket,
         else: assign(socket, :draft_uuid, nil)
 
-    {:noreply,
-     socket
-     |> put_form_params(%{"reply_to" => default_reply_to(socket)})
-     |> keep_identity()
-     |> switch_signature(default_signature(socket), body)}
+    {:noreply, sender_defaults(socket, body)}
   end
 
   # Only the sending mailbox's signatures can be chosen: a uuid that is not
@@ -486,6 +580,11 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   def handle_info({:media_selector_closed}, socket) do
     {:noreply, assign(socket, :show_media_selector, false)}
   end
+
+  def handle_info({:inbox_access_changed, _what}, socket),
+    do: {:noreply, refresh_sender(socket)}
+
+  def handle_info(_message, socket), do: {:noreply, socket}
 
   # Picker choices that could not be attached, named when the user may read
   # them (`file_label/2`), so they learn which did not make it and why.

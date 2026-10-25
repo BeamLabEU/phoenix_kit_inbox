@@ -93,6 +93,13 @@ defmodule PhoenixKitInbox.Paths do
   @spec my_settings() :: String.t()
   def my_settings, do: Routes.path(@my_settings)
 
+  @doc """
+  Core's user dashboard — where the mail settings page sends a user who lost
+  Inbox while it was open (core evicts only from admin pages).
+  """
+  @spec dashboard() :: String.t()
+  def dashboard, do: Routes.path("/dashboard")
+
   @doc "Where core's personal integrations page lives (a personal sender's connection)."
   @spec my_integrations() :: String.t()
   def my_integrations, do: Routes.path("/profile/settings/integrations")

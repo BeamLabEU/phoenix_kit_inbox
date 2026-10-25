@@ -15,7 +15,12 @@ defmodule PhoenixKitInbox.Web.MySettingsLive do
     * a link to the **shared mail** page (`Web.SettingsLive`) for holders of
       `inbox.manage_shared`
 
-  Everything is checked again in the contexts with the session scope.
+  Everything is checked again in the contexts with the session scope. The
+  page follows access changes while open (core's scope refresh,
+  `phoenix_kit_scope_changed/1`, and Inbox's own access events): core moves
+  nobody off a page outside the admin area for a lost module permission, so
+  a user who lost Inbox is sent to the user dashboard from here — unless
+  they lost the admin area altogether, when core moves them itself.
   """
 
   use PhoenixKitWeb, :live_view
@@ -28,25 +33,76 @@ defmodule PhoenixKitInbox.Web.MySettingsLive do
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Paths
   alias PhoenixKitInbox.Web.IdentityEditor
+  alias PhoenixKitInbox.Web.ScopeRefresh
   alias PhoenixKitInbox.Web.SignatureEditor
 
   @impl true
   def mount(_params, _session, socket) do
-    scope = socket.assigns[:phoenix_kit_current_scope]
-    access = PhoenixKitInbox.user_menu?(scope)
-
     socket =
       socket
       |> assign(:page_title, gettext("Mail settings"))
       |> assign(:project_title, project_title())
       |> assign(:url_path, Paths.my_settings())
-      |> assign(:scope, scope)
-      |> assign(:module_access, access)
-      |> assign(:integrations_access, Scope.has_module_access?(scope, "integrations"))
-      |> assign(:can_manage_shared, access && Mailboxes.can_manage_shared?(scope))
-      |> load(access && personal_mailbox(scope))
+      |> ScopeRefresh.assign_scope()
+      |> assign_gates()
+      |> ScopeRefresh.subscribe([:user])
 
-    {:ok, socket}
+    {:ok,
+     load(socket, if(socket.assigns.module_access, do: personal_mailbox(socket.assigns.scope)))}
+  end
+
+  @doc false
+  # Core's scope refresh: the scope changed under the page. The gates again;
+  # losing Inbox leaves the page, gaining it loads it, and otherwise only the
+  # Reply-To choices, which follow the grants, are read again — an open
+  # editor form stays.
+  def phoenix_kit_scope_changed(socket) do
+    had_access? = socket.assigns.module_access
+    old_scope = socket.assigns.scope
+    socket = socket |> ScopeRefresh.assign_scope() |> assign_gates()
+
+    cond do
+      not socket.assigns.module_access and core_evicts?(old_scope, socket.assigns.scope) ->
+        load(socket, nil)
+
+      not socket.assigns.module_access ->
+        socket
+        |> load(nil)
+        |> put_flash(:error, gettext("You no longer have access to Inbox."))
+        |> push_navigate(to: Paths.dashboard())
+
+      not had_access? ->
+        load(socket, personal_mailbox(socket.assigns.scope))
+
+      true ->
+        reload_reply_to(socket)
+    end
+  end
+
+  # Core moves whoever lost the admin area off ANY page, this one included
+  # (`scope_refresh_decision/4`, `:evict_admin_area`), right after this
+  # callback; a second navigation from here would crash the socket.
+  defp core_evicts?(old_scope, new_scope),
+    do: Scope.can_access_admin_area?(old_scope) and not Scope.can_access_admin_area?(new_scope)
+
+  defp assign_gates(socket) do
+    scope = socket.assigns.scope
+    access = PhoenixKitInbox.user_menu?(scope)
+
+    socket
+    |> assign(:module_access, access)
+    |> assign(:integrations_access, Scope.has_module_access?(scope, "integrations"))
+    |> assign(:can_manage_shared, access && Mailboxes.can_manage_shared?(scope))
+  end
+
+  defp reload_reply_to(%{assigns: %{mailbox: nil}} = socket), do: socket
+
+  defp reload_reply_to(socket) do
+    assign(
+      socket,
+      :reply_to_options,
+      Identities.reply_to_options(socket.assigns.scope, socket.assigns.mailbox)
+    )
   end
 
   defp personal_mailbox(%Scope{user: user}) do
@@ -105,6 +161,13 @@ defmodule PhoenixKitInbox.Web.MySettingsLive do
         {:noreply, put_flash(socket, :error, Errors.message(reason))}
     end
   end
+
+  # A grant given or taken changes the Reply-To choices.
+  @impl true
+  def handle_info({:inbox_access_changed, _what}, socket),
+    do: {:noreply, reload_reply_to(socket)}
+
+  def handle_info(_message, socket), do: {:noreply, socket}
 
   # ── Render ──────────────────────────────────────────────────────────────────
 

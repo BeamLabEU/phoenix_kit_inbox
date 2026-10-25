@@ -17,7 +17,9 @@ defmodule PhoenixKitInbox.Mailboxes do
   grant to their own mailbox.
 
   Every function here takes and returns plain data; the LiveViews own no
-  queries of their own.
+  queries of their own. A write that changes who reaches a mailbox tells
+  them after it commits (`PhoenixKitInbox.AccessEvents`), so their open
+  pages follow.
   """
 
   use Gettext, backend: PhoenixKitInbox.Gettext
@@ -26,6 +28,7 @@ defmodule PhoenixKitInbox.Mailboxes do
 
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Users.Auth.User
+  alias PhoenixKitInbox.AccessEvents
   alias PhoenixKitInbox.Members
   alias PhoenixKitInbox.Schemas.Delivery
   alias PhoenixKitInbox.Schemas.Mailbox
@@ -513,6 +516,7 @@ defmodule PhoenixKitInbox.Mailboxes do
       |> Mailbox.changeset(attrs)
       |> validate_address_not_a_user_email()
       |> repo().insert()
+      |> tell_owner()
     end
   end
 
@@ -539,6 +543,7 @@ defmodule PhoenixKitInbox.Mailboxes do
       changeset
       |> validate_address_not_a_user_email()
       |> repo().update()
+      |> tell_reachers()
     end
   end
 
@@ -595,6 +600,7 @@ defmodule PhoenixKitInbox.Mailboxes do
           fresh
           |> Mailbox.changeset(%{"status" => "archived"})
           |> repo().update()
+          |> tell_reachers()
       end
     end
   end
@@ -607,7 +613,33 @@ defmodule PhoenixKitInbox.Mailboxes do
       fresh
       |> Mailbox.changeset(%{"status" => "active"})
       |> repo().update()
+      |> tell_reachers()
     end
+  end
+
+  # Whoever reaches the mailbox — its owner and every grant holder — learns
+  # of a change their open pages derived something from (`AccessEvents`).
+  defp tell_reachers({:ok, %Mailbox{} = mailbox} = result) do
+    AccessEvents.mailboxes_changed(reachers(mailbox))
+    result
+  end
+
+  defp tell_reachers(error), do: error
+
+  # A mailbox just created has no grant holders yet.
+  defp tell_owner({:ok, %Mailbox{owner_uuid: owner}} = result) do
+    AccessEvents.mailboxes_changed([owner])
+    result
+  end
+
+  defp tell_owner(error), do: error
+
+  defp reachers(%Mailbox{uuid: uuid, owner_uuid: owner}) do
+    holders =
+      from(g in MailboxGrant, where: g.mailbox_uuid == ^uuid, select: g.user_uuid)
+      |> repo().all()
+
+    [owner | holders]
   end
 
   @doc "Changeset for mailbox forms."
@@ -634,15 +666,27 @@ defmodule PhoenixKitInbox.Mailboxes do
   """
   @spec handle_user_deletion(binary()) :: :ok
   def handle_user_deletion(user_uuid) when is_binary(user_uuid) do
-    repo().transaction(fn ->
-      from(m in Mailbox, where: m.owner_uuid == ^user_uuid and m.kind == "user")
-      |> repo().all()
-      |> Enum.each(&force_archive/1)
+    result =
+      repo().transaction(fn ->
+        from(m in Mailbox, where: m.owner_uuid == ^user_uuid and m.kind == "user")
+        |> repo().all()
+        |> Enum.each(&force_archive/1)
 
-      from(m in Mailbox, where: m.owner_uuid == ^user_uuid and m.kind == "shared")
-      |> repo().all()
-      |> Enum.each(&hand_over(&1, user_uuid))
-    end)
+        # Who reached each shared mailbox, read before it changes hands or
+        # is archived: their open pages are told (`AccessEvents`).
+        from(m in Mailbox, where: m.owner_uuid == ^user_uuid and m.kind == "shared")
+        |> repo().all()
+        |> Enum.flat_map(fn mailbox ->
+          reached = reachers(mailbox)
+          hand_over(mailbox, user_uuid)
+          reached
+        end)
+      end)
+
+    # After this transaction has committed: core runs `before_user_delete`
+    # hooks outside its own delete transaction, so the pages told read the
+    # new rows.
+    with {:ok, reached} <- result, do: AccessEvents.mailboxes_changed(reached)
 
     :ok
   end
@@ -734,7 +778,15 @@ defmodule PhoenixKitInbox.Mailboxes do
     with {:ok, fresh} <- authorize_scope(scope, mailbox, "admin"),
          :ok <- ensure_shared(fresh) do
       {:ok, granted_by} = scope_user_uuid(scope)
-      put_grant(fresh.uuid, user_uuid, access, granted_by)
+
+      case put_grant(fresh.uuid, user_uuid, access, granted_by) do
+        {:ok, grant} = ok ->
+          AccessEvents.mailboxes_changed([grant.user_uuid])
+          ok
+
+        error ->
+          error
+      end
     end
   end
 
@@ -771,16 +823,24 @@ defmodule PhoenixKitInbox.Mailboxes do
     with {:ok, fresh} <- authorize_scope(scope, mailbox, "admin") do
       case Ecto.UUID.cast(user_uuid) do
         {:ok, uuid} ->
-          from(g in MailboxGrant, where: g.mailbox_uuid == ^fresh.uuid and g.user_uuid == ^uuid)
-          |> repo().delete_all()
+          delete_grant(fresh.uuid, uuid)
 
         # Not a uuid, so nobody holds a grant under it.
         :error ->
           :ok
       end
-
-      :ok
     end
+  end
+
+  defp delete_grant(mailbox_uuid, user_uuid) do
+    {count, _} =
+      from(g in MailboxGrant,
+        where: g.mailbox_uuid == ^mailbox_uuid and g.user_uuid == ^user_uuid
+      )
+      |> repo().delete_all()
+
+    if count > 0, do: AccessEvents.mailboxes_changed([user_uuid])
+    :ok
   end
 
   @doc """

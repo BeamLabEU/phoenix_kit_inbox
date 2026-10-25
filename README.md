@@ -327,6 +327,8 @@ The module key is `"inbox"`. Two levels:
 1. **Module permission** — `Scope.has_module_access?(scope, "inbox")` decides who can open Inbox at all. Managed in the admin roles/permissions matrix like every other module. Two sub-permissions add capabilities, checked by the context functions with `Scope.can?/2`: `inbox.manage_shared` (create shared mailboxes, set addresses, manage shared senders and shared-mailbox signatures) and `inbox.send_external` (write to external addresses through a shared sender, including the common sender for personal mailboxes; a personal sender's owner writes externally without it).
 2. **Mailbox grants** — decide which mailboxes a user sees once inside, and what they may do there (every function that changes something takes the caller's scope and checks both gates itself). Owning a mailbox implies `"admin"` on it; everything else needs a row in `phoenix_kit_inbox_mailbox_grants`.
 
+Open pages follow changes to both without a reload: a permission change through core's scope refresh (each page exports `phoenix_kit_scope_changed/1`), a grant, archive or sender change through `PhoenixKitInbox.AccessEvents`. A mailbox the user can no longer read is closed for their personal one, a compose form keeps what was typed but falls back to a mailbox, sender and Reply-To still allowed, and the mail settings page sends a user who lost Inbox to their dashboard.
+
 Levels are ordered `read < write < admin`:
 
 | Level | Can |
