@@ -143,10 +143,10 @@ Only **members** can be addressed or suggested: by default a user any of whose r
 config :phoenix_kit_inbox, recipient_filter: {MyApp.Inbox, :addressable?}  # (user) -> boolean
 ```
 
-A recipient's in-app notification links to the message in their mailbox. A host whose readers may not open the Inbox pages sends them elsewhere, per reader (`nil` keeps the module's link; see `PhoenixKitInbox.Notify`):
+A recipient's in-app notification links to the message in their mailbox. A host whose readers may not open the Inbox pages sends them elsewhere, per reader: the function returns the path the browser opens, as given (build it with `PhoenixKit.Utils.Routes.path/2` when the app has a URL prefix or locale segments), or `nil` for the module's link. The email nudge still links to the Inbox pages, so such a host keeps nudges off; see `PhoenixKitInbox.Notify`.
 
 ```elixir
-config :phoenix_kit_inbox, notification_link: {MyApp.Inbox, :notification_link}  # (message, mailbox, reader_uuid) -> "/raw/path" | nil
+config :phoenix_kit_inbox, notification_link: {MyApp.Inbox, :notification_link}  # (message, mailbox, reader_uuid) -> "/path" | nil
 ```
 
 Each send records a snapshot of the sender and recipients in the message's `metadata` and one permanent `inbox.message_sent` activity (counts only).

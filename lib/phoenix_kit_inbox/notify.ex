@@ -16,10 +16,15 @@ defmodule PhoenixKitInbox.Notify do
       config :phoenix_kit_inbox, notification_link: {MyApp.Inbox, :notification_link}
 
   The function gets the `%Message{}`, the recipient `%Mailbox{}` and the
-  reader's user uuid, once per reader, and returns a raw path (`"/portal/..."`,
-  unprefixed: core prefixes stored links itself) or `nil` for the module's
-  own link. Anything else, or a function that raises, keeps the module's
-  link. The email nudge is not affected.
+  reader's user uuid, once per reader, and returns the path the reader's
+  browser opens — stored and followed as given, so a host with a URL prefix
+  or locale segments builds it with `PhoenixKit.Utils.Routes.path/2` — or
+  `nil` for the module's own link. Anything that is not a path on this site
+  (`"/..."`, not `"//..."`, no control characters), or a function that
+  raises, exits or throws, keeps the module's link.
+
+  The email nudge still links to the Inbox pages: a host with such readers
+  keeps nudges off.
 
   ## The email nudge
 
@@ -164,8 +169,6 @@ defmodule PhoenixKitInbox.Notify do
           "sender_mailbox" => sender.name,
           "notification_text" => notification_text(message, sender, locale),
           "notification_icon" => "hero-envelope",
-          # Raw path on purpose — core prefixes stored notification links
-          # itself, and a pre-prefixed one comes out doubled.
           "notification_link" => notification_link(message, recipient_mailbox, target_uuid)
         }
       })
@@ -178,8 +181,8 @@ defmodule PhoenixKitInbox.Notify do
 
   # Where the reader's notification leads: the message in the mailbox, or
   # where the host's `:notification_link` sends this reader. Anything but a
-  # raw path keeps the module's link, and so does a hook that fails — the
-  # notification itself must still be written.
+  # path on this site keeps the module's link, and so does a hook that fails —
+  # the notification itself must still be written.
   defp notification_link(message, recipient_mailbox, reader_uuid) do
     default = Paths.raw_message_path(recipient_mailbox.uuid, message.uuid)
 
@@ -194,24 +197,39 @@ defmodule PhoenixKitInbox.Notify do
 
   defp host_link(mod, fun, args, default) do
     case apply(mod, fun, args) do
-      "/" <> rest = path when rest == "" or binary_part(rest, 0, 1) not in ["/", "\\"] -> path
-      _ -> default
-    end
-  rescue
-    e ->
-      Logger.warning(
-        "[Inbox] notification_link raised, keeping the module's link: #{Exception.message(e)}"
-      )
+      nil ->
+        default
 
-      default
+      answer ->
+        if local_path?(answer) do
+          answer
+        else
+          Logger.warning(
+            "[Inbox] notification_link answered no path on this site, keeping the module's link: " <>
+              inspect(answer, printable_limit: 200)
+          )
+
+          default
+        end
+    end
   catch
-    :exit, reason ->
+    kind, reason ->
       Logger.warning(
-        "[Inbox] notification_link exited, keeping the module's link: #{inspect(reason)}"
+        "[Inbox] notification_link failed, keeping the module's link: " <>
+          Exception.format_banner(kind, reason)
       )
 
       default
   end
+
+  # A path on this site: a browser opens "//host", "/\\host" and a path with
+  # a tab or newline after the slash as another site's address.
+  defp local_path?("/" <> rest) when is_binary(rest) do
+    not String.starts_with?(rest, ["/", "\\"]) and
+      not String.match?(rest, ~r/[\x00-\x1f\x7f]/)
+  end
+
+  defp local_path?(_answer), do: false
 
   # Stored with the notification, so it is rendered once, in the language of
   # the person it is for — not of whoever happens to be sending.

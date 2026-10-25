@@ -8,7 +8,7 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
 
   use PhoenixKitInbox.DataCase, async: false
 
-  import ExUnit.CaptureLog
+  import ExUnit.CaptureLog, only: [with_log: 1]
 
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
@@ -33,6 +33,7 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
 
     def broken(_message, _mailbox, _reader_uuid), do: raise("link blew up")
     def exits(_message, _mailbox, _reader_uuid), do: exit(:gone)
+    def throws(_message, _mailbox, _reader_uuid), do: throw(:gone)
   end
 
   setup do
@@ -117,18 +118,24 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
            }
   end
 
-  test "an answer that is no raw path keeps the module's link", ctx do
+  test "an answer that is no path on this site keeps the module's link", ctx do
     for answer <- [
           nil,
           :default,
           "",
           "portal/letters",
           "//evil.example/x",
+          "/\\evil.example/x",
+          "/\t/evil.example/x",
+          "/\n/evil.example/x",
+          "/portal\r\nletters",
           "https://evil.example/x",
           42
         ] do
       hook(:link, answer)
-      message = send_to_bob(ctx)
+      {message, log} = with_log(fn -> send_to_bob(ctx) end)
+
+      if answer, do: assert(log =~ "notification_link"), else: assert(log == "")
 
       assert links(message.uuid) == %{
                ctx.bob.uuid => Paths.raw_message_path(ctx.bob_mb.uuid, message.uuid)
@@ -137,17 +144,12 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
     end
   end
 
-  test "a hook that raises or exits keeps the module's link and the message", ctx do
-    for fun <- [:broken, :exits] do
+  test "a hook that raises, exits or throws keeps the module's link and the message", ctx do
+    for fun <- [:broken, :exits, :throws] do
       Application.put_env(:phoenix_kit_inbox, :notification_link, {Links, fun})
 
-      log =
-        capture_log(fn ->
-          message = send_to_bob(ctx)
-          send(self(), {:sent, message})
-        end)
+      {message, log} = with_log(fn -> send_to_bob(ctx) end)
 
-      assert_received {:sent, message}
       assert log =~ "notification_link"
 
       assert links(message.uuid) == %{
