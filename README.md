@@ -273,7 +273,7 @@ Every file becomes a **snapshot** in the module's hidden Storage library (slug `
 
 "Attach existing file" is core's media picker, limited to the user's own Media files (`UserMediaSelectorModal`); a system role (Owner, Admin) browses the whole library. Each pick is still checked, and a refused file is named only when the user may read it. A file uploaded *inside* the picker lands in Media first (as the picker does everywhere) and is snapshotted at send.
 
-**Requires** a PhoenixKit core with hidden system libraries (core #949) and `Storage.store_file_in_buckets/7` `dedup: false` — the first release after 2.63.0. On an older core every attachment is refused with `{:error, :storage_unsupported}` (logged); messages without attachments work as before.
+**Requires** a PhoenixKit core with hidden system libraries (core #949) and `Storage.store_file_in_buckets/7` `dedup: false` — core 2.64.0 or later, which `mix.exs` requires. On an older core every attachment is refused with `{:error, :storage_unsupported}` (logged); messages without attachments work as before.
 
 Downloads go through the module's own route, `GET /admin/inbox/files/:attachment_uuid` (`route_module/0`), behind core's admin pipeline: the sender and anyone holding a non-deleted copy of the message get the file as a download, everyone else a 404.
 
