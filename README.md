@@ -143,6 +143,12 @@ Only **members** can be addressed or suggested: by default a user any of whose r
 config :phoenix_kit_inbox, recipient_filter: {MyApp.Inbox, :addressable?}  # (user) -> boolean
 ```
 
+A recipient's in-app notification links to the message in their mailbox. A host whose readers may not open the Inbox pages sends them elsewhere, per reader (`nil` keeps the module's link; see `PhoenixKitInbox.Notify`):
+
+```elixir
+config :phoenix_kit_inbox, notification_link: {MyApp.Inbox, :notification_link}  # (message, mailbox, reader_uuid) -> "/raw/path" | nil
+```
+
 Each send records a snapshot of the sender and recipients in the message's `metadata` and one permanent `inbox.message_sent` activity (counts only).
 
 A message may name a sending identity and a Reply-To; both are checked against the sender's scope and the sending mailbox, and recorded in `metadata["identity"]` / `metadata["reply_to"]` (a caller's `metadata` can't set them). Nothing leaves the application because of them yet:

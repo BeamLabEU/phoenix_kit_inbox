@@ -7,6 +7,20 @@ defmodule PhoenixKitInbox.Notify do
   unsend a message that is already committed, so every function rescues, logs,
   and returns. Callers ignore the return value.
 
+  ## Where a notification leads
+
+  A reader's in-app notification links to the message in their mailbox. A host
+  whose readers may not open the Inbox pages (a client portal, say) sends them
+  elsewhere:
+
+      config :phoenix_kit_inbox, notification_link: {MyApp.Inbox, :notification_link}
+
+  The function gets the `%Message{}`, the recipient `%Mailbox{}` and the
+  reader's user uuid, once per reader, and returns a raw path (`"/portal/..."`,
+  unprefixed: core prefixes stored links itself) or `nil` for the module's
+  own link. Anything else, or a function that raises, keeps the module's
+  link. The email nudge is not affected.
+
   ## The email nudge
 
   Inbox is an internal messaging system: messages live in this app's tables and
@@ -152,7 +166,7 @@ defmodule PhoenixKitInbox.Notify do
           "notification_icon" => "hero-envelope",
           # Raw path on purpose — core prefixes stored notification links
           # itself, and a pre-prefixed one comes out doubled.
-          "notification_link" => Paths.raw_message_path(recipient_mailbox.uuid, message.uuid)
+          "notification_link" => notification_link(message, recipient_mailbox, target_uuid)
         }
       })
     end
@@ -160,6 +174,43 @@ defmodule PhoenixKitInbox.Notify do
     e ->
       Logger.warning("[Inbox] activity logging failed: #{Exception.message(e)}")
       :error
+  end
+
+  # Where the reader's notification leads: the message in the mailbox, or
+  # where the host's `:notification_link` sends this reader. Anything but a
+  # raw path keeps the module's link, and so does a hook that fails — the
+  # notification itself must still be written.
+  defp notification_link(message, recipient_mailbox, reader_uuid) do
+    default = Paths.raw_message_path(recipient_mailbox.uuid, message.uuid)
+
+    case Application.get_env(:phoenix_kit_inbox, :notification_link) do
+      {mod, fun} when is_atom(mod) and is_atom(fun) ->
+        host_link(mod, fun, [message, recipient_mailbox, reader_uuid], default)
+
+      _ ->
+        default
+    end
+  end
+
+  defp host_link(mod, fun, args, default) do
+    case apply(mod, fun, args) do
+      "/" <> rest = path when rest == "" or binary_part(rest, 0, 1) not in ["/", "\\"] -> path
+      _ -> default
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Inbox] notification_link raised, keeping the module's link: #{Exception.message(e)}"
+      )
+
+      default
+  catch
+    :exit, reason ->
+      Logger.warning(
+        "[Inbox] notification_link exited, keeping the module's link: #{inspect(reason)}"
+      )
+
+      default
   end
 
   # Stored with the notification, so it is rendered once, in the language of
