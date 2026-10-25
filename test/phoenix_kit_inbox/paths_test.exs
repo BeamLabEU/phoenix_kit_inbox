@@ -41,6 +41,10 @@ defmodule PhoenixKitInbox.PathsTest do
     assert Paths.mailboxes() =~ "/admin/inbox/mailboxes"
   end
 
+  test "dashboard/0 points at core's user dashboard" do
+    assert Paths.dashboard() =~ "/dashboard"
+  end
+
   test "raw_message_path is deliberately unprefixed for notification links" do
     path = Paths.raw_message_path("mb-1", "msg-1")
 

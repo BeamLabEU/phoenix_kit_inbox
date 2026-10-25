@@ -246,6 +246,10 @@ defmodule PhoenixKitInbox.External do
   @spec subscribe(binary()) :: :ok | {:error, term()}
   def subscribe(mailbox_uuid), do: PubSub.subscribe(topic(mailbox_uuid))
 
+  @doc "Stops `subscribe/1`'s updates for `mailbox_uuid`."
+  @spec unsubscribe(binary()) :: :ok
+  def unsubscribe(mailbox_uuid), do: PubSub.unsubscribe(topic(mailbox_uuid))
+
   defp topic(mailbox_uuid), do: "phoenix_kit_inbox:external:#{mailbox_uuid}"
 
   defp broadcast(message) do

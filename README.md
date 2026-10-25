@@ -273,7 +273,7 @@ Every file becomes a **snapshot** in the module's hidden Storage library (slug `
 
 "Attach existing file" is core's media picker, limited to the user's own Media files (`UserMediaSelectorModal`); a system role (Owner, Admin) browses the whole library. Each pick is still checked, and a refused file is named only when the user may read it. A file uploaded *inside* the picker lands in Media first (as the picker does everywhere) and is snapshotted at send.
 
-**Requires** a PhoenixKit core with hidden system libraries (core #949) and `Storage.store_file_in_buckets/7` `dedup: false` — the first release after 2.63.0. On an older core every attachment is refused with `{:error, :storage_unsupported}` (logged); messages without attachments work as before.
+**Requires** a PhoenixKit core with hidden system libraries (core #949) and `Storage.store_file_in_buckets/7` `dedup: false` — core 2.64.0 or later, which `mix.exs` requires. On an older core every attachment is refused with `{:error, :storage_unsupported}` (logged); messages without attachments work as before.
 
 Downloads go through the module's own route, `GET /admin/inbox/files/:attachment_uuid` (`route_module/0`), behind core's admin pipeline: the sender and anyone holding a non-deleted copy of the message get the file as a download, everyone else a 404.
 
@@ -284,9 +284,9 @@ config :phoenix_kit_inbox, attachment_policy: {MyApp.Inbox, :check_attachments}
 # (scope, users, attachment_rows) -> :ok | {:error, reason}
 ```
 
-It is asked on every send and forward carrying attachments about everyone who will be able to read them (the users of the To/Cc/Bcc mailboxes, the owner and grantees of every shared mailbox involved — the sending one included — and the sender too unless every file is a snapshot they created themselves), on a draft save about that mailbox's readers (and its author, by the same rule), and at every download about the viewer alone unless the viewer created the snapshot — so a reader granted a mailbox later is covered, and a forward or a draft cannot pass a file on to someone the policy refuses. Anything but `:ok`, a raise included, refuses; at download that is a 404.
+It is asked on every send and forward carrying attachments about everyone who will be able to read them (the users of the To/Cc/Bcc mailboxes, the owner and grantees of every shared mailbox involved — the sending one included — and the sender too unless every file is a snapshot they created themselves), on a draft save about that mailbox's readers (and its author, by the same rule), and at every download about the viewer alone unless the viewer created the snapshot — so a reader granted a mailbox later is covered, and a forward or a draft cannot pass a file on to someone the policy refuses. Anything but `:ok`, a raise included, refuses; at download that is a 404. The reading pane and compose (a forward, a draft) ask it the same way, per file, and show a refused file as "Attachment not available" — no name, no size, no link (`Attachments.list_for_viewer/2`); without a policy nothing extra is asked.
 
-Snapshots are stored before the message's transaction and deleted if it rolls back. A process killed between the two leaves its snapshots in the library with nothing naming them (Storage's orphan cleanup skips hidden libraries), and rolling back to before V03 drops the attachment rows but not the snapshots; neither is swept by the module yet.
+Snapshots are stored before the message's transaction and deleted if it rolls back, raises or exits. Compose sends and saves in a task, so the page stays responsive while files are copied; a failure leaves the text, the uploads and the attachments in the form, and leaving the page does not stop a send that is under way (unless the module's task supervisor is not running: then the send runs with the page and stops with it). A process killed after storing the snapshots and before the commit leaves its snapshots in the library with nothing naming them (Storage's orphan cleanup skips hidden libraries), and rolling back to before V03 drops the attachment rows but not the snapshots; neither is swept by the module yet.
 
 The older `send_message(from_mailbox, sender_user_uuid, attrs)` form refuses attachments with `{:error, :attachments_need_scope}`.
 
@@ -326,6 +326,8 @@ The module key is `"inbox"`. Two levels:
 
 1. **Module permission** — `Scope.has_module_access?(scope, "inbox")` decides who can open Inbox at all. Managed in the admin roles/permissions matrix like every other module. Two sub-permissions add capabilities, checked by the context functions with `Scope.can?/2`: `inbox.manage_shared` (create shared mailboxes, set addresses, manage shared senders and shared-mailbox signatures) and `inbox.send_external` (write to external addresses through a shared sender, including the common sender for personal mailboxes; a personal sender's owner writes externally without it).
 2. **Mailbox grants** — decide which mailboxes a user sees once inside, and what they may do there (every function that changes something takes the caller's scope and checks both gates itself). Owning a mailbox implies `"admin"` on it; everything else needs a row in `phoenix_kit_inbox_mailbox_grants`.
+
+Open pages follow changes to both without a reload: a permission change through core's scope refresh (each page exports `phoenix_kit_scope_changed/1`), a grant, archive or sender change through `PhoenixKitInbox.AccessEvents`. A mailbox the user can no longer read is closed for their personal one, a compose form keeps what was typed but falls back to a mailbox, sender and Reply-To still allowed, and the mail settings page sends a user who lost Inbox to their dashboard.
 
 Levels are ordered `read < write < admin`:
 

@@ -85,7 +85,7 @@ defmodule PhoenixKitInbox.MixProject do
       # with everything used here: sub_permissions and Scope.can?/2 (1.7.194),
       # the before_user_delete/1 callback (2.4.0), Activity.log permanent:
       # (2.16.0).
-      pk_dep(:phoenix_kit, "~> 2.16"),
+      pk_dep(:phoenix_kit, "~> 2.64"),
 
       # The module's own Gettext backend and its catalogues under priv/gettext.
       {:gettext, "~> 1.0"},

@@ -22,22 +22,40 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Paths
   alias PhoenixKitInbox.Web.IdentityEditor
+  alias PhoenixKitInbox.Web.ScopeRefresh
 
   @impl true
   def mount(_params, _session, socket) do
-    scope = socket.assigns[:phoenix_kit_current_scope]
-    module_access = Scope.can?(scope, "inbox")
-    manage = module_access && Mailboxes.can_manage_shared?(scope)
-
     socket =
       socket
       |> assign(:page_title, gettext("Mail"))
-      |> assign(:scope, scope)
-      |> assign(:module_access, module_access)
-      |> assign(:can_manage_shared, manage)
-      |> load(manage)
+      |> ScopeRefresh.assign_scope()
+      |> assign_gates()
 
-    {:ok, socket}
+    {:ok, load(socket, socket.assigns.can_manage_shared)}
+  end
+
+  @doc false
+  # Core's scope refresh: the scope changed under the page. The editor is
+  # loaded again when the gate changed; while it holds, an open form stays —
+  # every write checks the new scope anyway.
+  def phoenix_kit_scope_changed(socket) do
+    manage = socket.assigns.can_manage_shared
+    socket = socket |> ScopeRefresh.assign_scope() |> assign_gates()
+
+    case socket.assigns.can_manage_shared do
+      ^manage -> socket
+      now -> load(socket, now)
+    end
+  end
+
+  defp assign_gates(socket) do
+    scope = socket.assigns.scope
+    module_access = Scope.can?(scope, "inbox")
+
+    socket
+    |> assign(:module_access, module_access)
+    |> assign(:can_manage_shared, module_access && Mailboxes.can_manage_shared?(scope))
   end
 
   defp load(socket, false) do

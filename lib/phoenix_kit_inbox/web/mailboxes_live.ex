@@ -26,6 +26,11 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
   signatures; it is offered on an active mailbox the viewer administers
   when they hold `inbox.manage_shared` too — what `PhoenixKitInbox.Signatures`
   checks on every write.
+
+  The page follows access changes while open — core's scope refresh
+  (`phoenix_kit_scope_changed/1`) and Inbox's own access events
+  (`PhoenixKitInbox.AccessEvents`): the list is read again, and an open
+  Access or Signatures panel the viewer may no longer use is closed.
   """
 
   use PhoenixKitWeb, :live_view
@@ -37,21 +42,17 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
   alias PhoenixKitInbox.Paths
   alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Signatures
+  alias PhoenixKitInbox.Web.ScopeRefresh
   alias PhoenixKitInbox.Web.SignatureEditor
 
   @impl true
   def mount(_params, _session, socket) do
-    scope = socket.assigns[:phoenix_kit_current_scope]
-    user = socket.assigns[:phoenix_kit_current_user]
-
     socket =
       socket
       |> assign(:page_title, gettext("Mailboxes"))
       |> assign(:page_subtitle, gettext("Shared mailboxes and who can use them"))
-      |> assign(:module_access, Scope.can?(scope, "inbox"))
-      |> assign(:scope, scope)
-      |> assign(:can_manage_shared, Mailboxes.can_manage_shared?(scope))
-      |> assign(:current_user, user)
+      |> ScopeRefresh.assign_scope()
+      |> assign_gates()
       |> assign(:form, to_form(Mailboxes.change_mailbox(%Mailbox{})))
       |> assign(:expanded, nil)
       |> assign(:grants, [])
@@ -59,9 +60,63 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
       |> assign(:grant_form, grant_form(""))
       |> SignatureEditor.assign_editor(nil)
       |> load_mailboxes()
+      |> ScopeRefresh.subscribe([:user])
 
     {:ok, socket}
   end
+
+  @doc false
+  # Core's scope refresh: the scope changed under the page.
+  def phoenix_kit_scope_changed(socket) do
+    socket
+    |> ScopeRefresh.assign_scope()
+    |> refresh_access()
+  end
+
+  defp assign_gates(socket) do
+    scope = socket.assigns.scope
+
+    socket
+    |> assign(:module_access, Scope.can?(scope, "inbox"))
+    |> assign(:can_manage_shared, Mailboxes.can_manage_shared?(scope))
+  end
+
+  # The gates and the list again; the open panels only while the viewer may
+  # still use them — the same checks their events run (`admin_of?/2`,
+  # `signing_mailbox/2`).
+  defp refresh_access(socket) do
+    socket
+    |> assign_gates()
+    |> load_mailboxes()
+    |> recheck_grants_panel()
+    |> recheck_signatures_panel()
+    |> recheck_create_form()
+  end
+
+  defp recheck_grants_panel(%{assigns: %{expanded: nil}} = socket), do: socket
+
+  defp recheck_grants_panel(%{assigns: %{expanded: uuid}} = socket) do
+    if admin_of?(socket, uuid),
+      do: assign(socket, :grants, Mailboxes.list_grant_holders(uuid)),
+      else: assign(socket, expanded: nil, grants: [], candidates: [])
+  end
+
+  defp recheck_signatures_panel(%{assigns: %{sig_mailbox: %{uuid: uuid}}} = socket) do
+    if signing_mailbox(socket, uuid),
+      do: socket,
+      else: SignatureEditor.assign_editor(socket, nil)
+  end
+
+  defp recheck_signatures_panel(socket), do: socket
+
+  defp recheck_create_form(%{assigns: %{can_manage_shared: true}} = socket), do: socket
+
+  defp recheck_create_form(socket),
+    do: assign(socket, :form, to_form(Mailboxes.change_mailbox(%Mailbox{})))
+
+  # Without Inbox there is nothing to list.
+  defp load_mailboxes(%{assigns: %{module_access: access}} = socket) when access != true,
+    do: assign(socket, :mailboxes, [])
 
   defp load_mailboxes(socket) do
     user_uuid = user_uuid(socket)
@@ -186,6 +241,12 @@ defmodule PhoenixKitInbox.Web.MailboxesLive do
       {:error, reason} -> {:noreply, put_flash(socket, :error, Errors.message(reason))}
     end
   end
+
+  @impl true
+  def handle_info({:inbox_access_changed, _what}, socket),
+    do: {:noreply, refresh_access(socket)}
+
+  def handle_info(_message, socket), do: {:noreply, socket}
 
   defp admin_of?(socket, uuid) do
     match?(

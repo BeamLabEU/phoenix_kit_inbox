@@ -18,23 +18,27 @@ defmodule PhoenixKitInbox.Attachments do
   ## How a file gets into a message
 
   Everything is a **snapshot** in the Inbox library, so what was sent does not
-  change when the file it came from is later edited, replaced or deleted:
+  change when the file it came from is later edited, replaced or deleted.
+  Six ways in:
 
     1. an upload in compose stays in the LiveView's temporary upload until the
-       draft is saved or the message sent, and is then stored as the sender's
-       bytes (`attachments_data:`) — nothing reaches Storage before that. A
-       file of the Inbox library the sender stored this way (a saved draft's
-       snapshot) is attached again as it is, without a copy;
-    2. an existing Storage file named in the form's `"attachments"` is copied,
-       if the sender may read it (`Libraries.can?(scope, file, :read)`);
-    3. a file the host checked itself is copied when its uuid comes in the
+       draft is saved or the message sent, and is then handed over as the
+       sender's bytes — way 5, `attachments_data:` — so nothing reaches
+       Storage before that;
+    2. a file of the Inbox library the sender stored (a saved draft's
+       snapshot, their upload) named in the form's `"attachments"` is
+       attached again as it is, without a copy;
+    3. any other Storage file named there is copied, if the sender may read
+       it (`Libraries.can?(scope, file, :read)`) and it is not another
+       module's hidden file;
+    4. a file the host checked itself is copied when its uuid comes in the
        server-side `attachments_authorized:` option — never from the form;
-    4. bytes the host made (`attachments_data:`) are stored as they are;
-    5. a file already attached to a message the sender sent, or still holds
-       a copy of (a non-deleted delivery in a mailbox they can read), is
-       forwarded as the same snapshot, flags and all.
+    5. bytes the host made (`attachments_data:`) are stored as they are;
+    6. a file already attached to a sent message the sender sent, or still
+       holds a copy of (a non-deleted delivery in a mailbox they can read),
+       is forwarded as the same snapshot, flags and all.
 
-  A file in the trash or a system-managed one is refused in paths 2 and 3
+  A file in the trash or a system-managed one is refused in ways 3 and 4
   (`{:error, {:attachment_unavailable, uuid}}`); anything else that does not
   qualify is `{:error, {:attachment_forbidden, uuid}}`.
 
@@ -49,12 +53,12 @@ defmodule PhoenixKitInbox.Attachments do
 
   Snapshots are stored *before* the message transaction (Storage takes a
   directory lock for each, which must not be held across the send) and are
-  deleted again if the transaction rolls back. A process that dies between
-  storing the snapshots and the commit leaves them in the library with no
-  row naming them, and Storage's orphan cleanup skips hidden libraries — a
-  sweep of unnamed Inbox-library files would reclaim them (not part of this
-  module yet). Rolling back to before V03 drops the attachment rows and
-  leaves every snapshot in the library. Snapshots of a sent message
+  deleted again if the transaction rolls back, raises or exits. A process
+  killed between storing the snapshots and the commit leaves them in the
+  library with no row naming them, and Storage's orphan cleanup skips hidden
+  libraries — a sweep of unnamed Inbox-library files would reclaim them (not
+  part of this module yet). Rolling back to before V03 drops the attachment
+  rows and leaves every snapshot in the library. Snapshots of a sent message
   are never deleted — sent messages are permanent; a discarded draft takes
   its snapshots with it unless another row still names them.
 
@@ -77,7 +81,9 @@ defmodule PhoenixKitInbox.Attachments do
   its mailbox's readers. At download it is asked again for the viewer
   alone, unless the viewer created the snapshot, so a reader granted a
   mailbox later is covered and a forward or a draft cannot launder a file;
-  a refusal there is a 404. One policy call per download.
+  a refusal there is a 404. One policy call per download. The reading pane
+  and compose's chips ask it the same way, per row (`list_for_viewer/2`),
+  and show a refused row without its name or size.
   It is called before any snapshot is stored, so a row about to be copied
   has no `file_uuid` yet. `:ok` lets the send go ahead; `{:error, reason}`
   refuses it with `{:error, {:attachment_refused, reason}}`; a raise or any
@@ -147,18 +153,26 @@ defmodule PhoenixKitInbox.Attachments do
 
   # Optional core APIs must also remain optional at compile time.
   # credo:disable-for-next-line Credo.Check.Refactor.Apply
-  defp hidden_library, do: apply(Libraries, :get_hidden_library_by_slug, [@library_slug])
+  defp hidden_library, do: apply(libraries(), :get_hidden_library_by_slug, [@library_slug])
 
   # The hidden-library API arrived with `dedup: false` in the same core
   # release; an older core has neither.
   defp hidden_libraries? do
-    Code.ensure_loaded?(Libraries) and
-      function_exported?(Libraries, :get_hidden_library_by_slug, 1)
+    libraries = libraries()
+
+    Code.ensure_loaded?(libraries) and
+      function_exported?(libraries, :get_hidden_library_by_slug, 1)
   end
+
+  # Test seams, unset in production: `:storage_libraries` stands in for
+  # core's hidden-library API (`Storage.Libraries`; a module without it is an
+  # older core), `:storage_module` for `Storage.store_file_in_buckets/7`.
+  defp libraries, do: Application.get_env(:phoenix_kit_inbox, :storage_libraries, Libraries)
+  defp storage, do: Application.get_env(:phoenix_kit_inbox, :storage_module, Storage)
 
   defp create_library do
     # credo:disable-for-next-line Credo.Check.Refactor.Apply
-    case apply(Libraries, :create_system_library, [
+    case apply(libraries(), :create_system_library, [
            %{"name" => @library_name, "slug" => @library_slug},
            [hidden: true]
          ]) do
@@ -220,6 +234,66 @@ defmodule PhoenixKitInbox.Attachments do
   end
 
   def list_for_message(_), do: []
+
+  @doc """
+  A message's attachments as the scope's user may see them, in order:
+  `{:ok, row}` for one they may download, `{:withheld, row}` for one the
+  host's `attachment_policy` refuses them — the same decision as at download
+  (`fetch_for_download/2`), so the row comes without its filename, type,
+  size and flags. For the reading pane and compose's chips; the caller has
+  already checked that the user may read the message.
+
+  Without a policy configured this is `list_for_message/1`'s one query.
+  """
+  @spec list_for_viewer(Scope.t() | nil, binary()) ::
+          [{:ok, Attachment.t()} | {:withheld, Attachment.t()}]
+  def list_for_viewer(scope, message_uuid) do
+    case {list_for_message(message_uuid), policy()} do
+      {rows, nil} -> Enum.map(rows, &{:ok, &1})
+      {[], _policy} -> []
+      {rows, _policy} -> judge_rows(scope, rows)
+    end
+  end
+
+  defp judge_rows(scope, rows) do
+    with {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope),
+         %User{} = viewer <- repo().get(User, user_uuid) do
+      created = created_by(Enum.map(rows, &to_string(&1.file_uuid)), user_uuid)
+      Enum.map(rows, &judge_row(scope, viewer, created, &1))
+    else
+      _ -> Enum.map(rows, &{:withheld, withhold(&1)})
+    end
+  end
+
+  # As download_policy/3 decides: the snapshot's creator is not asked.
+  defp judge_row(scope, viewer, created, row) do
+    if MapSet.member?(created, to_string(row.file_uuid)) or
+         ask_policy(scope, [viewer], [row]) == :ok,
+       do: {:ok, row},
+       else: {:withheld, withhold(row)}
+  end
+
+  # What a withheld row may still show: that it is there, and where.
+  defp withhold(%Attachment{} = row) do
+    %Attachment{
+      uuid: row.uuid,
+      message_uuid: row.message_uuid,
+      file_uuid: row.file_uuid,
+      position: row.position,
+      size_bytes: nil,
+      flags: nil
+    }
+  end
+
+  # The files among `file_uuids` the user created (their upload or copy).
+  defp created_by(file_uuids, user_uuid) do
+    from(f in Storage.File,
+      where: f.uuid in ^file_uuids and f.user_uuid == ^user_uuid,
+      select: f.uuid
+    )
+    |> repo().all()
+    |> MapSet.new(&to_string/1)
+  end
 
   @doc """
   The attachment `attachment_uuid` if `scope` may download it, else
@@ -314,8 +388,8 @@ defmodule PhoenixKitInbox.Attachments do
   Whether `scope` may attach the Storage file `file_uuid`, checked exactly
   as a send would check it, and what a compose chip shows for it:
   `{:ok, %{file_uuid: uuid_to_submit, filename: name, size_bytes: size}}`.
-  For the media picker, which lists files without regard to who may read
-  them.
+  For the media picker's choices: the uuids come back from the browser, so
+  each is checked again here. Needs the `"inbox"` permission.
   """
   @spec describe(Scope.t(), term()) :: {:ok, map()} | {:error, term()}
   def describe(%Scope{} = scope, file_uuid) do
@@ -412,8 +486,8 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
-  # A file already in the Inbox library: one the sender may forward (path
-  # 5), or their own upload (path 1). Nothing else, whoever's it is.
+  # A file already in the Inbox library: one the sender may forward (way 6),
+  # or their own snapshot (way 2). Nothing else, whoever's it is.
   defp inbox_item(file, context) do
     uuid = to_string(file.uuid)
 
@@ -429,7 +503,7 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
-  # Path 2: someone's Storage file, if the sender may read it.
+  # Way 3: someone's Storage file, if the sender may read it.
   defp readable_item(file, context) do
     uuid = to_string(file.uuid)
 
@@ -445,10 +519,10 @@ defmodule PhoenixKitInbox.Attachments do
 
   defp other_hidden_library?(file) do
     # credo:disable-for-next-line Credo.Check.Refactor.Apply
-    hidden_libraries?() and apply(Libraries, :hidden?, [to_string(file.library_uuid)])
+    hidden_libraries?() and apply(libraries(), :hidden?, [to_string(file.library_uuid)])
   end
 
-  # Path 3: the host vouched for these; only the state of the file is checked.
+  # Way 4: the host vouched for these; only the state of the file is checked.
   defp authorized_items(uuids, context) when is_list(uuids),
     do: collect(uuids, &authorized_item(&1, context))
 
@@ -470,7 +544,7 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
-  # Path 4: bytes from the host.
+  # Way 5: bytes from the host — compose's uploads (way 1) among them.
   defp data_items(entries) when is_list(entries) do
     collect(entries, fn entry ->
       entry = Map.new(entry, fn {k, v} -> {to_string(k), v} end)
@@ -706,8 +780,10 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
+  defp policy, do: Application.get_env(:phoenix_kit_inbox, :attachment_policy)
+
   defp ask_policy(scope, users, rows) do
-    case Application.get_env(:phoenix_kit_inbox, :attachment_policy) do
+    case policy() do
       nil -> :ok
       {mod, fun} when is_atom(mod) and is_atom(fun) -> ask(mod, fun, scope, users, rows)
       other -> {:error, {:attachment_refused, {:invalid_policy, other}}}
@@ -766,8 +842,9 @@ defmodule PhoenixKitInbox.Attachments do
   @doc false
   # Stores every planned snapshot in the Inbox library, outside any
   # transaction. Returns the items with their `file_uuid` and the uuids it
-  # created (to delete if the send then fails); on failure deletes what it
-  # made and returns the error.
+  # created (to delete if the send then fails); on failure — an error, a
+  # raise or an exit — deletes what it made, then returns the error or
+  # raises again.
   @spec store_snapshots([map()], binary()) :: {:ok, [map()], [binary()]} | {:error, term()}
   def store_snapshots(items, user_uuid) do
     if Enum.any?(items, &(&1.mode == :snapshot)) do
@@ -783,7 +860,7 @@ defmodule PhoenixKitInbox.Attachments do
     items
     |> Enum.reduce_while({:ok, [], []}, fn
       %{mode: :snapshot} = item, {:ok, acc, created} ->
-        case snapshot(item, user_uuid, library_uuid) do
+        case snapshot_or_discard(item, user_uuid, library_uuid, created) do
           {:ok, file} ->
             uuid = to_string(file.uuid)
             {:cont, {:ok, [%{item | file_uuid: uuid} | acc], [uuid | created]}}
@@ -805,12 +882,28 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
+  # The snapshots made so far are named by nothing yet: a raise or an exit
+  # here must not leave them behind.
+  defp snapshot_or_discard(item, user_uuid, library_uuid, created) do
+    snapshot(item, user_uuid, library_uuid)
+  rescue
+    e ->
+      discard_snapshots(created)
+      reraise e, __STACKTRACE__
+  catch
+    kind, reason ->
+      discard_snapshots(created)
+      :erlang.raise(kind, reason, __STACKTRACE__)
+  end
+
   defp snapshot(%{source: {:file, file}} = item, user_uuid, library_uuid) do
     case Storage.retrieve_file(file.uuid) do
       {:ok, temp, _file} ->
-        result = store_snapshot(temp, item.filename, item.content_type, user_uuid, library_uuid)
-        File.rm(temp)
-        result
+        try do
+          store_snapshot(temp, item.filename, item.content_type, user_uuid, library_uuid)
+        after
+          File.rm(temp)
+        end
 
       {:error, reason} ->
         Logger.warning("[Inbox] could not read #{file.uuid} to attach it: #{inspect(reason)}")
@@ -838,8 +931,8 @@ defmodule PhoenixKitInbox.Attachments do
     ext = filename |> Path.extname() |> String.trim_leading(".") |> String.downcase()
     mime = content_type || MIME.from_path(filename)
 
-    path
-    |> Storage.store_file_in_buckets(
+    storage().store_file_in_buckets(
+      path,
       Storage.determine_file_type(mime, filename),
       user_uuid,
       Auth.calculate_file_hash(path),
@@ -932,7 +1025,8 @@ defmodule PhoenixKitInbox.Attachments do
 
   @doc false
   # Deletes each of `file_uuids` that is an Inbox-library file no attachment
-  # row names any more. Best-effort, after the transaction.
+  # row names any more. Best-effort, after the transaction: a failure is
+  # logged, never raised — what was committed must not fail with it.
   @spec release([binary()]) :: :ok
   def release([]), do: :ok
 
@@ -948,6 +1042,14 @@ defmodule PhoenixKitInbox.Attachments do
     for uuid <- file_uuids, not MapSet.member?(named, uuid), do: delete_snapshot(uuid, library)
 
     :ok
+  rescue
+    e ->
+      Logger.warning("[Inbox] could not release snapshots: #{Exception.message(e)}")
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning("[Inbox] could not release snapshots (#{kind}): #{inspect(reason)}")
+      :ok
   end
 
   # Only ever a file of the Inbox library.

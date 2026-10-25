@@ -147,4 +147,6 @@ if repo_available do
   {:ok, _} = PhoenixKitInbox.Test.Endpoint.start_link()
 end
 
-ExUnit.start(exclude: exclude)
+# Sends and draft saves run in a task: render_async/assert_redirect wait for
+# it with this timeout, which the default 100 ms leaves too little room for.
+ExUnit.start(exclude: exclude, assert_receive_timeout: 1_000)

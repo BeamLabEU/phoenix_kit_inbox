@@ -58,7 +58,8 @@ defmodule PhoenixKitInbox.Web.I18nTest do
     assert html =~ "Кому"
     assert html =~ "Тема"
 
-    html = render_submit(view, "send", %{"message" => %{"to" => "", "subject" => "x"}})
+    render_submit(view, "send", %{"message" => %{"to" => "", "subject" => "x"}})
+    html = render_async(view)
 
     assert html =~ "Добавьте хотя бы одного получателя."
   end

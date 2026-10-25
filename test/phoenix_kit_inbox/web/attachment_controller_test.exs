@@ -112,6 +112,19 @@ defmodule PhoenixKitInbox.Web.AttachmentControllerTest do
     refute conn.resp_body =~ "carol"
   end
 
+  test "a stored content type that is not a plain type/subtype is served as octet-stream",
+       ctx do
+    forged =
+      ctx.row
+      |> Ecto.Changeset.change(content_type: "text/html; charset=\"<script>\"")
+      |> Repo.update!()
+
+    conn = download(ctx.conn, scope_for(ctx.bob), forged)
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["application/octet-stream"]
+  end
+
   def refuse(_scope, _users, _rows), do: {:error, :money}
 
   test "the policy is asked at download (404 when it refuses); not for the sender", ctx do
