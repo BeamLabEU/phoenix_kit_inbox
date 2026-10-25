@@ -151,10 +151,11 @@ defmodule PhoenixKitInbox.Web.ComposeSenderTest do
       {:ok, view, _} = live(ctx.conn, "/en/admin/inbox/compose")
       refute has_element?(view, "select[name='reply_to']")
 
-      assert {:error, {:live_redirect, _}} =
-               view
-               |> form("#compose-form", %{"to" => ctx.bob.email, "subject" => "Reply here"})
-               |> render_submit()
+      view
+      |> form("#compose-form", %{"to" => ctx.bob.email, "subject" => "Reply here"})
+      |> render_submit()
+
+      assert_redirect(view)
 
       assert [%{message: message}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
       assert message.metadata["reply_to"] == ctx.alice.email
@@ -170,15 +171,16 @@ defmodule PhoenixKitInbox.Web.ComposeSenderTest do
     test "the chosen one is recorded on the message", ctx do
       {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
 
-      {:error, {:live_redirect, _}} =
-        view
-        |> form("#compose-form", %{
-          "to" => "@" <> ctx.bob.username,
-          "subject" => "Hi",
-          "body" => "x",
-          "reply_to" => "desk@company.test"
-        })
-        |> render_submit()
+      view
+      |> form("#compose-form", %{
+        "to" => "@" <> ctx.bob.username,
+        "subject" => "Hi",
+        "body" => "x",
+        "reply_to" => "desk@company.test"
+      })
+      |> render_submit()
+
+      assert_redirect(view)
 
       assert [%{message: message}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
       assert message.metadata["reply_to"] == "desk@company.test"
@@ -194,6 +196,7 @@ defmodule PhoenixKitInbox.Web.ComposeSenderTest do
         "reply_to" => "ceo@company.test"
       })
 
+      render_async(view)
       assert has_element?(view, "#flash-error", "Reply-To address")
       assert Messages.list_folder(ctx.bob_mb.uuid, "inbox") == []
     end
@@ -204,10 +207,11 @@ defmodule PhoenixKitInbox.Web.ComposeSenderTest do
 
       {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose?mailbox=#{notes.uuid}")
 
-      {:error, {:live_redirect, _}} =
-        view
-        |> form("#compose-form", %{"to" => "@" <> ctx.bob.username, "subject" => "Hi"})
-        |> render_submit()
+      view
+      |> form("#compose-form", %{"to" => "@" <> ctx.bob.username, "subject" => "Hi"})
+      |> render_submit()
+
+      assert_redirect(view)
 
       assert [%{message: message}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
       refute Map.has_key?(message.metadata, "reply_to")

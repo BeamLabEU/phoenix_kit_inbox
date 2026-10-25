@@ -315,7 +315,10 @@ defmodule PhoenixKitInbox.Web.InboxLive do
           :recipients,
           Messages.list_recipients(message_uuid, socket.assigns.mailbox.uuid)
         )
-        |> assign(:attachments, Attachments.list_for_message(entry.message.uuid))
+        |> assign(
+          :attachments,
+          Attachments.list_for_viewer(socket.assigns.scope, entry.message.uuid)
+        )
         |> assign_externals(entry.message)
         |> assign(:unseen_counts, Mailboxes.unseen_counts(socket.assigns.mailbox.uuid))
 
@@ -851,20 +854,31 @@ defmodule PhoenixKitInbox.Web.InboxLive do
         <.message_body message={@selected.message} />
 
         <%!-- Plain links, not LiveView navigation: each is a download from
-              the module's controller, which checks the reader again. --%>
+              the module's controller, which checks the reader again. One the
+              host's policy withholds from this reader shows no name or size. --%>
         <div :if={@attachments != []} id="message-attachments" class="flex flex-wrap gap-2">
-          <a
-            :for={attachment <- @attachments}
-            id={"message-attachment-#{attachment.uuid}"}
-            href={Paths.attachment(attachment.uuid)}
-            class="btn btn-sm btn-outline gap-2 max-w-full normal-case"
-            title={gettext("Download")}
-            download
-          >
-            <.icon name="hero-paper-clip" class="w-4 h-4 shrink-0" />
-            <span class="truncate">{attachment.filename}</span>
-            <span class="text-xs opacity-60 shrink-0">{Format.bytes(attachment.size_bytes)}</span>
-          </a>
+          <%= for {status, attachment} <- @attachments do %>
+            <a
+              :if={status == :ok}
+              id={"message-attachment-#{attachment.uuid}"}
+              href={Paths.attachment(attachment.uuid)}
+              class="btn btn-sm btn-outline gap-2 max-w-full normal-case"
+              title={gettext("Download")}
+              download
+            >
+              <.icon name="hero-paper-clip" class="w-4 h-4 shrink-0" />
+              <span class="truncate">{attachment.filename}</span>
+              <span class="text-xs opacity-60 shrink-0">{Format.bytes(attachment.size_bytes)}</span>
+            </a>
+            <span
+              :if={status == :withheld}
+              id={"message-attachment-#{attachment.uuid}"}
+              class="btn btn-sm btn-disabled gap-2 normal-case"
+            >
+              <.icon name="hero-no-symbol" class="w-4 h-4 shrink-0" />
+              {gettext("Attachment not available")}
+            </span>
+          <% end %>
         </div>
 
         <.message_actions

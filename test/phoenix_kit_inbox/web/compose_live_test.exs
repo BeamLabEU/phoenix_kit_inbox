@@ -30,16 +30,17 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
   test "sending delivers the message and redirects to Sent", ctx do
     {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
 
-    assert {:error, {:live_redirect, %{to: to}}} =
-             view
-             |> form("form", %{
-               "to" => ctx.bob.email,
-               "cc" => "",
-               "bcc" => "",
-               "subject" => "Hi Bob",
-               "body" => "How's it going?"
-             })
-             |> render_submit()
+    view
+    |> form("form", %{
+      "to" => ctx.bob.email,
+      "cc" => "",
+      "bcc" => "",
+      "subject" => "Hi Bob",
+      "body" => "How's it going?"
+    })
+    |> render_submit()
+
+    assert {to, _flash} = assert_redirect(view)
 
     assert to =~ "folder=sent"
 
@@ -51,17 +52,17 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
   test "an unknown recipient re-renders the form with an error", ctx do
     {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
 
-    html =
-      view
-      |> form("form", %{
-        "to" => "nobody@example.com",
-        "cc" => "",
-        "bcc" => "",
-        "subject" => "Lost",
-        "body" => "..."
-      })
-      |> render_submit()
+    view
+    |> form("form", %{
+      "to" => "nobody@example.com",
+      "cc" => "",
+      "bcc" => "",
+      "subject" => "Lost",
+      "body" => "..."
+    })
+    |> render_submit()
 
+    html = render_async(view)
     assert html =~ "No recipient matches"
     assert Messages.list_folder(ctx.alice_mb.uuid, "sent") == []
   end
@@ -80,6 +81,7 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     |> render_change()
 
     view |> element("button[phx-click='save_draft']") |> render_click()
+    render_async(view)
 
     assert [%{message: draft}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
     assert draft.subject == "Later"
@@ -100,6 +102,7 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     |> render_change()
 
     view |> element("button[phx-click='save_draft']") |> render_click()
+    render_async(view)
 
     assert [%{message: draft}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
 
@@ -154,10 +157,11 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
 
     render_hook(view, "select_mailbox", %{"mailbox" => shared.uuid})
 
-    assert {:error, {:live_redirect, _}} =
-             view
-             |> form("form", %{"to" => ctx.bob.email, "subject" => "Re: Question", "body" => "A"})
-             |> render_submit()
+    view
+    |> form("form", %{"to" => ctx.bob.email, "subject" => "Re: Question", "body" => "A"})
+    |> render_submit()
+
+    assert_redirect(view)
 
     assert [%{message: reply}] = Messages.list_folder(shared.uuid, "sent")
     assert reply.parent_uuid == original.uuid
@@ -175,16 +179,18 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     |> render_change()
 
     view |> element("button[phx-click='save_draft']") |> render_click()
+    render_async(view)
     assert [%{message: draft}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
 
     :ok = Messages.purge(scope_for_user(ctx.alice), ctx.alice_mb, original.uuid)
 
     {:ok, resumed, _html} = live(ctx.conn, "/en/admin/inbox/compose?draft=#{draft.uuid}")
 
-    assert {:error, {:live_redirect, _}} =
-             resumed
-             |> form("form", %{"to" => ctx.bob.email, "subject" => "Re: Q", "body" => "now"})
-             |> render_submit()
+    resumed
+    |> form("form", %{"to" => ctx.bob.email, "subject" => "Re: Q", "body" => "now"})
+    |> render_submit()
+
+    assert_redirect(resumed)
 
     assert [%{message: sent}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
     assert sent.uuid == draft.uuid
@@ -201,6 +207,7 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     |> render_change()
 
     view |> element("button[phx-click='save_draft']") |> render_click()
+    render_async(view)
     assert [_] = Messages.list_folder(shared.uuid, "drafts")
 
     Repo.delete_all(MailboxGrant)
@@ -254,10 +261,12 @@ defmodule PhoenixKitInbox.Web.ComposeLiveTest do
     |> render_change()
 
     view |> element("button[phx-click='save_draft']") |> render_click()
+    render_async(view)
     assert [%{message: original}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
 
     view |> element("select[name='mailbox']") |> render_change(%{"mailbox" => desk.uuid})
     view |> element("button[phx-click='save_draft']") |> render_click()
+    render_async(view)
 
     assert [%{message: another}] = Messages.list_folder(desk.uuid, "drafts")
     assert another.uuid != original.uuid

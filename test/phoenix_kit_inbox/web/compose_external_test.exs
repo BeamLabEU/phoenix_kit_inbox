@@ -71,7 +71,13 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
     put_test_scope(ctx.conn, scope_for(ctx.alice, permissions, [ctx.senders]))
   end
 
+  # The send runs in a task: the page as it is once the task answered.
   defp submit(view, params) do
+    push_send(view, params)
+    render_async(view)
+  end
+
+  defp push_send(view, params) do
     view
     |> element("#compose-form")
     |> render_submit(
@@ -104,11 +110,12 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
   test "an external address goes out from the chosen identity, after the redirect", ctx do
     {:ok, view, _html} = live(as_alice(ctx), "/en/admin/inbox/compose")
 
-    assert {:error, {:live_redirect, %{to: to}}} =
-             submit(view, %{
-               "to" => "@#{ctx.bob.username}, client@example.com",
-               "identity_uuid" => ctx.common.uuid
-             })
+    push_send(view, %{
+      "to" => "@#{ctx.bob.username}, client@example.com",
+      "identity_uuid" => ctx.common.uuid
+    })
+
+    assert {to, _flash} = assert_redirect(view)
 
     assert to =~ "folder=sent"
     assert [%{message: message}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
@@ -177,6 +184,7 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
     |> render_change()
 
     view |> element("button[phx-click='save_draft']") |> render_click()
+    render_async(view)
 
     assert [%{message: draft}] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
     refute_received {:outbound, _, _, _}

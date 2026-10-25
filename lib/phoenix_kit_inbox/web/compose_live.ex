@@ -8,11 +8,28 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   ## Draft handling
 
-  The form autosaves on change (debounced) once there's anything worth saving,
-  so `@draft_uuid` fills in after the first save and every later save updates
-  the same message. Sending promotes that same row — the draft *becomes* the
-  sent message rather than being copied and deleted, which keeps the uuid
-  stable for anything already linking to it.
+  A draft is saved when the writer presses "Save draft"; `@draft_uuid` fills
+  in after the first save and every later save updates the same message.
+  Sending promotes that same row — the draft *becomes* the sent message
+  rather than being copied and deleted, which keeps the uuid stable for
+  anything already linking to it.
+
+  Sending and saving run in a task (`start_async/3`), so the page stays
+  live while the attachments are copied. One at a time: while one runs
+  (`@saving`), Send, Save draft, Discard, the From picker and the
+  attachment controls do nothing, and a pick from the media picker is
+  ignored; while a send runs (`@sending`) the upload input is closed too.
+  The work itself runs under `PhoenixKitInbox.TaskSupervisor`, not linked
+  to the page (in the page's task if the supervisor is not running), so
+  leaving the page does not cut a send short between its commit and the
+  external part; it works on hard links of its own to the upload files,
+  which go with the page. In the fallback without the supervisor, leaving
+  the page does cut the send short. A failure — an error or a crash — leaves the
+  form, its uploads and its chips as they were, with a flash; after a crash
+  the message may have been sent, and the flash says to check Sent.
+  A scope refresh or an access event that comes in meanwhile waits
+  (`@refresh_pending`) and runs when the task is done, after a saved
+  draft's uuid is known.
 
   ## Attachments
 
@@ -21,11 +38,14 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   and goes to `Messages` then as `attachments_data:` — nothing reaches
   Storage before that, so an abandoned compose leaves nothing behind and
   taking an upload off just cancels it. "Attach existing file" is core's
-  media picker, which lists every file on purpose, so each pick is checked
-  with `Attachments.describe/2` and a file the user may not read is refused
-  by name (a file uploaded inside the picker lands in Media first, as the
-  picker does everywhere, and is snapshotted at send). A forward and a
-  reopened draft start with the attachments they carry. The checks that
+  media picker — the user's own Media files, the whole library for a system
+  role — and each pick is checked with `Attachments.describe/2`; a refused
+  pick is named only when the user may read the file (a file uploaded
+  inside the picker lands in Media first, as the picker does everywhere,
+  and is snapshotted at send). A forward and a reopened draft start with
+  the attachments they carry (`Attachments.list_for_viewer/2`): one the
+  host's policy withholds from the user is a chip without name or size,
+  kept unless taken off — the send then asks the policy. The checks that
   count are in `Messages.send_message/4`.
 
   ## Signature and Reply-To
@@ -90,6 +110,8 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       |> assign(:draft_uuid, nil)
       |> assign(:parent_uuid, nil)
       |> assign(:saving, false)
+      |> assign(:sending, false)
+      |> assign(:refresh_pending, false)
       |> assign(:recipients, [])
       |> assign(:form, to_form(blank_params()))
       |> assign(:attachments, [])
@@ -152,10 +174,28 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   @doc false
   # Core's scope refresh: the scope changed under the page. Inbox's own
   # access events (grants, senders) run the same `refresh_sender/1`.
-  def phoenix_kit_scope_changed(socket) do
+  def phoenix_kit_scope_changed(socket), do: refresh_when_idle(socket)
+
+  # While a send or save runs, its mailbox, draft, sender and form must stay
+  # as they were when it started: the refresh waits for handle_async/3. The
+  # running task keeps the scope it was started with; the context checks
+  # the grants it needs again from the database.
+  defp refresh_when_idle(%{assigns: %{saving: true}} = socket),
+    do: assign(socket, :refresh_pending, true)
+
+  defp refresh_when_idle(socket) do
     socket
+    |> assign(:refresh_pending, false)
     |> ScopeRefresh.assign_scope()
     |> refresh_sender()
+  end
+
+  # The task is done: the page is idle again, and a refresh that came in
+  # meanwhile runs now — after the draft's uuid is known, so a saved draft
+  # is kept or let go by the same rule as any other.
+  defp idle(socket) do
+    socket = assign(socket, saving: false, sending: false)
+    if socket.assigns.refresh_pending, do: refresh_when_idle(socket), else: socket
   end
 
   defp assign_module_access(socket),
@@ -399,7 +439,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       {:ok, %{message: message}} ->
         socket
         |> assign(:page_title, gettext("Forward"))
-        |> assign(:attachments, chips_for(message.uuid))
+        |> assign(:attachments, chips_for(socket.assigns.scope, message.uuid))
         |> assign(
           :form,
           to_form(%{
@@ -428,7 +468,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         |> assign(:draft_uuid, message.uuid)
         |> assign(:parent_uuid, message.parent_uuid)
         |> assign(:page_title, gettext("Draft"))
-        |> assign(:attachments, chips_for(message.uuid))
+        |> assign(:attachments, chips_for(socket.assigns.scope, message.uuid))
         |> assign(
           :form,
           to_form(%{
@@ -449,7 +489,17 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   # ── Events ──────────────────────────────────────────────────────────────────
 
+  # While a send or save runs, nothing may change what it works on or start
+  # another: a second click would send twice, and an upload cancelled now
+  # would take its temporary file from under the copy.
+  @locked_while_saving ~w(send save_draft discard select_mailbox open_media_selector
+                          remove_attachment cancel_upload)
+
   @impl true
+  def handle_event(event, _params, %{assigns: %{saving: true}} = socket)
+      when event in @locked_while_saving,
+      do: {:noreply, socket}
+
   def handle_event("validate", params, socket) do
     {:noreply, assign(socket, :form, to_form(strip_meta(params)))}
   end
@@ -462,27 +512,27 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   def handle_event("send", params, socket) do
     params = strip_meta(params)
+    socket = assign(socket, :form, to_form(params))
 
     # Authorization (inbox permission, write on the mailbox) is checked by
     # send_message/4 itself; the From picker only hides what would fail.
     with %{} = mailbox <- socket.assigns.mailbox,
-         attrs <- send_attrs(socket, params),
-         {:ok, uploads} <- pending_uploads(socket),
-         {:ok, message} <-
-           Messages.send_message(socket.assigns.scope, mailbox, attrs, attachments_data: uploads) do
+         {:ok, uploads, _refs} <- pending_uploads(socket) do
+      scope = socket.assigns.scope
+      attrs = send_attrs(socket, params)
+      {uploads, links} = own_uploads(uploads)
+
       {:noreply,
        socket
-       |> put_flash(:info, sent_flash(message))
-       |> push_navigate(to: Paths.inbox(mailbox: mailbox.uuid, folder: "sent"))}
+       |> assign(saving: true, sending: true)
+       |> start_async(:send, fn ->
+         detached(links, fn ->
+           Messages.send_message(scope, mailbox, attrs, attachments_data: uploads)
+         end)
+       end)}
     else
-      nil ->
-        {:noreply, put_flash(socket, :error, Errors.message(:mailbox_not_found))}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> assign(:form, to_form(params))
-         |> put_flash(:error, Errors.message(reason))}
+      nil -> {:noreply, put_flash(socket, :error, Errors.message(:mailbox_not_found))}
+      {:error, reason} -> {:noreply, put_flash(socket, :error, Errors.message(reason))}
     end
   end
 
@@ -557,6 +607,101 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   end
 
   @impl true
+  def handle_async(:send, {:ok, {:ok, message}}, socket) do
+    {:noreply,
+     socket
+     |> put_flash(:info, sent_flash(message))
+     |> push_navigate(to: Paths.inbox(mailbox: message.sender_mailbox_uuid, folder: "sent"))}
+  end
+
+  # The form, its uploads and its chips stay as they are for the next try.
+  def handle_async(:send, {:ok, {:error, reason}}, socket),
+    do: {:noreply, socket |> put_flash(:error, Errors.message(reason)) |> idle()}
+
+  def handle_async(:send, {:exit, _reason}, socket) do
+    {:noreply,
+     socket
+     |> put_flash(
+       :error,
+       gettext("The message may not have been sent. Check Sent before trying again.")
+     )
+     |> idle()}
+  end
+
+  # The chips now name the draft's own snapshots (uploads included), so the
+  # next save keeps them instead of copying anything again — the user's own
+  # snapshots, so they still fit if the refresh moved the page to another
+  # mailbox. They are read after the refresh, with the scope it brought.
+  # Only the uploads this save stored are dropped.
+  def handle_async(:save_draft, {:ok, {refs, {:ok, message}}}, socket) do
+    socket =
+      socket
+      |> clear_uploads(refs)
+      |> assign(:draft_uuid, message.uuid)
+      |> put_flash(:info, gettext("Draft saved."))
+      |> idle()
+
+    {:noreply, assign(socket, :attachments, chips_for(socket.assigns.scope, message.uuid))}
+  end
+
+  def handle_async(:save_draft, {:ok, {_refs, {:error, reason}}}, socket),
+    do: {:noreply, socket |> put_flash(:error, Errors.message(reason)) |> idle()}
+
+  def handle_async(:save_draft, {:exit, _reason}, socket) do
+    {:noreply,
+     socket
+     |> put_flash(:error, gettext("The draft could not be saved. Try again."))
+     |> idle()}
+  end
+
+  # The work runs under the module's task supervisor, not linked to the
+  # page: leaving the page while it runs must not kill a send between its
+  # commit and the external part. A crash still reaches handle_async/3.
+  # Without the supervisor it runs here, in the page's task. The upload
+  # links are the work's own: deleted when it is done.
+  defp detached(links, fun) do
+    work = fn ->
+      try do
+        fun.()
+      after
+        Enum.each(links, &File.rm/1)
+      end
+    end
+
+    case start_detached(work) do
+      {:ok, task} -> Task.await(task, :infinity)
+      :error -> work.()
+    end
+  end
+
+  # Only the start is guarded: an exit from the work itself must not run it
+  # a second time.
+  defp start_detached(work) do
+    {:ok, Task.Supervisor.async_nolink(PhoenixKitInbox.TaskSupervisor, work)}
+  catch
+    :exit, _reason -> :error
+  end
+
+  # An upload's temporary file belongs to its upload channel and goes with
+  # the page. The work gets a hard link of its own to each, so a send
+  # survives the page; where no link can be made (another file system),
+  # the upload's own path, as before.
+  defp own_uploads(uploads) do
+    Enum.map_reduce(uploads, [], fn %{path: path} = upload, links ->
+      link = Path.join(System.tmp_dir!(), "phoenix_kit_inbox_upload_#{UUIDv7.generate()}")
+
+      case File.ln(path, link) do
+        :ok -> {%{upload | path: link}, [link | links]}
+        {:error, _reason} -> {upload, links}
+      end
+    end)
+  end
+
+  # A pick that arrives while a save runs would be overwritten by its chips.
+  @impl true
+  def handle_info({:media_selected, _file_uuids}, %{assigns: %{saving: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_info({:media_selected, file_uuids}, socket) do
     {chips, refused} =
       Enum.reduce(List.wrap(file_uuids), {[], []}, fn uuid, {chips, refused} ->
@@ -582,7 +727,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   end
 
   def handle_info({:inbox_access_changed, _what}, socket),
-    do: {:noreply, refresh_sender(socket)}
+    do: {:noreply, refresh_when_idle(socket)}
 
   def handle_info(_message, socket), do: {:noreply, socket}
 
@@ -624,29 +769,39 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       else: PhoenixKitWeb.Live.Components.UserMediaSelectorModal
   end
 
-  # The finished uploads as `attachments_data:` entries. `:postpone` keeps
-  # each entry and its temporary file: a refused send keeps the uploads for
-  # the next try. The files are gone with the LiveView after a send.
+  # The finished uploads as `attachments_data:` entries, with their refs.
+  # `:postpone` keeps each entry and its temporary file — valid while the
+  # entry is, which nothing can cancel while the send or save runs: a
+  # refused send keeps the uploads for the next try. The files are gone
+  # with the LiveView after a send.
   defp pending_uploads(socket) do
     case uploaded_entries(socket, :attachments) do
       {_done, [_ | _]} ->
         {:error, :uploads_in_progress}
 
       {[], []} ->
-        {:ok, []}
+        {:ok, [], []}
 
-      _ ->
-        {:ok,
-         consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
-           {:postpone,
-            %{path: path, filename: entry.client_name, content_type: entry.client_type}}
-         end)}
+      {done, []} ->
+        uploads =
+          consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
+            {:postpone,
+             %{path: path, filename: entry.client_name, content_type: entry.client_type}}
+          end)
+
+        {:ok, uploads, Enum.map(done, & &1.ref)}
     end
   end
 
-  # After a draft save the uploads are the draft's snapshots: drop them here.
-  defp clear_uploads(socket) do
-    consume_uploaded_entries(socket, :attachments, fn _meta, _entry -> {:ok, nil} end)
+  # After a draft save the uploads it stored are the draft's snapshots: drop
+  # those entries here. One added while the save ran stays.
+  defp clear_uploads(socket, refs) do
+    {done, _in_progress} = uploaded_entries(socket, :attachments)
+
+    for entry <- done, entry.ref in refs do
+      consume_uploaded_entry(socket, entry, fn _meta -> {:ok, nil} end)
+    end
+
     socket
   end
 
@@ -669,11 +824,17 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     end
   end
 
-  defp chips_for(message_uuid) do
-    message_uuid
-    |> Attachments.list_for_message()
-    |> Enum.map(fn row ->
-      %{file_uuid: to_string(row.file_uuid), filename: row.filename, size_bytes: row.size_bytes}
+  # A row the host's policy withholds from the user is a chip without name
+  # or size (`filename: nil`); it is still submitted, so the send decides.
+  defp chips_for(scope, message_uuid) do
+    scope
+    |> Attachments.list_for_viewer(message_uuid)
+    |> Enum.map(fn
+      {:ok, row} ->
+        %{file_uuid: to_string(row.file_uuid), filename: row.filename, size_bytes: row.size_bytes}
+
+      {:withheld, row} ->
+        %{file_uuid: to_string(row.file_uuid), filename: nil, size_bytes: nil}
     end)
   end
 
@@ -693,19 +854,23 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       |> Map.put("parent_uuid", socket.assigns.parent_uuid)
       |> Map.put("attachments", attachment_attrs(socket))
 
-    with {:ok, uploads} <- pending_uploads(socket),
-         {:ok, message} <-
-           Messages.save_draft(socket.assigns.scope, mailbox, attrs, attachments_data: uploads) do
-      # The chips now name the draft's own snapshots (uploads included), so
-      # the next save keeps them instead of copying anything again.
-      socket
-      |> clear_uploads()
-      |> assign(:draft_uuid, message.uuid)
-      |> assign(:attachments, chips_for(message.uuid))
-      |> assign(:form, to_form(params))
-      |> put_flash(:info, gettext("Draft saved."))
-    else
-      {:error, reason} -> put_flash(socket, :error, Errors.message(reason))
+    case pending_uploads(socket) do
+      {:ok, uploads, refs} ->
+        scope = socket.assigns.scope
+        {uploads, links} = own_uploads(uploads)
+
+        socket
+        |> assign(:saving, true)
+        |> assign(:form, to_form(params))
+        |> start_async(:save_draft, fn ->
+          {refs,
+           detached(links, fn ->
+             Messages.save_draft(scope, mailbox, attrs, attachments_data: uploads)
+           end)}
+        end)
+
+      {:error, reason} ->
+        put_flash(socket, :error, Errors.message(reason))
     end
   end
 
@@ -757,12 +922,15 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         signature_uuid={@signature_uuid}
         reply_to_options={@reply_to_options}
         identities={@identities}
+        saving={@saving}
+        sending={@sending}
       />
 
-      <%!-- Mounted only while open: the picker reports back by message
-            ({:media_selected, uuids} / {:media_selector_closed}). --%>
+      <%!-- Mounted only while open, and only with a user: core's picker
+            without a user_uuid lists every user's files. It reports back by
+            message ({:media_selected, uuids} / {:media_selector_closed}). --%>
       <.live_component
-        :if={@module_access and @show_media_selector}
+        :if={@module_access and @show_media_selector and @current_user != nil}
         module={media_selector(@scope)}
         id="inbox-media-selector"
         show={true}
@@ -787,6 +955,8 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   attr(:signature_uuid, :string, required: true)
   attr(:reply_to_options, :list, required: true)
   attr(:identities, :list, required: true)
+  attr(:saving, :boolean, required: true)
+  attr(:sending, :boolean, required: true)
 
   defp compose_form(assigns) do
     ~H"""
@@ -807,6 +977,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
               options={Enum.map(@mailboxes, &{&1.name, &1.uuid})}
               class="select-sm"
               phx-change="select_mailbox"
+              disabled={@saving}
             />
           </div>
 
@@ -884,7 +1055,12 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
             />
           </div>
 
-          <.attachment_picker attachments={@attachments} upload={@uploads.attachments} />
+          <.attachment_picker
+            attachments={@attachments}
+            upload={@uploads.attachments}
+            saving={@saving}
+            sending={@sending}
+          />
 
           <div class="card-actions justify-end flex-wrap gap-2 pt-2">
             <.link navigate={@back} class="btn btn-ghost btn-sm">
@@ -897,17 +1073,31 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
               class="btn btn-ghost btn-sm text-error"
               phx-click="discard"
               data-confirm={gettext("Discard this draft?")}
+              disabled={@saving}
             >
               <.icon name="hero-trash" class="w-4 h-4" />
               {gettext("Discard draft")}
             </button>
 
-            <button type="button" class="btn btn-ghost btn-sm" phx-click="save_draft">
+            <button
+              type="button"
+              id="compose-save-draft"
+              class="btn btn-ghost btn-sm"
+              phx-click="save_draft"
+              phx-disable-with={gettext("Saving…")}
+              disabled={@saving}
+            >
               <.icon name="hero-document" class="w-4 h-4" />
               {gettext("Save draft")}
             </button>
 
-            <button type="submit" class="btn btn-primary btn-sm">
+            <button
+              type="submit"
+              id="compose-send"
+              class="btn btn-primary btn-sm"
+              phx-disable-with={gettext("Sending…")}
+              disabled={@saving}
+            >
               <.icon name="hero-paper-airplane" class="w-4 h-4" />
               {gettext("Send")}
             </button>
@@ -920,6 +1110,8 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   attr(:attachments, :list, required: true)
   attr(:upload, :any, required: true)
+  attr(:saving, :boolean, required: true)
+  attr(:sending, :boolean, required: true)
 
   defp attachment_picker(assigns) do
     ~H"""
@@ -934,13 +1126,19 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
           class="badge badge-outline badge-lg gap-2 max-w-full"
         >
           <.icon name="hero-paper-clip" class="w-4 h-4 shrink-0" />
-          <span class="truncate">{attachment.filename}</span>
-          <span class="text-xs opacity-60 shrink-0">{Format.bytes(attachment.size_bytes)}</span>
+          <span :if={attachment.filename} class="truncate">{attachment.filename}</span>
+          <span :if={attachment.filename} class="text-xs opacity-60 shrink-0">
+            {Format.bytes(attachment.size_bytes)}
+          </span>
+          <span :if={is_nil(attachment.filename)} class="truncate opacity-60">
+            {gettext("Attachment not available")}
+          </span>
           <button
             type="button"
             class="btn btn-ghost btn-xs btn-circle"
             phx-click="remove_attachment"
             phx-value-file={attachment.file_uuid}
+            disabled={@saving}
             aria-label={gettext("Remove attachment")}
             title={gettext("Remove attachment")}
           >
@@ -967,6 +1165,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
             class="btn btn-ghost btn-xs btn-circle"
             phx-click="cancel_upload"
             phx-value-ref={entry.ref}
+            disabled={@saving}
             aria-label={gettext("Cancel upload")}
           >
             <.icon name="hero-x-mark" class="w-3 h-3" />
@@ -975,10 +1174,12 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
-        <label class="btn btn-ghost btn-sm">
+        <%!-- Closed while a send runs: the page leaves when it is done. A
+              draft save leaves new uploads alone, so they stay open then. --%>
+        <label class={["btn btn-ghost btn-sm", @sending && "btn-disabled"]}>
           <.icon name="hero-arrow-up-tray" class="w-4 h-4" />
           {gettext("Upload files")}
-          <.live_file_input upload={@upload} class="hidden" />
+          <.live_file_input upload={@upload} class="hidden" disabled={@sending} />
         </label>
 
         <button
@@ -986,6 +1187,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
           id="attach-existing"
           class="btn btn-ghost btn-sm"
           phx-click="open_media_selector"
+          disabled={@saving}
         >
           <.icon name="hero-paper-clip" class="w-4 h-4" />
           {gettext("Attach existing file")}

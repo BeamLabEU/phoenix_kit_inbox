@@ -336,10 +336,14 @@ defmodule PhoenixKitInbox.Messages do
            :ok <- Attachments.check_policy(scope, [fresh], items),
            {:ok, items, created} <- Attachments.store_snapshots(items, user_uuid) do
         fresh
-        |> do_save_draft(user_uuid, attrs, existing, items)
+        |> write_draft(user_uuid, attrs, existing, items, created)
         |> finish_attachments(created)
       end
     end
+  end
+
+  defp write_draft(mailbox, user_uuid, attrs, existing, items, created) do
+    with_snapshots(created, fn -> do_save_draft(mailbox, user_uuid, attrs, existing, items) end)
   end
 
   defp do_save_draft(mailbox, sender_user_uuid, attrs, existing, items) do
@@ -381,6 +385,22 @@ defmodule PhoenixKitInbox.Messages do
       {:ok, %{thread: message, attachments: dropped}} -> {:ok, message, dropped}
       {:error, _step, reason, _changes} -> {:error, reason}
     end
+  end
+
+  # Runs the write of a message whose snapshots `created` are already
+  # stored. A raise or an exit before the commit (a constraint, a lost
+  # connection) rolls the transaction back and would leave the snapshots
+  # named by nothing: they are deleted, and the raise goes on.
+  defp with_snapshots(created, write) do
+    write.()
+  rescue
+    e ->
+      Attachments.discard_snapshots(created)
+      reraise e, __STACKTRACE__
+  catch
+    kind, reason ->
+      Attachments.discard_snapshots(created)
+      :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
   # After the transaction: snapshots made for a write that rolled back are
@@ -635,14 +655,17 @@ defmodule PhoenixKitInbox.Messages do
            Attachments.check_policy(scope, [mailbox | Enum.map(recipients, & &1.mailbox)], items),
          {:ok, items, created} <- Attachments.store_snapshots(items, sender_user_uuid),
          {:ok, {message, external_rows}} <-
-           mailbox
-           |> do_send(
-             sender_user_uuid,
-             attrs,
-             {recipients, externals, sender_record},
-             existing,
-             items
-           )
+           created
+           |> with_snapshots(fn ->
+             do_send(
+               mailbox,
+               sender_user_uuid,
+               attrs,
+               {recipients, externals, sender_record},
+               existing,
+               items
+             )
+           end)
            |> finish_attachments(created) do
       # Post-commit, deliberately: see the moduledoc.
       Notify.message_sent(message, mailbox, recipients, %{

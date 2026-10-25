@@ -301,30 +301,37 @@ defmodule PhoenixKitInbox.MessagesTest do
           "subject" => "1"
         })
 
-      {:ok, reply} =
-        Messages.send_message(ctx.bob_scope, ctx.bob_mb, %{
-          "to" => ctx.alice.email,
-          "subject" => "2",
-          "parent_uuid" => root.uuid
-        })
+      # Twelve messages, each a reply to the one before, alternating senders.
+      thread =
+        Enum.reduce(2..12, [root], fn n, [parent | _] = acc ->
+          {scope, mailbox, to} =
+            if rem(n, 2) == 0,
+              do: {ctx.bob_scope, ctx.bob_mb, ctx.alice.email},
+              else: {ctx.alice_scope, ctx.alice_mb, ctx.bob.email}
 
-      {:ok, last} =
-        Messages.send_message(ctx.alice_scope, ctx.alice_mb, %{
-          "to" => ctx.bob.email,
-          "subject" => "3",
-          "parent_uuid" => reply.uuid
-        })
+          {:ok, reply} =
+            Messages.send_message(scope, mailbox, %{
+              "to" => to,
+              "subject" => "#{n}",
+              "parent_uuid" => parent.uuid
+            })
 
-      # Same second for all three (inserted_at has second precision), rows
-      # rewritten out of order so their physical order is not the thread's.
+          [reply | acc]
+        end)
+        |> Enum.reverse()
+
+      # Same second for all (inserted_at has second precision), rows
+      # rewritten newest first: without the uuid tie-break they come back in
+      # the table's order, which is then anything but the thread's — with
+      # twelve rows, matching it by chance is out of the question.
       same = ~U[2026-01-01 00:00:00Z]
 
-      for message <- [reply, root, last] do
+      for message <- Enum.reverse(thread) do
         message |> Ecto.Changeset.change(inserted_at: same) |> Repo.update!()
       end
 
       assert root.thread_uuid |> Messages.list_thread() |> Enum.map(& &1.uuid) ==
-               [root.uuid, reply.uuid, last.uuid]
+               Enum.map(thread, & &1.uuid)
     end
 
     test "a caller-supplied thread_uuid doesn't put a draft in someone else's thread", ctx do

@@ -45,6 +45,35 @@ defmodule PhoenixKitInbox.AttachmentsTest do
       if callback = Process.delete(:inbox_before_write), do: callback.()
       :ok
     end
+
+    # Refuses a row whose filename the test registered.
+    def refuse_file(_scope, _users, rows) do
+      refused = Application.get_env(:phoenix_kit_inbox, :policy_refused_file)
+      if Enum.any?(rows, &(&1.filename == refused)), do: {:error, :money}, else: :ok
+    end
+  end
+
+  # An older core: no hidden-library API.
+  defmodule OldCoreLibraries do
+    @moduledoc false
+  end
+
+  # A core that ignores `library_uuid:` and stores the file in Media.
+  defmodule MediaStorage do
+    @moduledoc false
+    def store_file_in_buckets(path, type, user_uuid, hash, ext, name, opts) do
+      Storage.store_file_in_buckets(path, type, user_uuid, hash, ext, name,
+        mime_type: opts[:mime_type]
+      )
+    end
+  end
+
+  # A core that ignores `dedup: false` and hands back the uploader's file.
+  defmodule DuplicateStorage do
+    @moduledoc false
+    def store_file_in_buckets(_path, _type, _user_uuid, _hash, _ext, _name, _opts) do
+      {:ok, Application.get_env(:phoenix_kit_inbox, :duplicate_file), :duplicate}
+    end
   end
 
   setup :storage_setup
@@ -61,9 +90,16 @@ defmodule PhoenixKitInbox.AttachmentsTest do
     {:ok, carol_box} = Mailboxes.ensure_user_mailbox(carol)
 
     on_exit(fn ->
-      Application.delete_env(:phoenix_kit_inbox, :attachment_policy)
-      Application.delete_env(:phoenix_kit_inbox, :policy_test_pid)
-      Application.delete_env(:phoenix_kit_inbox, :policy_refused_user)
+      for key <- [
+            :attachment_policy,
+            :policy_test_pid,
+            :policy_refused_user,
+            :policy_refused_file,
+            :storage_libraries,
+            :storage_module,
+            :duplicate_file
+          ],
+          do: Application.delete_env(:phoenix_kit_inbox, key)
     end)
 
     %{
@@ -1010,6 +1046,464 @@ defmodule PhoenixKitInbox.AttachmentsTest do
         })
 
       assert conn.status == 401
+    end
+  end
+
+  # ── what a viewer is shown ──────────────────────────────────────────────────
+
+  describe "list_for_viewer/2" do
+    setup ctx do
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: [
+            %{binary: "open", filename: "open.pdf"},
+            %{binary: "priced", filename: "priced.pdf", flags: %{"money_free" => false}}
+          ]
+        )
+
+      %{message: message}
+    end
+
+    test "without a policy: every row as it is, with the one query of list_for_message/1",
+         ctx do
+      rows = Attachments.list_for_message(ctx.message.uuid)
+
+      {result, queries} =
+        count_queries(fn -> Attachments.list_for_viewer(scope_for(ctx.bob), ctx.message.uuid) end)
+
+      assert result == Enum.map(rows, &{:ok, &1})
+      assert queries == 1
+    end
+
+    test "a row the policy refuses the viewer is withheld: no name, type, size or flags", ctx do
+      put_policy(:refuse_file)
+      Application.put_env(:phoenix_kit_inbox, :policy_refused_file, "priced.pdf")
+      [open, priced] = Attachments.list_for_message(ctx.message.uuid)
+
+      assert [{:ok, ^open}, {:withheld, withheld}] =
+               Attachments.list_for_viewer(scope_for(ctx.bob), ctx.message.uuid)
+
+      assert withheld.uuid == priced.uuid
+      assert withheld.file_uuid == priced.file_uuid
+      assert withheld.filename == nil
+      assert withheld.content_type == nil
+      assert withheld.size_bytes == nil
+      assert withheld.flags == nil
+
+      # The same decision as the download.
+      assert {:ok, _} = Attachments.fetch_for_download(scope_for(ctx.bob), open.uuid)
+
+      assert {:error, :not_found} =
+               Attachments.fetch_for_download(scope_for(ctx.bob), priced.uuid)
+    end
+
+    test "the creator of a snapshot is not asked about it", ctx do
+      put_policy(:refuse)
+
+      assert [{:ok, _}, {:ok, _}] = Attachments.list_for_viewer(ctx.scope, ctx.message.uuid)
+
+      assert [{:withheld, _}, {:withheld, _}] =
+               Attachments.list_for_viewer(scope_for(ctx.bob), ctx.message.uuid)
+    end
+
+    test "the policy is asked per row, for the viewer alone", ctx do
+      put_policy(:record)
+      Attachments.list_for_viewer(scope_for(ctx.bob), ctx.message.uuid)
+
+      bob = ctx.bob.uuid
+      assert_received {:policy, _scope, [%{uuid: ^bob}], [%{filename: "open.pdf"}]}
+      assert_received {:policy, _scope, [%{uuid: ^bob}], [%{filename: "priced.pdf"}]}
+    end
+
+    test "a misconfigured policy, or no user in the scope, withholds every row", ctx do
+      Application.put_env(:phoenix_kit_inbox, :attachment_policy, :not_a_policy)
+
+      assert [{:withheld, _}, {:withheld, _}] =
+               Attachments.list_for_viewer(scope_for(ctx.bob), ctx.message.uuid)
+
+      put_policy(:record)
+
+      assert [{:withheld, _}, {:withheld, _}] =
+               Attachments.list_for_viewer(nil, ctx.message.uuid)
+    end
+  end
+
+  defp count_queries(fun) do
+    handler = "inbox-count-queries-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :telemetry.attach(
+      handler,
+      [:phoenix_kit_inbox, :test, :repo, :query],
+      fn _event, _measurements, _metadata, _config ->
+        if self() == test_pid, do: send(test_pid, {:counted_query, handler})
+      end,
+      nil
+    )
+
+    result =
+      try do
+        fun.()
+      after
+        :telemetry.detach(handler)
+      end
+
+    {result, drain_queries(handler, 0)}
+  end
+
+  defp drain_queries(handler, count) do
+    receive do
+      {:counted_query, ^handler} -> drain_queries(handler, count + 1)
+    after
+      0 -> count
+    end
+  end
+
+  # ── snapshots and a raise ───────────────────────────────────────────────────
+
+  # A CHECK constraint the attachment changeset does not know: inserting a
+  # row named `filename` raises inside the message transaction. Rolled back
+  # with the test's sandbox.
+  defp raise_on_row!(filename) do
+    Repo.query!("""
+    ALTER TABLE phoenix_kit_inbox_attachments
+      ADD CONSTRAINT inbox_test_refuse CHECK (filename <> '#{filename}') NOT VALID
+    """)
+  end
+
+  describe "a raise after the snapshots are stored" do
+    test "in the send's transaction deletes them; nothing is sent", ctx do
+      mine = stored_file_fixture(ctx.alice, "keep me")
+      raise_on_row!("boom.txt")
+
+      assert_raise Ecto.ConstraintError, fn ->
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(mine.uuid),
+          attachments_data: [%{binary: "boom", filename: "boom.txt"}]
+        )
+      end
+
+      assert inbox_files() == []
+      assert Repo.aggregate(Message, :count) == 0
+      assert bytes(mine.uuid) == "keep me"
+    end
+
+    test "in a draft save's transaction deletes them", ctx do
+      raise_on_row!("boom.txt")
+
+      assert_raise Ecto.ConstraintError, fn ->
+        Messages.save_draft(ctx.scope, ctx.alice_box, %{"subject" => "WIP"},
+          attachments_data: [
+            %{binary: "fine", filename: "fine.txt"},
+            %{binary: "boom", filename: "boom.txt"}
+          ]
+        )
+      end
+
+      assert inbox_files() == []
+      assert Repo.aggregate(Message, :count) == 0
+    end
+
+    test "on the second snapshot deletes the first and raises again", ctx do
+      items = [
+        %{
+          mode: :snapshot,
+          source: {:binary, "first"},
+          file_uuid: nil,
+          filename: "first.txt",
+          content_type: "text/plain"
+        },
+        # Not bytes: File.write!/2 raises before Storage is reached.
+        %{
+          mode: :snapshot,
+          source: {:binary, :not_bytes},
+          file_uuid: nil,
+          filename: "second.txt",
+          content_type: "text/plain"
+        }
+      ]
+
+      assert_raise File.Error, fn -> Attachments.store_snapshots(items, ctx.alice.uuid) end
+      assert inbox_files() == []
+    end
+
+    test "release/1 logs a failure and never raises: the commit before it stands" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Attachments.release(["not-a-uuid"]) == :ok
+        end)
+
+      assert log =~ "could not release snapshots"
+    end
+  end
+
+  # ── an older core ───────────────────────────────────────────────────────────
+
+  describe "a core without hidden libraries" do
+    setup do
+      Application.put_env(:phoenix_kit_inbox, :storage_libraries, OldCoreLibraries)
+      :ok
+    end
+
+    test "refuses every attachment with :storage_unsupported; mail without them goes", ctx do
+      mine = stored_file_fixture(ctx.alice, "a photo")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :storage_unsupported} = Attachments.ensure_library()
+
+          assert {:error, :storage_unsupported} =
+                   send_to(ctx.scope, ctx.alice_box, ctx.bob, attach(mine.uuid))
+
+          assert {:error, :storage_unsupported} =
+                   Messages.save_draft(ctx.scope, ctx.alice_box, %{"subject" => "WIP"},
+                     attachments_data: [%{binary: "pdf", filename: "p.pdf"}]
+                   )
+        end)
+
+      assert log =~ "hidden system libraries"
+      assert Repo.aggregate(Message, :count) == 0
+      assert Libraries.get_hidden_library_by_slug(Attachments.library_slug()) == nil
+
+      assert {:ok, _} = send_to(ctx.scope, ctx.alice_box, ctx.bob)
+    end
+  end
+
+  describe "a Storage that does not keep the snapshot apart" do
+    test "a file stored outside the Inbox library is refused, and left alone", ctx do
+      Application.put_env(:phoenix_kit_inbox, :storage_module, MediaStorage)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :storage_unsupported} =
+                   send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+                     attachments_data: [%{binary: "pdf", filename: "p.pdf"}]
+                   )
+        end)
+
+      assert log =~ "dedup: false unsupported"
+      assert Repo.aggregate(Message, :count) == 0
+      assert inbox_files() == []
+
+      {files, _total} =
+        Storage.list_files_in_scope(nil, per_page: 500, library_uuid: Libraries.media_uuid())
+
+      assert Enum.any?(files, &(&1.original_file_name == "p.pdf"))
+    end
+
+    test "a duplicate handed back is refused, and the file it named is not deleted", ctx do
+      existing = stored_file_fixture(ctx.alice, "already there")
+      Application.put_env(:phoenix_kit_inbox, :duplicate_file, existing)
+      Application.put_env(:phoenix_kit_inbox, :storage_module, DuplicateStorage)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, :storage_unsupported} =
+                 send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+                   attachments_data: [%{binary: "already there", filename: "a.txt"}]
+                 )
+      end)
+
+      assert Repo.aggregate(Message, :count) == 0
+      assert bytes(existing.uuid) == "already there"
+    end
+  end
+
+  # ── checks, one test each ───────────────────────────────────────────────────
+
+  describe "each check" do
+    test "a snapshot failing after another was stored deletes the first", ctx do
+      dir = Path.join(System.tmp_dir!(), "inbox_dir_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      assert {:error, {:attachment_store_failed, _}} =
+               send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+                 attachments_data: [
+                   %{binary: "stored first", filename: "first.txt"},
+                   # A directory: its size reads, its bytes do not.
+                   %{path: dir, filename: "second.txt"}
+                 ]
+               )
+
+      assert inbox_files() == []
+      assert Repo.aggregate(Message, :count) == 0
+    end
+
+    test "the three-argument form refuses to promote a draft with attachments", ctx do
+      {:ok, draft} =
+        Messages.save_draft(ctx.scope, ctx.alice_box, %{"subject" => "WIP"},
+          attachments_data: [%{binary: "draft file", filename: "d.txt"}]
+        )
+
+      assert {:error, :attachments_need_scope} =
+               Messages.send_message(ctx.alice_box, ctx.alice.uuid, %{
+                 "uuid" => draft.uuid,
+                 "to" => "@#{ctx.bob.username}"
+               })
+
+      assert %{status: "draft"} = Repo.get!(Message, draft.uuid)
+      assert [_] = Attachments.list_for_message(draft.uuid)
+    end
+
+    test "read_file/1 refuses a system-managed file, even in the Inbox library", ctx do
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: [%{binary: "real", filename: "r.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+
+      row.file_uuid
+      |> Storage.get_file()
+      |> Ecto.Changeset.change(system_managed: true)
+      |> Repo.update!()
+
+      assert {:error, :not_found} = Attachments.read_file(row)
+    end
+
+    test "a reader of a shared mailbox cannot forward a file of a colleague's draft there",
+         ctx do
+      dave = user_fixture()
+      {:ok, dave_box} = Mailboxes.ensure_user_mailbox(dave)
+      desk = shared_mailbox_fixture(ctx.carol, %{slug: "desk"})
+      grant_fixture(desk, dave, "read")
+
+      {:ok, draft} =
+        Messages.save_draft(scope_for(ctx.carol), desk, %{"subject" => "Not yet"},
+          attachments_data: [%{binary: "unsent", filename: "unsent.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(draft.uuid)
+
+      assert {:error, {:attachment_forbidden, uuid}} =
+               send_to(scope_for(dave), dave_box, ctx.bob, attach(row.file_uuid))
+
+      assert uuid == row.file_uuid
+    end
+
+    test "the sender downloads after deleting their own copy", ctx do
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: [%{binary: "report", filename: "r.pdf"}]
+        )
+
+      [row] = Attachments.list_for_message(message.uuid)
+      :ok = Messages.purge(ctx.scope, ctx.alice_box, message.uuid)
+
+      assert {:ok, _} = Attachments.fetch_for_download(ctx.scope, row.uuid)
+    end
+
+    test "describe/2 needs the inbox permission and a scope", ctx do
+      mine = stored_file_fixture(ctx.alice, "mine", filename: "mine.txt")
+
+      assert {:ok, %{filename: "mine.txt"}} = Attachments.describe(ctx.scope, mine.uuid)
+      assert {:error, :forbidden} = Attachments.describe(scope_for(ctx.alice, []), mine.uuid)
+      assert {:error, :forbidden} = Attachments.describe(nil, mine.uuid)
+    end
+
+    test "a policy configured as anything but {module, function} refuses", ctx do
+      Application.put_env(:phoenix_kit_inbox, :attachment_policy, "MyApp.Policy")
+
+      assert {:error, {:attachment_refused, {:invalid_policy, "MyApp.Policy"}}} =
+               send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+                 attachments_data: [%{binary: "pdf", filename: "p.pdf"}]
+               )
+
+      assert inbox_files() == []
+    end
+
+    test "filenames are reduced to a bounded base name without control characters", ctx do
+      long = String.duplicate("n", 300) <> ".pdf"
+
+      names = [
+        "../../etc/passwd",
+        "C:\\Users\\me\\report.txt",
+        "bad\u0000na\u001Fme\u007F.txt",
+        "  spaced.txt  ",
+        "..",
+        ".",
+        "",
+        "dir/",
+        long
+      ]
+
+      {:ok, message} =
+        send_to(ctx.scope, ctx.alice_box, ctx.bob, %{},
+          attachments_data: Enum.map(names, &%{binary: "x", filename: &1})
+        )
+
+      stored = message.uuid |> Attachments.list_for_message() |> Enum.map(& &1.filename)
+
+      assert Enum.take(stored, 8) == [
+               "passwd",
+               "report.txt",
+               "badname.txt",
+               "spaced.txt",
+               "attachment",
+               "attachment",
+               "attachment",
+               "attachment"
+             ]
+
+      bounded = List.last(stored)
+      assert String.length(bounded) == 255
+      assert String.ends_with?(bounded, ".pdf")
+      assert String.starts_with?(bounded, "nnn")
+    end
+
+    test "rows are listed by position, and a reordered draft keeps the new order", ctx do
+      names = for letter <- ~w(a b c d e f g h), do: "#{letter}.txt"
+
+      {:ok, draft} =
+        Messages.save_draft(ctx.scope, ctx.alice_box, %{"subject" => "WIP"},
+          attachments_data: Enum.map(names, &%{binary: &1, filename: &1})
+        )
+
+      rows = Attachments.list_for_message(draft.uuid)
+      assert Enum.map(rows, & &1.filename) == names
+      assert Enum.map(rows, & &1.position) == Enum.to_list(0..7)
+
+      # c and f keep their positions and are not rewritten; the others are,
+      # in the new order. The table's own order is then c, f, b, a, e, d, h,
+      # g — neither the old order nor the new one.
+      by_name = Map.new(rows, &{&1.filename, &1})
+      order = ~w(b.txt a.txt c.txt e.txt d.txt f.txt h.txt g.txt)
+
+      {:ok, _} =
+        Messages.save_draft(
+          ctx.scope,
+          ctx.alice_box,
+          Map.merge(%{"uuid" => draft.uuid}, attach(Enum.map(order, &by_name[&1].file_uuid)))
+        )
+
+      # The (message_uuid, position) index would return rows in position
+      # order by itself; without it the query's own ORDER BY must do it.
+      # Local to the test's sandbox transaction.
+      Repo.query!("SET LOCAL enable_indexscan = off")
+      Repo.query!("SET LOCAL enable_bitmapscan = off")
+
+      reordered = Attachments.list_for_message(draft.uuid)
+      assert Enum.map(reordered, & &1.filename) == order
+      assert Enum.map(reordered, & &1.uuid) == Enum.map(order, &by_name[&1].uuid)
+    end
+
+    test "the schema requires a filename of at most 255 characters" do
+      attrs = %{message_uuid: UUIDv7.generate(), file_uuid: UUIDv7.generate()}
+
+      assert %{filename: ["can't be blank"]} =
+               errors_on(Attachment.changeset(%Attachment{}, attrs))
+
+      assert %{filename: [_too_long]} =
+               errors_on(
+                 Attachment.changeset(
+                   %Attachment{},
+                   Map.put(attrs, :filename, String.duplicate("x", 256))
+                 )
+               )
+
+      assert Attachment.changeset(
+               %Attachment{},
+               Map.put(attrs, :filename, String.duplicate("x", 255))
+             ).valid?
     end
   end
 end

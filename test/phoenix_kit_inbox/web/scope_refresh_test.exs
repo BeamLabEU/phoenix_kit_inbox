@@ -214,17 +214,16 @@ defmodule PhoenixKitInbox.Web.ScopeRefreshTest do
       assert assigns(view).form.params["identity_uuid"] == ""
       assert has_element?(view, "input[name='to'][value='client@example.com']")
 
-      html =
-        view
-        |> element("#compose-form")
-        |> render_submit(%{
-          "to" => "client@example.com",
-          "subject" => "Offer",
-          "body" => "Hello",
-          "identity_uuid" => ctx.common.uuid
-        })
+      view
+      |> element("#compose-form")
+      |> render_submit(%{
+        "to" => "client@example.com",
+        "subject" => "Offer",
+        "body" => "Hello",
+        "identity_uuid" => ctx.common.uuid
+      })
 
-      assert html =~ "You can&#39;t send as that sender."
+      assert render_async(view) =~ "You can&#39;t send as that sender."
       assert Messages.list_folder(ctx.alice_mb.uuid, "sent") == []
       refute_received {:outbound, _, _, _}
     end
@@ -268,6 +267,7 @@ defmodule PhoenixKitInbox.Web.ScopeRefreshTest do
 
       type(view, params)
       render_click(view, "save_draft", %{})
+      render_async(view)
       assert [_] = Messages.list_folder(ctx.desk.uuid, "drafts")
 
       # Inbox switched off and on again (core calls the page on a module
@@ -278,11 +278,11 @@ defmodule PhoenixKitInbox.Web.ScopeRefreshTest do
       assert assigns(view).mailbox.uuid == ctx.alice_mb.uuid
       assert assigns(view).draft_uuid == nil
 
-      assert {:error, {:live_redirect, _}} =
-               view
-               |> element("#compose-form")
-               |> render_submit(Map.merge(%{"cc" => "", "bcc" => ""}, params))
+      view
+      |> element("#compose-form")
+      |> render_submit(Map.merge(%{"cc" => "", "bcc" => ""}, params))
 
+      assert_redirect(view)
       assert [_] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
     end
 
@@ -297,6 +297,127 @@ defmodule PhoenixKitInbox.Web.ScopeRefreshTest do
 
       assert has_element?(view, "select[name='mailbox'] option[value='#{ctx.desk.uuid}']")
       assert assigns(view).mailbox.uuid == ctx.alice_mb.uuid
+    end
+  end
+
+  # The attachment policy holds a draft save in its task until the test
+  # lets it go: the page is then "saving" for as long as the test needs.
+  def hold(_scope, _users, _rows) do
+    send(Application.get_env(:phoenix_kit_inbox, :hold_test_pid), {:held, self()})
+
+    receive do
+      :go -> :ok
+    after
+      5_000 -> :ok
+    end
+  end
+
+  describe "Compose while a save runs" do
+    setup :storage_setup
+
+    setup ctx do
+      grant_fixture(ctx.desk, ctx.alice, "write")
+      # A reader besides the writer: the policy is asked about the desk's draft.
+      grant_fixture(ctx.desk, ctx.bob, "read")
+      other = shared_mailbox_fixture(ctx.admin, %{name: "Other"})
+
+      Application.put_env(:phoenix_kit_inbox, :attachment_policy, {__MODULE__, :hold})
+      Application.put_env(:phoenix_kit_inbox, :hold_test_pid, self())
+
+      on_exit(fn ->
+        Application.delete_env(:phoenix_kit_inbox, :attachment_policy)
+        Application.delete_env(:phoenix_kit_inbox, :hold_test_pid)
+      end)
+
+      {:ok, view, _html} =
+        live(as(ctx.conn, scope_for(ctx.alice)), Paths.compose(mailbox: ctx.desk.uuid))
+
+      type(view, %{"to" => "@#{ctx.bob.username}", "subject" => "Draft", "body" => "Body"})
+
+      view
+      |> file_input("#compose-form", :attachments, [
+        %{name: "scan.pdf", content: "%PDF", type: "application/pdf"}
+      ])
+      |> render_upload("scan.pdf")
+
+      render_click(view, "save_draft", %{})
+      assert_receive {:held, task}
+
+      Map.merge(ctx, %{view: view, task: task, other: other})
+    end
+
+    defp type(view, params) do
+      view
+      |> element("#compose-form")
+      |> render_change(
+        Map.merge(%{"to" => "", "cc" => "", "bcc" => "", "subject" => "", "body" => ""}, params)
+      )
+    end
+
+    defp finish(ctx) do
+      send(ctx.task, :go)
+      render_async(ctx.view)
+      Application.delete_env(:phoenix_kit_inbox, :attachment_policy)
+    end
+
+    test "an access event is applied after it; the draft is neither lost nor doubled", ctx do
+      {:ok, _} = Mailboxes.grant_access(ctx.manage, ctx.other, ctx.alice.uuid, "write")
+      render(ctx.view)
+
+      # Nothing moves under the running save.
+      refute has_element?(ctx.view, "select[name='mailbox'] option[value='#{ctx.other.uuid}']")
+      assert assigns(ctx.view).draft_uuid == nil
+
+      finish(ctx)
+
+      assert [%{message: draft}] = Messages.list_folder(ctx.desk.uuid, "drafts")
+      assert assigns(ctx.view).mailbox.uuid == ctx.desk.uuid
+      assert assigns(ctx.view).draft_uuid == draft.uuid
+      assert has_element?(ctx.view, "select[name='mailbox'] option[value='#{ctx.other.uuid}']")
+
+      render_click(ctx.view, "save_draft", %{})
+      render_async(ctx.view)
+
+      assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.desk.uuid, "drafts")
+      assert uuid == draft.uuid
+    end
+
+    test "a grant revoked meanwhile: the save finishes in its mailbox, then the page moves",
+         ctx do
+      :ok = Mailboxes.revoke_access(ctx.manage, ctx.desk, ctx.alice.uuid)
+      html = render(ctx.view)
+
+      refute html =~ "You can no longer send from"
+      assert assigns(ctx.view).mailbox.uuid == ctx.desk.uuid
+
+      finish(ctx)
+
+      assert [%{message: draft}] = Messages.list_folder(ctx.desk.uuid, "drafts")
+      assert [%{filename: "scan.pdf"}] = PhoenixKitInbox.Attachments.list_for_message(draft.uuid)
+      assert render(ctx.view) =~ "You can no longer send from “Desk”"
+      assert assigns(ctx.view).mailbox.uuid == ctx.alice_mb.uuid
+      assert assigns(ctx.view).draft_uuid == nil
+      assert has_element?(ctx.view, "input[name='subject'][value='Draft']")
+
+      render_click(ctx.view, "save_draft", %{})
+      render_async(ctx.view)
+
+      assert [_] = Messages.list_folder(ctx.alice_mb.uuid, "drafts")
+      assert [_] = Messages.list_folder(ctx.desk.uuid, "drafts")
+    end
+
+    test "core's scope refresh is applied after it", ctx do
+      refresh_scope(ctx.view, scope_for(ctx.alice, ["integrations"]))
+
+      assert assigns(ctx.view).module_access
+      assert assigns(ctx.view).mailbox.uuid == ctx.desk.uuid
+
+      finish(ctx)
+
+      assert [_] = Messages.list_folder(ctx.desk.uuid, "drafts")
+      refute assigns(ctx.view).module_access
+      assert assigns(ctx.view).mailbox == nil
+      assert assigns(ctx.view).draft_uuid == nil
     end
   end
 

@@ -25,13 +25,13 @@ msgstr ""
 #: lib/phoenix_kit_inbox/notify.ex:171
 #: lib/phoenix_kit_inbox/notify.ex:172
 #: lib/phoenix_kit_inbox/notify.ex:294
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:741
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:819
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:744
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:822
 #, elixir-autogen, elixir-format
 msgid "(no subject)"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:828
+#: lib/phoenix_kit_inbox/web/compose_live.ex:999
 #, elixir-autogen, elixir-format
 msgid "@username, email or shared mailbox — comma separated"
 msgstr ""
@@ -112,8 +112,8 @@ msgstr ""
 msgid "An attachment could not be stored. Try again."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1002
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1054
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1016
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1068
 #: lib/phoenix_kit_inbox/web/mailboxes_live.ex:455
 #, elixir-autogen, elixir-format
 msgid "Archive"
@@ -124,12 +124,12 @@ msgstr ""
 msgid "Archive this mailbox?"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:991
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1193
 #, elixir-autogen, elixir-format
 msgid "Attach existing file"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:771
+#: lib/phoenix_kit_inbox/web/compose_live.ex:939
 #, elixir-autogen, elixir-format
 msgid "Attach existing files"
 msgstr ""
@@ -154,7 +154,7 @@ msgstr ""
 msgid "Back to mailbox"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:840
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1011
 #, elixir-autogen, elixir-format
 msgid "Bcc"
 msgstr ""
@@ -164,19 +164,19 @@ msgstr ""
 msgid "Broken"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:891
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1067
 #: lib/phoenix_kit_inbox/web/identity_editor.ex:346
 #: lib/phoenix_kit_inbox/web/signature_editor.ex:179
 #, elixir-autogen, elixir-format
 msgid "Cancel"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:970
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1169
 #, elixir-autogen, elixir-format
 msgid "Cancel upload"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:834
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1005
 #, elixir-autogen, elixir-format
 msgid "Cc"
 msgstr ""
@@ -191,7 +191,7 @@ msgstr ""
 msgid "Choose a sender under “Send as” to write to addresses outside this application."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:821
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:824
 #, elixir-autogen, elixir-format
 msgid "Close"
 msgstr ""
@@ -227,12 +227,12 @@ msgstr ""
 msgid "Delete"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1035
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1049
 #, elixir-autogen, elixir-format
 msgid "Delete forever"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1032
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1046
 #, elixir-autogen, elixir-format
 msgid "Delete this message from your mailbox permanently?"
 msgstr ""
@@ -252,37 +252,37 @@ msgstr ""
 msgid "Derived from the name when left blank"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:902
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1079
 #, elixir-autogen, elixir-format
 msgid "Discard draft"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:899
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1075
 #, elixir-autogen, elixir-format
 msgid "Discard this draft?"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:861
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:866
 #, elixir-autogen, elixir-format
 msgid "Download"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:430
+#: lib/phoenix_kit_inbox/web/compose_live.ex:470
 #, elixir-autogen, elixir-format
 msgid "Draft"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:496
+#: lib/phoenix_kit_inbox/web/compose_live.ex:546
 #, elixir-autogen, elixir-format
 msgid "Draft discarded."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:706
+#: lib/phoenix_kit_inbox/web/compose_live.ex:641
 #, elixir-autogen, elixir-format
 msgid "Draft saved."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1051
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1065
 #, elixir-autogen, elixir-format
 msgid "Drafts"
 msgstr ""
@@ -293,18 +293,18 @@ msgstr ""
 msgid "Edit"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:708
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:711
 #, elixir-autogen, elixir-format
 msgid "Empty list."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:401
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:983
+#: lib/phoenix_kit_inbox/web/compose_live.ex:441
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:997
 #, elixir-autogen, elixir-format
 msgid "Forward"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:803
+#: lib/phoenix_kit_inbox/web/compose_live.ex:973
 #, elixir-autogen, elixir-format
 msgid "From"
 msgstr ""
@@ -316,12 +316,12 @@ msgstr ""
 
 #: lib/phoenix_kit_inbox.ex:195
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:77
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1049
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1063
 #, elixir-autogen, elixir-format
 msgid "Inbox"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1015
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1217
 #, elixir-autogen, elixir-format
 msgid "Inside the application only"
 msgstr ""
@@ -331,7 +331,7 @@ msgstr ""
 msgid "Its mail connection is missing, disconnected or no longer usable. Fix it, then check again."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1020
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1222
 #, elixir-autogen, elixir-format
 msgid "Larger than the upload limit."
 msgstr ""
@@ -372,7 +372,7 @@ msgid "Mailbox “%{name}” created."
 msgstr ""
 
 #: lib/phoenix_kit_inbox.ex:222
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:608
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:611
 #: lib/phoenix_kit_inbox/web/mailboxes_live.ex:52
 #, elixir-autogen, elixir-format
 msgid "Mailboxes"
@@ -383,22 +383,22 @@ msgstr ""
 msgid "Manage your mail connections"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:991
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1005
 #, elixir-autogen, elixir-format
 msgid "Mark read"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:991
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1005
 #, elixir-autogen, elixir-format
 msgid "Mark unread"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:872
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1043
 #, elixir-autogen, elixir-format
 msgid "Markdown: **bold**, _italic_, [link](https://…), - lists."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:870
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1041
 #, elixir-autogen, elixir-format
 msgid "Message"
 msgstr ""
@@ -408,12 +408,12 @@ msgstr ""
 msgid "Message not found."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:351
+#: lib/phoenix_kit_inbox/web/compose_live.ex:391
 #, elixir-autogen, elixir-format
 msgid "Message sent."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:349
+#: lib/phoenix_kit_inbox/web/compose_live.ex:389
 #, elixir-autogen, elixir-format
 msgid "Message sent. The email to external addresses is on its way."
 msgstr ""
@@ -441,8 +441,8 @@ msgstr ""
 msgid "Name shown to recipients"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:85
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:597
+#: lib/phoenix_kit_inbox/web/compose_live.ex:105
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:600
 #, elixir-autogen, elixir-format
 msgid "New message"
 msgstr ""
@@ -457,7 +457,7 @@ msgstr ""
 msgid "New shared mailbox"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1009
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1211
 #, elixir-autogen, elixir-format
 msgid "No Reply-To — replies go to this mailbox"
 msgstr ""
@@ -477,7 +477,7 @@ msgstr ""
 msgid "No shared mailboxes yet."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:881
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1052
 #, elixir-autogen, elixir-format
 msgid "No signature"
 msgstr ""
@@ -487,7 +487,7 @@ msgstr ""
 msgid "No signatures yet."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:599
+#: lib/phoenix_kit_inbox/web/compose_live.ex:744
 #, elixir-autogen, elixir-format
 msgid "Not attached: %{names}. %{reason}"
 msgstr ""
@@ -507,7 +507,7 @@ msgstr ""
 msgid "Not found."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:709
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:712
 #, elixir-autogen, elixir-format
 msgid "Nothing in this folder yet."
 msgstr ""
@@ -552,24 +552,24 @@ msgstr ""
 msgid "Recipient not found."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:600
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:603
 #, elixir-autogen, elixir-format
 msgid "Refresh"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:944
-#: lib/phoenix_kit_inbox/web/compose_live.ex:945
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1142
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1143
 #, elixir-autogen, elixir-format
 msgid "Remove attachment"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:378
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:974
+#: lib/phoenix_kit_inbox/web/compose_live.ex:418
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:988
 #, elixir-autogen, elixir-format
 msgid "Reply"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:853
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1024
 #: lib/phoenix_kit_inbox/web/my_settings_live.ex:228
 #, elixir-autogen, elixir-format
 msgid "Reply-To"
@@ -580,7 +580,7 @@ msgstr ""
 msgid "Reply-To saved."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:916
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:930
 #, elixir-autogen, elixir-format
 msgid "Retry"
 msgstr ""
@@ -597,27 +597,27 @@ msgstr ""
 msgid "Save"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:907
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1091
 #, elixir-autogen, elixir-format
 msgid "Save draft"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:699
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:702
 #, elixir-autogen, elixir-format
 msgid "Search"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:806
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:809
 #, elixir-autogen, elixir-format
 msgid "Select any message in the list to view it here."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:912
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1102
 #, elixir-autogen, elixir-format
 msgid "Send"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:814
+#: lib/phoenix_kit_inbox/web/compose_live.ex:985
 #, elixir-autogen, elixir-format
 msgid "Send as"
 msgstr ""
@@ -642,7 +642,7 @@ msgstr ""
 msgid "Senders"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:430
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:433
 #, elixir-autogen, elixir-format
 msgid "Sending again."
 msgstr ""
@@ -652,7 +652,7 @@ msgstr ""
 msgid "Sending to addresses outside this application is turned off."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1050
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1064
 #, elixir-autogen, elixir-format
 msgid "Sent"
 msgstr ""
@@ -672,7 +672,7 @@ msgstr ""
 msgid "Shared mailboxes you are given access to appear here."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:876
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1047
 #, elixir-autogen, elixir-format
 msgid "Signature"
 msgstr ""
@@ -703,18 +703,18 @@ msgstr ""
 msgid "Slug"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1013
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1052
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1027
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1066
 #, elixir-autogen, elixir-format
 msgid "Spam"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:728
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:731
 #, elixir-autogen, elixir-format
 msgid "Star"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:869
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1040
 #, elixir-autogen, elixir-format
 msgid "Subject"
 msgstr ""
@@ -799,12 +799,12 @@ msgstr ""
 msgid "The email log shows the email may have gone out, so it is not sent again."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:325
+#: lib/phoenix_kit_inbox/web/compose_live.ex:365
 #, elixir-autogen, elixir-format
 msgid "The signature in the message was edited, so it was left as it is."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1023
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1225
 #, elixir-autogen, elixir-format
 msgid "The upload failed."
 msgstr ""
@@ -834,7 +834,7 @@ msgstr ""
 msgid "These options need the sender's scope."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1022
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1224
 #, elixir-autogen, elixir-format
 msgid "This file type is not accepted."
 msgstr ""
@@ -854,18 +854,18 @@ msgstr ""
 msgid "This message can't be sent again from here."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:827
+#: lib/phoenix_kit_inbox/web/compose_live.ex:998
 #, elixir-autogen, elixir-format
 msgid "To"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1021
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1223
 #, elixir-autogen, elixir-format
 msgid "Too many files."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1024
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1053
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1038
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1067
 #, elixir-autogen, elixir-format
 msgid "Trash"
 msgstr ""
@@ -875,12 +875,12 @@ msgstr ""
 msgid "Unexpected error: %{reason}"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:673
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:676
 #, elixir-autogen, elixir-format
 msgid "Unseen only"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:980
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1181
 #, elixir-autogen, elixir-format
 msgid "Upload files"
 msgstr ""
@@ -925,7 +925,7 @@ msgstr ""
 msgid "You don't have access to this mailbox."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:743
+#: lib/phoenix_kit_inbox/web/compose_live.ex:908
 #, elixir-autogen, elixir-format
 msgid "You don't have any mailbox you can send from."
 msgstr ""
@@ -935,8 +935,8 @@ msgstr ""
 msgid "You don't have permission to do that."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:738
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:577
+#: lib/phoenix_kit_inbox/web/compose_live.ex:903
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:580
 #: lib/phoenix_kit_inbox/web/mailboxes_live.ex:306
 #: lib/phoenix_kit_inbox/web/my_settings_live.ex:189
 #: lib/phoenix_kit_inbox/web/settings_live.ex:95
@@ -954,98 +954,98 @@ msgstr ""
 msgid "Your mail settings"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:614
+#: lib/phoenix_kit_inbox/web/compose_live.ex:759
 #, elixir-autogen, elixir-format
 msgid "a file"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:928
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:942
 #, elixir-autogen, elixir-format
 msgid "not delivered"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:929
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:943
 #, elixir-autogen, elixir-format
 msgid "sending…"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:927
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:941
 #, elixir-autogen, elixir-format
 msgid "sent"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:930
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:944
 #, elixir-autogen, elixir-format
 msgid "unknown — check the email log"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1079
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1093
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Apr"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1083
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1097
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Aug"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1087
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1101
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Dec"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1077
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1091
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Feb"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1076
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1090
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Jan"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1082
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1096
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Jul"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1081
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1095
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Jun"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1078
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1092
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Mar"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1080
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1094
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "May"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1086
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1100
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Nov"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1085
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1099
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Oct"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1084
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1098
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Sep"
@@ -1088,7 +1088,7 @@ msgstr[1] ""
 msgid "User %{id}"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:965
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:979
 #, elixir-autogen, elixir-format
 msgid "Edit draft"
 msgstr ""
@@ -1193,17 +1193,17 @@ msgstr ""
 msgid "the role has no “Send to external addresses” permission — grant it in the roles matrix"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:216
+#: lib/phoenix_kit_inbox/web/compose_live.ex:256
 #, elixir-autogen, elixir-format
 msgid "The Reply-To you chose is no longer available, so it was reset."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:213
+#: lib/phoenix_kit_inbox/web/compose_live.ex:253
 #, elixir-autogen, elixir-format
 msgid "The sender you chose is no longer available, so it was reset."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:197
+#: lib/phoenix_kit_inbox/web/compose_live.ex:237
 #, elixir-autogen, elixir-format
 msgid "You can no longer send from “%{lost}”, so this message is now from “%{name}”."
 msgstr ""
@@ -1216,4 +1216,30 @@ msgstr ""
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:165
 #, elixir-autogen, elixir-format
 msgid "You no longer have access to “%{name}”."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1134
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:879
+#, elixir-autogen, elixir-format
+msgid "Attachment not available"
+msgstr ""
+
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1087
+#, elixir-autogen, elixir-format
+msgid "Saving…"
+msgstr ""
+
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1098
+#, elixir-autogen, elixir-format
+msgid "Sending…"
+msgstr ""
+
+#: lib/phoenix_kit_inbox/web/compose_live.ex:653
+#, elixir-autogen, elixir-format
+msgid "The draft could not be saved. Try again."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/web/compose_live.ex:626
+#, elixir-autogen, elixir-format
+msgid "The message may not have been sent. Check Sent before trying again."
 msgstr ""
