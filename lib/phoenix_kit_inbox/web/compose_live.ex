@@ -176,7 +176,10 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   # Compose may be a user's first Inbox page. Without this their personal
   # mailbox doesn't exist yet and only shared mailboxes would be offered.
-  defp ensure_personal_mailbox(%{assigns: %{current_user: user}} = socket) when is_map(user) do
+  # Only with Inbox access: a user who can't use Inbox gets no mailbox by
+  # visiting — and one who gains it on an open page gets it on the refresh.
+  defp ensure_personal_mailbox(%{assigns: %{module_access: true, current_user: user}} = socket)
+       when is_map(user) do
     case Mailboxes.ensure_user_mailbox(user) do
       {:ok, _personal} ->
         socket
@@ -232,6 +235,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     socket =
       socket
       |> assign_module_access()
+      |> ensure_personal_mailbox()
       |> assign_mailbox(previous && previous.uuid)
 
     case {previous, socket.assigns.mailbox} do

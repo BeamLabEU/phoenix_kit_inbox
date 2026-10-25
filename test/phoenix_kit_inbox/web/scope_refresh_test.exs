@@ -13,8 +13,10 @@ defmodule PhoenixKitInbox.Web.ScopeRefreshTest do
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Paths
+  alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Signatures
   alias PhoenixKitInbox.Test.Hooks
+  alias PhoenixKitInbox.Test.Repo
 
   @manage ["inbox", "inbox.manage_shared"]
   @external ["inbox", "inbox.send_external"]
@@ -297,6 +299,22 @@ defmodule PhoenixKitInbox.Web.ScopeRefreshTest do
 
       assert has_element?(view, "select[name='mailbox'] option[value='#{ctx.desk.uuid}']")
       assert assigns(view).mailbox.uuid == ctx.alice_mb.uuid
+    end
+
+    test "gaining Inbox on an open page creates the personal mailbox and sends from it", ctx do
+      carol = user_fixture()
+      grant_fixture(ctx.desk, carol, "write")
+
+      {:ok, view, _html} =
+        live(as(ctx.conn, scope_for(carol, ["integrations"])), Paths.compose())
+
+      refute Repo.get_by(Mailbox, owner_uuid: carol.uuid, kind: "user")
+
+      refresh_scope(view, scope_for(carol))
+
+      assert %{uuid: personal_uuid} = Repo.get_by(Mailbox, owner_uuid: carol.uuid, kind: "user")
+      assert assigns(view).mailbox.uuid == personal_uuid
+      assert has_element?(view, "select[name='mailbox'] option[value='#{ctx.desk.uuid}']")
     end
   end
 
