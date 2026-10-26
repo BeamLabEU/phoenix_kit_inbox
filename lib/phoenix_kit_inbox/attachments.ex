@@ -295,20 +295,58 @@ defmodule PhoenixKitInbox.Attachments do
 
   # An earlier version made the library hidden only, under the old name. Only
   # what differs is written; a library that is right is not touched.
+  #
+  # Once a run of the node for this library and this config: ensure_library/0
+  # is asked on every send, and a refused write or a taken name must not be
+  # tried (and warned about) again each time.
   defp bring_up_to_date(library) do
-    if managed_libraries?() do
-      library |> update_listing() |> update_name()
-    else
-      log_unmanaged_once()
-      library
+    cond do
+      not managed_libraries?() ->
+        log_unmanaged_once()
+        library
+
+      synced?(library) ->
+        library
+
+      true ->
+        {library, outcome} = library |> update_listing() |> update_name()
+        :persistent_term.put(sync_key(library), remembered(outcome))
+        library
     end
+  end
+
+  # Done, or refused for good (a taken name): never again on this node. Any
+  # other failure (a timeout, a lost connection) is tried again after a while.
+  defp remembered(:transient), do: {:retry_after, now() + retry_after()}
+  defp remembered(_), do: :done
+
+  defp synced?(library) do
+    case :persistent_term.get(sync_key(library), nil) do
+      nil -> false
+      :done -> true
+      {:retry_after, at} -> now() < at
+    end
+  end
+
+  defp now, do: System.monotonic_time(:millisecond)
+
+  defp retry_after, do: Application.get_env(:phoenix_kit_inbox, :library_retry_ms, 300_000)
+
+  defp worse(:transient, _), do: :transient
+  defp worse(_, :transient), do: :transient
+  defp worse(:refused, _), do: :refused
+  defp worse(_, other), do: other
+
+  defp sync_key(library) do
+    {__MODULE__, :synced, library.uuid, Application.get_env(:phoenix_kit_inbox, :media_listing),
+     Application.get_env(:phoenix_kit_inbox, :library_name)}
   end
 
   defp update_listing(library) do
     listing = media_listing()
 
     if current_listing(library) == {listing, true} do
-      library
+      {library, :ok}
     else
       write_listing(library, listing)
     end
@@ -329,39 +367,44 @@ defmodule PhoenixKitInbox.Attachments do
            [media_listing: listing, managed: true]
          ]) do
       {:ok, updated} ->
-        updated
+        {updated, :ok}
 
       {:error, reason} ->
         Logger.warning("[Inbox] could not update the attachments library: #{inspect(reason)}")
-        library
+        {library, if(reason in [:not_hidden, :invalid_value], do: :refused, else: :transient)}
     end
   end
 
   # The rename is for a library still under the module's old default name.
-  defp update_name(%Library{name: @legacy_library_name} = library) do
+  defp update_name({%Library{name: @legacy_library_name} = library, outcome}) do
     case library_name() do
-      @legacy_library_name -> library
-      name -> rename(library, name)
+      @legacy_library_name ->
+        {library, outcome}
+
+      name ->
+        {library, renamed} = rename(library, name)
+        {library, worse(outcome, renamed)}
     end
   end
 
-  defp update_name(library), do: library
+  defp update_name(done), do: done
 
   defp rename(library, name) do
     # credo:disable-for-next-line Credo.Check.Refactor.Apply
     case apply(libraries(), :rename_library, [library, name]) do
       {:ok, renamed} ->
-        renamed
+        {renamed, :ok}
 
       error ->
-        if name_taken?(error) do
-          Logger.warning(
-            "[Inbox] the library name #{inspect(name)} is taken by another library; " <>
-              "the attachments library keeps #{inspect(library.name)}"
-          )
-        end
+        taken? = name_taken?(error)
+        reason = if taken?, do: "is taken by another library", else: inspect(error, limit: 20)
 
-        library
+        Logger.warning(
+          "[Inbox] could not rename the attachments library to #{inspect(name)} (#{reason}); " <>
+            "it keeps #{inspect(library.name)}"
+        )
+
+        {library, if(taken?, do: :refused, else: :transient)}
     end
   end
 

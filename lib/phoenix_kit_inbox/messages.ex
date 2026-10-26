@@ -32,6 +32,7 @@ defmodule PhoenixKitInbox.Messages do
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Users.Auth.User
   alias PhoenixKitInbox.Attachments
+  alias PhoenixKitInbox.Attachments.Folders
   alias PhoenixKitInbox.External
   alias PhoenixKitInbox.Identities
   alias PhoenixKitInbox.Mailboxes
@@ -338,6 +339,7 @@ defmodule PhoenixKitInbox.Messages do
         fresh
         |> write_draft(user_uuid, attrs, existing, items, created)
         |> finish_attachments(created)
+        |> file_draft(fresh, created)
       end
     end
   end
@@ -415,6 +417,15 @@ defmodule PhoenixKitInbox.Messages do
     {:error, reason}
   end
 
+  # The snapshots this save made go to the mailbox's Drafts folder, now that
+  # rows that name them are committed.
+  defp file_draft({:ok, _message} = saved, mailbox, created) do
+    Folders.lay_out_draft(mailbox, created)
+    saved
+  end
+
+  defp file_draft(error, _mailbox, _created), do: error
+
   @doc """
   The recipients typed into a draft when it was last saved, as
   `%{"to" => text, "cc" => text, "bcc" => text}` — blank strings when none.
@@ -452,12 +463,15 @@ defmodule PhoenixKitInbox.Messages do
     end)
   end
 
-  # The caller's "metadata" when it is a map, else what the message had.
+  # The caller's "metadata" when it is a map, else what the message had. The
+  # key the server writes for the message's attachments folder is never the
+  # caller's: it would send the files into a folder of their choosing.
   defp caller_metadata(attrs, base) do
     case Map.get(attrs, "metadata") do
       metadata when is_map(metadata) -> metadata
       _ -> base.metadata || %{}
     end
+    |> Map.delete(Folders.folder_key())
   end
 
   defp recipient_text(list) when is_list(list), do: Enum.map_join(list, ", ", &to_string/1)
@@ -667,6 +681,8 @@ defmodule PhoenixKitInbox.Messages do
              )
            end)
            |> finish_attachments(created) do
+      if items != [], do: Folders.lay_out_sent(message, mailbox)
+
       # Post-commit, deliberately: see the moduledoc.
       Notify.message_sent(message, mailbox, recipients, %{
         external: length(externals),

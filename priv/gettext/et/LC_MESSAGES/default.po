@@ -16,15 +16,16 @@ msgstr ""
 msgid "%{filename} is larger than the upload limit."
 msgstr "Fail %{filename} ületab üleslaadimise piiri."
 
-#: lib/phoenix_kit_inbox/notify.ex:299
+#: lib/phoenix_kit_inbox/notify.ex:369
 #, elixir-autogen, elixir-format
 msgid "%{sender} sent you a message."
 msgstr "%{sender} saatis sulle sõnumi."
 
 #: lib/phoenix_kit_inbox.ex:482
-#: lib/phoenix_kit_inbox/notify.ex:171
-#: lib/phoenix_kit_inbox/notify.ex:172
-#: lib/phoenix_kit_inbox/notify.ex:294
+#: lib/phoenix_kit_inbox/attachments/folders.ex:562
+#: lib/phoenix_kit_inbox/notify.ex:241
+#: lib/phoenix_kit_inbox/notify.ex:242
+#: lib/phoenix_kit_inbox/notify.ex:364
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:758
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:836
 #, elixir-autogen, elixir-format
@@ -282,6 +283,7 @@ msgstr "Mustand hüljatud."
 msgid "Draft saved."
 msgstr "Mustand salvestatud."
 
+#: lib/phoenix_kit_inbox/attachments/folders.ex:561
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:1079
 #, elixir-autogen, elixir-format
 msgid "Drafts"
@@ -447,7 +449,7 @@ msgstr "Saajatele näidatav nimi"
 msgid "New message"
 msgstr "Uus sõnum"
 
-#: lib/phoenix_kit_inbox/notify.ex:311
+#: lib/phoenix_kit_inbox/notify.ex:381
 #, elixir-autogen, elixir-format
 msgid "New message: %{subject}"
 msgstr "Uus sõnum: %{subject}"
@@ -542,7 +544,7 @@ msgstr "Isiklikke postkaste ei saa arhiveerida."
 msgid "Read"
 msgstr "Lugemine"
 
-#: lib/phoenix_kit_inbox/notify.ex:301
+#: lib/phoenix_kit_inbox/notify.ex:371
 #, elixir-autogen, elixir-format
 msgid "Read it: %{url}"
 msgstr "Loe seda siit: %{url}"
@@ -719,7 +721,7 @@ msgstr "Märgi tärniga"
 msgid "Subject"
 msgstr "Teema"
 
-#: lib/phoenix_kit_inbox/notify.ex:300
+#: lib/phoenix_kit_inbox/notify.ex:370
 #, elixir-autogen, elixir-format
 msgid "Subject: %{subject}"
 msgstr "Teema: %{subject}"

@@ -38,13 +38,48 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
     end
   end
 
+  # The real core, counting the writes the module makes to the library.
+  defmodule CountingLibraries do
+    @moduledoc false
+    alias PhoenixKit.Modules.Storage.Libraries
+
+    defdelegate get_hidden_library_by_slug(slug), to: Libraries
+    defdelegate hidden?(library), to: Libraries
+    defdelegate media_uuid, to: Libraries
+    defdelegate media_listing(library), to: Libraries
+    defdelegate managed?(library), to: Libraries
+    defdelegate create_system_library(attrs, opts), to: Libraries
+
+    def update_system_library_listing(library, opts) do
+      send(Application.get_env(:phoenix_kit_inbox, :library_test_pid), :listing_written)
+
+      if Application.get_env(:phoenix_kit_inbox, :library_test_fail) do
+        {:error, :timeout}
+      else
+        Libraries.update_system_library_listing(library, opts)
+      end
+    end
+
+    def rename_library(library, name) do
+      send(Application.get_env(:phoenix_kit_inbox, :library_test_pid), {:rename_tried, name})
+      Libraries.rename_library(library, name)
+    end
+  end
+
   setup :storage_setup
 
   setup do
     enable_inbox!()
 
     on_exit(fn ->
-      for key <- [:storage_libraries, :media_listing, :library_name, :library_test_pid],
+      for key <- [
+            :storage_libraries,
+            :media_listing,
+            :library_name,
+            :library_test_pid,
+            :library_test_fail,
+            :library_retry_ms
+          ],
           do: Application.delete_env(:phoenix_kit_inbox, key)
     end)
 
@@ -116,6 +151,65 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
       assert {:ok, again} = Attachments.ensure_library()
       assert again.updated_at == library.updated_at
       assert again.settings == library.settings
+    end
+
+    test "the library is brought up to date once, however often it is asked for" do
+      Application.put_env(:phoenix_kit_inbox, :storage_libraries, CountingLibraries)
+      Application.put_env(:phoenix_kit_inbox, :library_test_pid, self())
+      site_library("Mail attachments")
+      legacy_library()
+
+      log =
+        capture_log(fn ->
+          for _ <- 1..4, do: assert({:ok, _} = Attachments.ensure_library())
+        end)
+
+      assert_received :listing_written
+      refute_received :listing_written
+      assert_received {:rename_tried, "Mail attachments"}
+      refute_received {:rename_tried, _}
+      assert length(String.split(log, "could not rename the attachments library")) == 2
+    end
+
+    test "a write that failed for a passing reason is not tried again within the wait" do
+      Application.put_env(:phoenix_kit_inbox, :storage_libraries, CountingLibraries)
+      Application.put_env(:phoenix_kit_inbox, :library_test_pid, self())
+      Application.put_env(:phoenix_kit_inbox, :library_test_fail, true)
+      Application.put_env(:phoenix_kit_inbox, :library_retry_ms, 600_000)
+      legacy_library()
+
+      capture_log(fn ->
+        assert {:ok, _} = Attachments.ensure_library()
+        assert {:ok, _} = Attachments.ensure_library()
+      end)
+
+      assert_received :listing_written
+      refute_received :listing_written
+
+      # The core answers now, but the wait is not over.
+      Application.delete_env(:phoenix_kit_inbox, :library_test_fail)
+      assert {:ok, _} = Attachments.ensure_library()
+      refute_received :listing_written
+    end
+
+    test "a write that failed for a passing reason is tried again once the wait is over" do
+      Application.put_env(:phoenix_kit_inbox, :storage_libraries, CountingLibraries)
+      Application.put_env(:phoenix_kit_inbox, :library_test_pid, self())
+      Application.put_env(:phoenix_kit_inbox, :library_test_fail, true)
+      # No wait: the next call is already past it.
+      Application.put_env(:phoenix_kit_inbox, :library_retry_ms, 0)
+      legacy_library()
+
+      capture_log(fn -> assert {:ok, _} = Attachments.ensure_library() end)
+      assert_received :listing_written
+
+      Application.delete_env(:phoenix_kit_inbox, :library_test_fail)
+      assert {:ok, _} = Attachments.ensure_library()
+      assert_received :listing_written
+
+      assert {:ok, library} = Attachments.ensure_library()
+      refute_received :listing_written
+      assert Libraries.managed?(library)
     end
 
     test "a changed config reaches an existing library" do
@@ -190,6 +284,21 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
       Application.put_env(:phoenix_kit_inbox, :storage_libraries, NoManagedLibraries)
       Application.put_env(:phoenix_kit_inbox, :library_test_pid, self())
       :ok
+    end
+
+    test "the info line that it stays hidden is written once" do
+      :persistent_term.erase({Attachments, :unmanaged_logged})
+      previous = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert {:ok, _} = Attachments.ensure_library()
+          assert {:ok, _} = Attachments.ensure_library()
+        end)
+
+      assert length(String.split(log, "stays hidden")) == 2
     end
 
     test "the library stays hidden and plain, and the core is not asked for a listing" do
