@@ -38,6 +38,31 @@ defmodule PhoenixKitInbox.Attachments do
        holds a copy of (a non-deleted delivery in a mailbox they can read),
        is forwarded as the same snapshot, flags and all.
 
+  A snapshot is a record of its own in the Inbox library, but its bytes are
+  not always written again. Where the core has `Storage.link_copy/3`:
+
+    * ways 3 and 4 first ask for a linked copy of the file, which names the
+      file's stored objects (checked against the checksum and size the sender
+      saw);
+    * ways 1 and 5 look for a Storage file with exactly these bytes (same
+      checksum and size; active, not in the trash, not system-managed, not
+      being edited, with a path) — Media first (the sender's own files before
+      anyone else's, one attempt unless the donor changed meanwhile), then a
+      snapshot that already names keys outside the module's own prefix, then
+      any snapshot (up to three attempts a group; `:incompatible` ends a
+      group) — and link to it. The sender holds these bytes already, so a
+      link opens nothing new;
+    * ways 2 and 6 are unchanged.
+
+  Any refusal (`:incompatible`, `:donor_unavailable`, `:donor_changed`), an
+  answer that is not a new file of the Inbox library, a raise, throw or exit
+  of the core, no donor, or a core without the function means the full copy
+  described above.
+  Deleting the donor or the snapshot takes only the objects no other record
+  names, so a snapshot still reads after its original is edited, trashed or
+  deleted. `read_file/1`, `list_for_message/1` and `safe_content_type/1` need
+  no scope and see no difference.
+
   A file in the trash or a system-managed one is refused in ways 3 and 4
   (`{:error, {:attachment_unavailable, uuid}}`); anything else that does not
   qualify is `{:error, {:attachment_forbidden, uuid}}`.
@@ -47,9 +72,11 @@ defmodule PhoenixKitInbox.Attachments do
   Needs a PhoenixKit core with hidden system libraries
   (`Libraries.create_system_library/2` `hidden: true`,
   `get_hidden_library_by_slug/1`) and `Storage.store_file_in_buckets/7`
-  `dedup: false` — the first release after 2.63.0. On an older core every
-  attachment is refused with `{:error, :storage_unsupported}` (and a log
-  line); messages without attachments are unaffected.
+  `dedup: false` — the first release after 2.63.0. `Storage.link_copy/3` is
+  optional: it is looked up at run time, and without it snapshots are full
+  copies. On an older core every attachment is refused with
+  `{:error, :storage_unsupported}` (and a log line); messages without
+  attachments are unaffected.
 
   Snapshots are stored *before* the message transaction (Storage takes a
   directory lock for each, which must not be held across the send) and are
@@ -166,7 +193,8 @@ defmodule PhoenixKitInbox.Attachments do
 
   # Test seams, unset in production: `:storage_libraries` stands in for
   # core's hidden-library API (`Storage.Libraries`; a module without it is an
-  # older core), `:storage_module` for `Storage.store_file_in_buckets/7`.
+  # older core), `:storage_module` for `Storage.store_file_in_buckets/7` and
+  # `Storage.link_copy/3`.
   defp libraries, do: Application.get_env(:phoenix_kit_inbox, :storage_libraries, Libraries)
   defp storage, do: Application.get_env(:phoenix_kit_inbox, :storage_module, Storage)
 
@@ -849,18 +877,24 @@ defmodule PhoenixKitInbox.Attachments do
   def store_snapshots(items, user_uuid) do
     if Enum.any?(items, &(&1.mode == :snapshot)) do
       with {:ok, library} <- ensure_library() do
-        do_store_snapshots(items, user_uuid, to_string(library.uuid))
+        lib = %{uuid: to_string(library.uuid), prefix: key_prefix(library)}
+        do_store_snapshots(items, user_uuid, lib)
       end
     else
       {:ok, items, []}
     end
   end
 
-  defp do_store_snapshots(items, user_uuid, library_uuid) do
+  defp key_prefix(%{key_prefix: prefix}) when is_binary(prefix) and prefix != "",
+    do: prefix <> "/"
+
+  defp key_prefix(_library), do: nil
+
+  defp do_store_snapshots(items, user_uuid, lib) do
     items
     |> Enum.reduce_while({:ok, [], []}, fn
       %{mode: :snapshot} = item, {:ok, acc, created} ->
-        case snapshot_or_discard(item, user_uuid, library_uuid, created) do
+        case snapshot_or_discard(item, user_uuid, lib, created) do
           {:ok, file} ->
             uuid = to_string(file.uuid)
             {:cont, {:ok, [%{item | file_uuid: uuid} | acc], [uuid | created]}}
@@ -884,8 +918,8 @@ defmodule PhoenixKitInbox.Attachments do
 
   # The snapshots made so far are named by nothing yet: a raise or an exit
   # here must not leave them behind.
-  defp snapshot_or_discard(item, user_uuid, library_uuid, created) do
-    snapshot(item, user_uuid, library_uuid)
+  defp snapshot_or_discard(item, user_uuid, lib, created) do
+    snapshot(item, user_uuid, lib)
   rescue
     e ->
       discard_snapshots(created)
@@ -896,11 +930,33 @@ defmodule PhoenixKitInbox.Attachments do
       :erlang.raise(kind, reason, __STACKTRACE__)
   end
 
-  defp snapshot(%{source: {:file, file}} = item, user_uuid, library_uuid) do
+  defp snapshot(%{source: {:file, file}} = item, user_uuid, lib) do
+    case link_file(file, item, user_uuid, lib) do
+      {:ok, linked} -> {:ok, linked}
+      :error -> copy_file(file, item, user_uuid, lib)
+    end
+  end
+
+  defp snapshot(%{source: {:path, path}} = item, user_uuid, lib),
+    do: snapshot_bytes(path, item, user_uuid, lib)
+
+  defp snapshot(%{source: {:binary, binary}} = item, user_uuid, lib) do
+    temp = Path.join(System.tmp_dir!(), "phoenix_kit_inbox_#{UUIDv7.generate()}")
+
+    try do
+      File.write!(temp, binary)
+      snapshot_bytes(temp, item, user_uuid, lib)
+    after
+      File.rm(temp)
+    end
+  end
+
+  # The full copy of a Storage file: its bytes are read out and stored again.
+  defp copy_file(file, item, user_uuid, lib) do
     case Storage.retrieve_file(file.uuid) do
       {:ok, temp, _file} ->
         try do
-          store_snapshot(temp, item.filename, item.content_type, user_uuid, library_uuid)
+          store_snapshot(temp, item, user_uuid, lib)
         after
           File.rm(temp)
         end
@@ -911,40 +967,219 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
-  defp snapshot(%{source: {:path, path}} = item, user_uuid, library_uuid),
-    do: store_snapshot(path, item.filename, item.content_type, user_uuid, library_uuid)
+  # Bytes the sender holds (an upload, the host's data): linked to a Storage
+  # file that already has exactly these bytes, else stored.
+  defp snapshot_bytes(path, item, user_uuid, lib) do
+    checksum = Auth.calculate_file_hash(path)
 
-  defp snapshot(%{source: {:binary, binary}} = item, user_uuid, library_uuid) do
-    temp = Path.join(System.tmp_dir!(), "phoenix_kit_inbox_#{UUIDv7.generate()}")
+    case link_bytes(path, checksum, item, user_uuid, lib) do
+      {:ok, linked} -> {:ok, linked}
+      :error -> store_snapshot(path, item, user_uuid, lib, checksum)
+    end
+  rescue
+    e -> {:error, {:attachment_store_failed, Exception.message(e)}}
+  end
 
-    try do
-      File.write!(temp, binary)
-      store_snapshot(temp, item.filename, item.content_type, user_uuid, library_uuid)
-    after
-      File.rm(temp)
+  # ── linked snapshots ────────────────────────────────────────────────────────
+  #
+  # `Storage.link_copy/3` makes a record in the Inbox library that names the
+  # donor's stored objects, so the bytes are not written twice. The snapshot
+  # is still a row of its own in the Inbox library: it is trashed, edited or
+  # deleted on its own, and deleting the donor takes only the keys no other
+  # record names. Any refusal, an error, a wrong answer or a core without the
+  # function is `:error`, and the caller makes the full copy.
+  #
+  # The core returns a refusal as a value, never as a rollback, so a send
+  # inside the caller's transaction stays usable (the test "a send inside the
+  # caller's transaction" asks the real core for refusals).
+
+  @link_donor_limit 3
+
+  # Way 3 and 4: the donor is the file itself; its checksum and size are what
+  # the sender was shown, so a donor that changed since is refused.
+  defp link_file(file, item, user_uuid, lib) do
+    opts =
+      [library_uuid: lib.uuid, original_filename: item.filename] ++
+        for {key, value} <- [checksum: file.file_checksum, size: file.size], value != nil do
+          {key, value}
+        end
+
+    case link_copy(file, user_uuid, opts, lib) do
+      {:ok, linked} -> {:ok, linked}
+      {:error, _reason} -> :error
     end
   end
 
-  # `dedup: false`: without it Storage hands back the uploader's existing
-  # file of the same bytes, in whatever library it is — no snapshot at all.
-  defp store_snapshot(path, filename, content_type, user_uuid, library_uuid) do
+  # Way 1 and 5: a donor with the same checksum and size. Media first (the
+  # sender's own files before anyone else's), then a snapshot that already
+  # names keys outside the module's prefix, then any other snapshot. The
+  # groups are queried one after the other, only while nothing was linked.
+  defp link_bytes(path, checksum, item, user_uuid, lib) do
+    with true <- link_copy?(),
+         {:ok, %{size: size}} <- File.stat(path) do
+      opts = [
+        library_uuid: lib.uuid,
+        original_filename: item.filename,
+        checksum: checksum,
+        size: size
+      ]
+
+      Enum.find_value(donor_groups(checksum, size, user_uuid, lib), :error, fn {kind, query} ->
+        link_group(kind, query, user_uuid, opts, lib)
+      end)
+    else
+      _ -> :error
+    end
+  end
+
+  # The first donor of a group that links. `:incompatible` is a property of
+  # the pair of libraries, so it ends the group; Media's second candidate is
+  # tried only after a donor that changed under the caller.
+  defp link_group(kind, query, user_uuid, opts, lib) do
+    Enum.reduce_while(donors(query), nil, fn donor, nil ->
+      case link_copy(donor, user_uuid, opts, lib) do
+        {:ok, linked} -> {:halt, {:ok, linked}}
+        {:error, :incompatible} -> {:halt, nil}
+        {:error, :donor_changed} -> {:cont, nil}
+        {:error, _reason} when kind == :media -> {:halt, nil}
+        {:error, _reason} -> {:cont, nil}
+      end
+    end)
+  end
+
+  defp donors(query) do
+    repo().all(query)
+  rescue
+    e ->
+      Logger.warning("[Inbox] could not look for a file to link to: #{Exception.message(e)}")
+      []
+  end
+
+  defp donor_groups(checksum, size, user_uuid, lib) do
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
+    media = apply(libraries(), :media_uuid, [])
+    base = donor_query(checksum, size)
+
+    own_first = dynamic([f], f.user_uuid == ^user_uuid)
+
+    [
+      {:media,
+       base
+       |> where([f], f.library_uuid == ^media)
+       |> exclude(:order_by)
+       |> order_by(^[desc_nulls_last: own_first, asc: :inserted_at])}
+    ] ++ snapshot_groups(base, lib)
+  rescue
+    # A core that has `link_copy/3` but not `media_uuid/0` (a test seam).
+    e ->
+      Logger.warning("[Inbox] could not look for a file to link to: #{Exception.message(e)}")
+      []
+  end
+
+  # The module's own keys are under its library's prefix; a snapshot that was
+  # linked to a file elsewhere has that file's. Without a prefix to tell them
+  # apart, the second group is left out and the third is all of them.
+  defp snapshot_groups(base, lib) do
+    inbox = where(base, [f], f.library_uuid == ^lib.uuid)
+
+    case lib.prefix do
+      nil ->
+        [{:snapshot, inbox}]
+
+      prefix ->
+        length = String.length(prefix)
+
+        [
+          {:foreign, where(inbox, [f], fragment("left(?, ?)", f.file_path, ^length) != ^prefix)},
+          {:snapshot, where(inbox, [f], fragment("left(?, ?)", f.file_path, ^length) == ^prefix)}
+        ]
+    end
+  end
+
+  defp donor_query(checksum, size) do
+    from(f in Storage.File,
+      where:
+        f.file_checksum == ^checksum and f.size == ^size and f.status == "active" and
+          f.system_managed == false and is_nil(f.edit_state) and is_nil(f.trashed_at) and
+          not is_nil(f.file_path),
+      order_by: [asc: f.inserted_at],
+      limit: @link_donor_limit
+    )
+  end
+
+  # The function is looked up at run time: an older core has none, and a
+  # literal call would not compile there without warnings. The same seam
+  # (`:storage_module`) as `store_file_in_buckets/7`.
+  defp link_copy? do
+    mod = storage()
+    Code.ensure_loaded?(mod) and function_exported?(mod, :link_copy, 3)
+  end
+
+  # `{:ok, linked}` only for a new record of the Inbox library; every other
+  # outcome — a refusal, a wrong answer, a raise, a throw, an exit — is an
+  # `{:error, reason}` and the caller stores the bytes itself.
+  defp link_copy(donor, user_uuid, opts, lib) do
+    if link_copy?() do
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      apply(storage(), :link_copy, [donor, user_uuid, opts]) |> judge_link(donor, lib)
+    else
+      {:error, :unsupported}
+    end
+  rescue
+    e ->
+      Logger.warning("[Inbox] linking #{donor.uuid} failed: #{Exception.message(e)}")
+      {:error, :raised}
+  catch
+    kind, reason ->
+      Logger.warning("[Inbox] linking #{donor.uuid} failed (#{kind}): #{inspect(reason)}")
+      {:error, kind}
+  end
+
+  defp judge_link({:ok, %Storage.File{uuid: uuid} = linked}, donor, lib) do
+    if uuid != donor.uuid and to_string(linked.library_uuid) == lib.uuid do
+      {:ok, linked}
+    else
+      Logger.error(
+        "[Inbox] link_copy of #{donor.uuid} did not make a new file in the Inbox library; " <>
+          "storing the bytes instead"
+      )
+
+      {:error, :unexpected_file}
+    end
+  end
+
+  defp judge_link({:error, reason}, donor, _lib) do
+    Logger.info("[Inbox] no linked copy of #{donor.uuid}: #{inspect(reason)}")
+    {:error, if(is_atom(reason), do: reason, else: :failed)}
+  end
+
+  defp judge_link(other, donor, _lib) do
+    Logger.warning("[Inbox] link_copy of #{donor.uuid} answered #{inspect(other)}")
+    {:error, :unexpected_answer}
+  end
+
+  # Storing the bytes again. Plain `store_file_in_buckets` would hand back the
+  # uploader's existing file of the same bytes, in whatever library it is —
+  # no snapshot at all — so `dedup: false`.
+  defp store_snapshot(path, item, user_uuid, lib, checksum \\ nil) do
+    filename = item.filename
     ext = filename |> Path.extname() |> String.trim_leading(".") |> String.downcase()
-    mime = content_type || MIME.from_path(filename)
+    mime = item.content_type || MIME.from_path(filename)
 
     storage().store_file_in_buckets(
       path,
       Storage.determine_file_type(mime, filename),
       user_uuid,
-      Auth.calculate_file_hash(path),
+      checksum || Auth.calculate_file_hash(path),
       ext,
       filename,
-      library_uuid: library_uuid,
+      library_uuid: lib.uuid,
       dedup: false,
       mime_type: mime
     )
     |> case do
       {:ok, %{library_uuid: stored} = file} ->
-        if to_string(stored) == library_uuid, do: {:ok, file}, else: unsupported_store()
+        if to_string(stored) == lib.uuid, do: {:ok, file}, else: unsupported_store()
 
       {:error, reason} ->
         {:error, {:attachment_store_failed, reason}}
