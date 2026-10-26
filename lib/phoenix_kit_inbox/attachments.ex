@@ -135,9 +135,14 @@ defmodule PhoenixKitInbox.Attachments do
   alias PhoenixKitInbox.Schemas.Message
 
   @library_slug "phoenix-kit-inbox"
-  # System libraries share one namespace of names; a module prefix keeps a
-  # site's own "Inbox" library from blocking this one (and the reverse).
-  @library_name "PhoenixKit Inbox"
+  # System libraries share one namespace of names, so a site's own library can
+  # hold the name this one wants. The name before 0.4 is the only one a
+  # rename may replace; the prefixed one is what a taken name falls back to.
+  @default_library_name "Mail attachments"
+  @legacy_library_name "PhoenixKit Inbox"
+  @prefixed_library_name "PhoenixKit Inbox: "
+  @listings [:none, :admins, :uploaders, :own_only]
+  @default_listing :uploaders
   @max_files 50
   @max_upload_setting "inbox_max_upload_bytes"
   @default_max_upload_bytes 200_000_000
@@ -154,6 +159,15 @@ defmodule PhoenixKitInbox.Attachments do
   @doc """
   The module's hidden library, made on first call. Idempotent and safe to
   race: a caller that loses the insert finds the winner's library.
+
+  Where the core has managed hidden libraries the library is shown in Media
+  (`config :phoenix_kit_inbox, media_listing:`, `:uploaders` by default) and
+  managed — nobody changes or deletes its files from Media — and a library an
+  earlier version made is brought up to date. It is named
+  `config :phoenix_kit_inbox, library_name:` (`"Mail attachments"`); only the
+  old default name is ever renamed, and a name a site library holds is
+  replaced by a prefixed one (or kept) with a warning. Without managed
+  libraries it stays hidden, as before.
   """
   @spec ensure_library() :: {:ok, Library.t()} | {:error, term()}
   def ensure_library do
@@ -167,7 +181,7 @@ defmodule PhoenixKitInbox.Attachments do
         {:error, :storage_unsupported}
 
       library = library() ->
-        {:ok, library}
+        {:ok, bring_up_to_date(library)}
 
       true ->
         create_library()
@@ -191,6 +205,26 @@ defmodule PhoenixKitInbox.Attachments do
       function_exported?(libraries, :get_hidden_library_by_slug, 1)
   end
 
+  # Whether the core can show a hidden library in Media and manage it
+  # (`create_system_library/2` `media_listing:`/`managed:`,
+  # `update_system_library_listing/2`, `managed?/1`, and the
+  # `managed: :owner` option of the file and folder functions).
+  @doc false
+  @spec managed_libraries?() :: boolean()
+  def managed_libraries? do
+    libraries = libraries()
+
+    Code.ensure_loaded?(libraries) and
+      function_exported?(libraries, :update_system_library_listing, 2) and
+      function_exported?(libraries, :media_listing, 1) and
+      function_exported?(libraries, :managed?, 1)
+  end
+
+  # The option the module's own changes to its managed library take.
+  @doc false
+  @spec owner_opts() :: keyword()
+  def owner_opts, do: if(managed_libraries?(), do: [managed: :owner], else: [])
+
   # Test seams, unset in production: `:storage_libraries` stands in for
   # core's hidden-library API (`Storage.Libraries`; a module without it is an
   # older core), `:storage_module` for `Storage.store_file_in_buckets/7` and
@@ -199,20 +233,172 @@ defmodule PhoenixKitInbox.Attachments do
   defp storage, do: Application.get_env(:phoenix_kit_inbox, :storage_module, Storage)
 
   defp create_library do
-    # credo:disable-for-next-line Credo.Check.Refactor.Apply
-    case apply(libraries(), :create_system_library, [
-           %{"name" => @library_name, "slug" => @library_slug},
-           [hidden: true]
-         ]) do
+    name = library_name()
+
+    case insert_library(name) do
       {:ok, library} ->
+        log_unmanaged_once()
         {:ok, library}
 
-      {:error, reason} ->
-        case library() do
-          nil -> {:error, {:library_unavailable, reason}}
-          library -> {:ok, library}
-        end
+      error ->
+        found_or(error, fn -> create_failed(error, name) end)
     end
+  end
+
+  defp create_failed(error, name) do
+    if name_taken?(error),
+      do: create_under_prefixed_name(name),
+      else: library_error(error)
+  end
+
+  # A caller that lost the insert finds the winner's library.
+  defp found_or(error, otherwise) do
+    case library() do
+      %Library{} = library -> {:ok, library}
+      nil -> if match?({:error, _}, error), do: otherwise.(), else: library_error(error)
+    end
+  end
+
+  defp create_under_prefixed_name(name) do
+    prefixed = @prefixed_library_name <> name
+
+    Logger.warning(
+      "[Inbox] the library name #{inspect(name)} is taken by another library; " <>
+        "making the attachments library as #{inspect(prefixed)}"
+    )
+
+    case insert_library(prefixed) do
+      {:ok, library} -> {:ok, library}
+      error -> found_or(error, fn -> library_error(error) end)
+    end
+  end
+
+  defp library_error({:error, reason}), do: {:error, {:library_unavailable, reason}}
+  defp library_error(other), do: {:error, {:library_unavailable, other}}
+
+  defp insert_library(name) do
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
+    apply(libraries(), :create_system_library, [
+      %{"name" => name, "slug" => @library_slug},
+      [hidden: true] ++ listing_opts()
+    ])
+  end
+
+  defp listing_opts do
+    if managed_libraries?(),
+      do: [media_listing: media_listing(), managed: true],
+      else: []
+  end
+
+  defp name_taken?({:error, %Ecto.Changeset{errors: errors}}), do: Keyword.has_key?(errors, :name)
+  defp name_taken?(_), do: false
+
+  # An earlier version made the library hidden only, under the old name. Only
+  # what differs is written; a library that is right is not touched.
+  defp bring_up_to_date(library) do
+    if managed_libraries?() do
+      library |> update_listing() |> update_name()
+    else
+      log_unmanaged_once()
+      library
+    end
+  end
+
+  defp update_listing(library) do
+    listing = media_listing()
+
+    if current_listing(library) == {listing, true} do
+      library
+    else
+      write_listing(library, listing)
+    end
+  end
+
+  defp current_listing(library), do: {listing_of(library), managed?(library)}
+
+  # credo:disable-for-next-line Credo.Check.Refactor.Apply
+  defp listing_of(library), do: apply(libraries(), :media_listing, [library])
+
+  # credo:disable-for-next-line Credo.Check.Refactor.Apply
+  defp managed?(library), do: apply(libraries(), :managed?, [library])
+
+  defp write_listing(library, listing) do
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
+    case apply(libraries(), :update_system_library_listing, [
+           library,
+           [media_listing: listing, managed: true]
+         ]) do
+      {:ok, updated} ->
+        updated
+
+      {:error, reason} ->
+        Logger.warning("[Inbox] could not update the attachments library: #{inspect(reason)}")
+        library
+    end
+  end
+
+  # The rename is for a library still under the module's old default name.
+  defp update_name(%Library{name: @legacy_library_name} = library) do
+    case library_name() do
+      @legacy_library_name -> library
+      name -> rename(library, name)
+    end
+  end
+
+  defp update_name(library), do: library
+
+  defp rename(library, name) do
+    # credo:disable-for-next-line Credo.Check.Refactor.Apply
+    case apply(libraries(), :rename_library, [library, name]) do
+      {:ok, renamed} ->
+        renamed
+
+      error ->
+        if name_taken?(error) do
+          Logger.warning(
+            "[Inbox] the library name #{inspect(name)} is taken by another library; " <>
+              "the attachments library keeps #{inspect(library.name)}"
+          )
+        end
+
+        library
+    end
+  end
+
+  defp library_name do
+    case Application.get_env(:phoenix_kit_inbox, :library_name) do
+      name when is_binary(name) and name != "" -> name
+      _ -> @default_library_name
+    end
+  end
+
+  defp media_listing do
+    case Application.get_env(:phoenix_kit_inbox, :media_listing, @default_listing) do
+      listing when listing in @listings ->
+        listing
+
+      other ->
+        Logger.warning(
+          "[Inbox] media_listing #{inspect(other)} is not one of #{inspect(@listings)}; " <>
+            "using #{inspect(@default_listing)}"
+        )
+
+        @default_listing
+    end
+  end
+
+  # Once a run of the node is enough to say the library stays hidden.
+  defp log_unmanaged_once do
+    unless managed_libraries?() or :persistent_term.get({__MODULE__, :unmanaged_logged}, false) do
+      :persistent_term.put({__MODULE__, :unmanaged_logged}, true)
+
+      Logger.info(
+        "[Inbox] this PhoenixKit core cannot show the attachments library in Media; " <>
+          "it stays hidden"
+      )
+    end
+
+    :ok
   end
 
   defp library_uuid do
@@ -1291,8 +1477,17 @@ defmodule PhoenixKitInbox.Attachments do
   defp delete_snapshot(uuid, library) do
     with %Storage.File{} = file <- Storage.get_file(uuid),
          true <- in_library?(file, library),
-         {:error, reason} <- Storage.delete_file_completely(file) do
+         {:error, reason} <- delete_file_completely(file) do
       Logger.warning("[Inbox] could not delete snapshot #{uuid}: #{inspect(reason)}")
+    end
+  end
+
+  # The module owns its library, which the core may keep from users.
+  defp delete_file_completely(file) do
+    case owner_opts() do
+      [] -> Storage.delete_file_completely(file)
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      opts -> apply(Storage, :delete_file_completely, [file, opts])
     end
   end
 

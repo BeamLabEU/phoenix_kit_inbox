@@ -137,7 +137,14 @@ defmodule PhoenixKitInbox.Web.AttachmentControllerTest do
   end
 
   test "bytes gone from Storage: 404", %{conn: conn, bob: bob, row: row} do
-    {:ok, _} = Storage.delete_file_completely(row.file_uuid)
+    # The module's library is managed on a core that can: only its owner deletes.
+    {:ok, _} =
+      case PhoenixKitInbox.Attachments.owner_opts() do
+        [] -> Storage.delete_file_completely(row.file_uuid)
+        # credo:disable-for-next-line Credo.Check.Refactor.Apply
+        opts -> apply(Storage, :delete_file_completely, [row.file_uuid, opts])
+      end
+
     assert download(conn, scope_for(bob), row).status == 404
   end
 end
