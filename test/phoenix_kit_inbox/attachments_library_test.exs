@@ -15,6 +15,7 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
+  alias PhoenixKitInbox.Test.Repo
 
   Code.ensure_loaded(Libraries)
 
@@ -209,6 +210,19 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
 
       assert {:ok, library} = Attachments.ensure_library()
       refute_received :listing_written
+      assert Libraries.managed?(library)
+    end
+
+    test "inside a caller's transaction the library is not brought up to date, nor remembered" do
+      Application.put_env(:phoenix_kit_inbox, :storage_libraries, CountingLibraries)
+      Application.put_env(:phoenix_kit_inbox, :library_test_pid, self())
+      legacy_library()
+
+      Repo.transaction(fn -> assert {:ok, _} = Attachments.ensure_library() end)
+      refute_received :listing_written
+
+      assert {:ok, library} = Attachments.ensure_library()
+      assert_received :listing_written
       assert Libraries.managed?(library)
     end
 

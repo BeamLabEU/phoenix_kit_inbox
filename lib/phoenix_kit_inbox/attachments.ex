@@ -4,12 +4,57 @@ defmodule PhoenixKitInbox.Attachments do
 
   ## Where the files live
 
-  Every attachment is a file in the module's own **hidden system library** in
-  Storage (slug `"phoenix-kit-inbox"`, made on first use by
-  `ensure_library/0`). A hidden library's files are not listed in Media, have
-  no permanent URL, and are read only by their uploader and an Owner/Admin
-  (`PhoenixKit.Modules.Storage.Libraries.can?/3`) — the module serves them to
-  the people on a message itself, through `PhoenixKitInbox.Web.AttachmentController`.
+  Every attachment is a file in the module's own **system library** in Storage
+  (slug `"phoenix-kit-inbox"`, made on first use by `ensure_library/0`). The
+  library is private: its files have no permanent URL and are read through
+  `PhoenixKit.Modules.Storage.Libraries.can?/3` — their uploader, an
+  Owner/Admin — and the module serves them to the people on a message itself,
+  through `PhoenixKitInbox.Web.AttachmentController`.
+
+  ### Shown in Media, read-only
+
+  Where the core has managed libraries, the library is **listed in Media**
+  (named `"Mail attachments"`, or `config :phoenix_kit_inbox, library_name:`)
+  and **managed**: nobody changes, deletes, moves or renames its files from
+  Media, Owner included — the core refuses it, the buttons are not the guard.
+  The module's own writes pass `managed: :owner` (`owner_opts/0`).
+
+      config :phoenix_kit_inbox, media_listing: :uploaders   # the default
+
+  `media_listing` is who finds the library in Media's switcher:
+  `:none` — no one (it stays hidden); `:admins` — Owner/Admin, every file;
+  `:uploaders` — Owner/Admin every file, a holder of the `media` permission
+  the files they uploaded themselves; `:own_only` — everyone only their own.
+  A user's "own" files are the snapshots they created (`files.user_uuid`),
+  the same rule under which the module does not ask the host's
+  `attachment_policy` of a snapshot's creator.
+
+  **The listing does not ask `attachment_policy`.** Owner/Admin see *every*
+  attachment of every message under `:admins` and `:uploaders`, past the
+  policy — a host whose policy keeps files from its administrators should use
+  `:own_only` or `:none`. Recipients are not uploaders and do not see the
+  files they were sent in Media; they read them through the module.
+
+  The library is brought up to date on the first use of a node (a hidden-only
+  library an earlier version made, a changed config, the old default name —
+  only that name is ever renamed); a write the core refuses is not repeated,
+  one that failed for a passing reason is tried again after
+  `:library_retry_ms` (300 000 by default). A core without managed libraries
+  keeps the library hidden, as before, under the earlier name
+  "PhoenixKit Inbox" (the new name once the core can show it).
+
+  ### Folders
+
+  In Media the files lie in folders, `PhoenixKitInbox.Attachments.Folders`:
+  `<mailbox> / <YYYY-MM> / <date time — subject>` for a sent message,
+  `<mailbox> / Drafts` for a draft's new snapshots, a `FolderLink` in the
+  folder of every later message that names a file filed elsewhere. The host's
+  `config :phoenix_kit_inbox, attachment_folder: {Mod, :fun}` (`(message,
+  sending_mailbox)`, a list of folder names or `nil`) replaces the
+  `<mailbox>/<YYYY-MM>` levels. Filing runs after the commit, best effort;
+  what it misses stays in the root or in `Drafts` until
+  `mix phoenix_kit_inbox.relink_attachments`
+  (`PhoenixKitInbox.Attachments.Maintenance`) files it.
 
   A message stores references (`PhoenixKitInbox.Schemas.Attachment` rows), not
   bytes, so an internal message has no size limit beyond the per-file
@@ -38,8 +83,15 @@ defmodule PhoenixKitInbox.Attachments do
        holds a copy of (a non-deleted delivery in a mailbox they can read),
        is forwarded as the same snapshot, flags and all.
 
-  A snapshot is a record of its own in the Inbox library, but its bytes are
-  not always written again. Where the core has `Storage.link_copy/3`:
+  Folder names carry the message's subject and the mailbox's name; under
+  `:admins` and `:uploaders` an Owner/Admin sees them in Media, past Inbox's
+  own access rules. The search for a donor by checksum (ways 1 and 5) reads
+  Media without an index on `file_checksum`, so its cost grows with Media.
+
+  A snapshot is a record of its own in the Inbox library — its uuid, folder,
+  name and owner are its own — but the stored objects behind it may be shared
+  with the file it came from, so it is not always a second copy of the bytes.
+  Where the core has `Storage.link_copy/3`:
 
     * ways 3 and 4 first ask for a linked copy of the file, which names the
       file's stored objects (checked against the checksum and size the sender
@@ -51,7 +103,8 @@ defmodule PhoenixKitInbox.Attachments do
       snapshot that already names keys outside the module's own prefix, then
       any snapshot (up to three attempts a group; `:incompatible` ends a
       group) — and link to it. The sender holds these bytes already, so a
-      link opens nothing new;
+      link opens no bytes they do not hold (it can show them, through their
+      own snapshot in Media, that the same bytes are held elsewhere);
     * ways 2 and 6 are unchanged.
 
   Any refusal (`:incompatible`, `:donor_unavailable`, `:donor_changed`), an
@@ -72,11 +125,21 @@ defmodule PhoenixKitInbox.Attachments do
   Needs a PhoenixKit core with hidden system libraries
   (`Libraries.create_system_library/2` `hidden: true`,
   `get_hidden_library_by_slug/1`) and `Storage.store_file_in_buckets/7`
-  `dedup: false` — the first release after 2.63.0. `Storage.link_copy/3` is
-  optional: it is looked up at run time, and without it snapshots are full
-  copies. On an older core every attachment is refused with
-  `{:error, :storage_unsupported}` (and a log line); messages without
-  attachments are unaffected.
+  `dedup: false` — 2.64.0, which `mix.exs` requires. On an older core every
+  attachment is refused with `{:error, :storage_unsupported}` (and a log
+  line); messages without attachments are unaffected. Optional, each looked
+  up at run time (a literal call would not compile without warnings on a core
+  that lacks it), and each doing without:
+
+    * `Storage.link_copy/3` — snapshots share the donor's stored objects;
+      without it they are full copies;
+    * managed libraries (`Libraries.update_system_library_listing/2`,
+      `media_listing/1`, `managed?/1`, the `managed: :owner` option) — the
+      library is listed in Media, read-only, and filed in folders; without
+      them it stays hidden and unfiled;
+    * `Storage.relink_file/3` and `Storage.delete_unreferenced_keys/1` — only
+      the maintenance task (`PhoenixKitInbox.Attachments.Maintenance`) needs
+      them, and says so when they are missing.
 
   Snapshots are stored *before* the message transaction (Storage takes a
   directory lock for each, which must not be held across the send) and are
@@ -85,9 +148,15 @@ defmodule PhoenixKitInbox.Attachments do
   library with no row naming them, and Storage's orphan cleanup skips hidden
   libraries — a sweep of unnamed Inbox-library files would reclaim them (not
   part of this module yet). Rolling back to before V03 drops the attachment
-  rows and leaves every snapshot in the library. Snapshots of a sent message
-  are never deleted — sent messages are permanent; a discarded draft takes
-  its snapshots with it unless another row still names them.
+  rows and leaves every snapshot in the library. Rolling the module back to a
+  version before the library was managed leaves its old `release/1`, which
+  deletes without `managed: :owner` and so cannot remove the snapshots of a
+  discarded draft: they stay in the library. A core that answers `link_copy/3`
+  with a file outside the Inbox library leaves that record behind (the module
+  stores the bytes itself and does not delete another library's file).
+  Snapshots of a sent message are never deleted — sent messages are
+  permanent; a discarded draft takes its snapshots with it unless another row
+  still names them.
 
   ## Flags and the host's policy
 
@@ -136,8 +205,8 @@ defmodule PhoenixKitInbox.Attachments do
 
   @library_slug "phoenix-kit-inbox"
   # System libraries share one namespace of names, so a site's own library can
-  # hold the name this one wants. The name before 0.4 is the only one a
-  # rename may replace; the prefixed one is what a taken name falls back to.
+  # hold the name this one wants. The module's earlier default name is the only
+  # one a rename may replace; the prefixed one is what a taken name falls back to.
   @default_library_name "Mail attachments"
   @legacy_library_name "PhoenixKit Inbox"
   @prefixed_library_name "PhoenixKit Inbox: "
@@ -191,6 +260,12 @@ defmodule PhoenixKitInbox.Attachments do
   defp library do
     if hidden_libraries?(), do: hidden_library()
   end
+
+  @doc false
+  # The library if it exists; unlike `ensure_library/0` it makes and changes
+  # nothing. For read-only callers.
+  @spec existing_library() :: Library.t() | nil
+  def existing_library, do: library()
 
   # Optional core APIs must also remain optional at compile time.
   # credo:disable-for-next-line Credo.Check.Refactor.Apply
@@ -305,6 +380,11 @@ defmodule PhoenixKitInbox.Attachments do
         log_unmanaged_once()
         library
 
+      # Like the filing: a write here would be rolled back with the caller's
+      # transaction while the node remembered it as done.
+      repo().in_transaction?() ->
+        library
+
       synced?(library) ->
         library
 
@@ -411,8 +491,15 @@ defmodule PhoenixKitInbox.Attachments do
   defp library_name do
     case Application.get_env(:phoenix_kit_inbox, :library_name) do
       name when is_binary(name) and name != "" -> name
-      _ -> @default_library_name
+      _ -> default_library_name()
     end
+  end
+
+  # A core that cannot show the library keeps it hidden, and a hidden library
+  # takes a name from the site's namespace too: it gets the earlier name, and
+  # the new one once the core can show it (`update_name/1`).
+  defp default_library_name do
+    if managed_libraries?(), do: @default_library_name, else: @legacy_library_name
   end
 
   defp media_listing do
@@ -1114,10 +1201,14 @@ defmodule PhoenixKitInbox.Attachments do
     end
   end
 
-  defp key_prefix(%{key_prefix: prefix}) when is_binary(prefix) and prefix != "",
+  @doc false
+  # The prefix every key of the library's own objects starts with (with its
+  # trailing slash), or nil when the core gives the library none.
+  @spec key_prefix(term()) :: String.t() | nil
+  def key_prefix(%{key_prefix: prefix}) when is_binary(prefix) and prefix != "",
     do: prefix <> "/"
 
-  defp key_prefix(_library), do: nil
+  def key_prefix(_library), do: nil
 
   defp do_store_snapshots(items, user_uuid, lib) do
     items

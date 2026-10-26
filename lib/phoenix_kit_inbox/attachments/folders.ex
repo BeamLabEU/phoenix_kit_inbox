@@ -118,6 +118,40 @@ defmodule PhoenixKitInbox.Attachments.Folders do
     end
   end
 
+  @doc false
+  # Whether the snapshots of a sent `message` are filed: it has a live folder
+  # and each file of the library lies in it, or is linked there when another
+  # message is the first to send it. What `lay_out_sent/2` would have nothing
+  # left to do for; read-only. For the maintenance task.
+  @spec laid_out?(Message.t()) :: boolean()
+  def laid_out?(%Message{} = message) do
+    with true <- Attachments.managed_libraries?(),
+         %{uuid: uuid} <- Attachments.existing_library() do
+      library_uuid = to_string(uuid)
+
+      case message.uuid |> Attachments.list_for_message() |> library_files(library_uuid) do
+        [] -> true
+        files -> filed?(message, files, library_uuid)
+      end
+    else
+      # Nothing can be filed without a managed library, or without a library.
+      _ -> true
+    end
+  end
+
+  defp filed?(message, files, library_uuid) do
+    case live_recorded_folder(message.uuid, library_uuid) do
+      nil -> false
+      folder -> Enum.all?(files, &in_place?(&1, folder, message))
+    end
+  end
+
+  defp in_place?(file, folder, message) do
+    to_string(file.folder_uuid) == folder.uuid or
+      (not first_to_send?(file.uuid, message.uuid) and
+         storage().folder_link(folder.uuid, file.uuid) != nil)
+  end
+
   defp library_files(rows, library_uuid) do
     for row <- rows,
         %Storage.File{library_uuid: ^library_uuid} = file <- [library_file(row.file_uuid)],
