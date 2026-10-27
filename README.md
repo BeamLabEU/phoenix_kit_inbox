@@ -30,7 +30,7 @@ Neighbouring modules, so you pick the right one:
 - **Drafts** — saved as real messages and *promoted* on send, so the uuid stays stable
 - **Search** — case-insensitive over subject and body
 - **Threading** — replies carry their root's `thread_uuid`; `list_thread/1` returns a conversation in one indexed query
-- **Attachments** — uploads, existing Storage files and forwards, each kept as a snapshot in the module's own hidden Storage library and downloaded only by the people on the message
+- **Attachments** — uploads, existing Storage files and forwards, each kept as a snapshot in the module's own Storage library (shown in Media, read-only, and filed in folders) and downloaded only by the people on the message
 - **Markdown bodies** — written in Markdown, shown through core's email renderer: sanitized, `http(s)`/`mailto` links only, remote images shown as links and never loaded, `{{x}}` left as typed
 - **Signatures** — per mailbox, Markdown, one default; put at the end of a message after a `-- ` line and swapped while untouched
 - **Sending identities and Reply-To** — who a message may go out *as* (a mail integration whose login is the From address) and which addresses replies may go to, both checked on every send
@@ -275,11 +275,11 @@ Attachments.list_for_message(message.uuid)   #=> [%Attachment{filename: …, fil
 Paths.attachment(attachment.uuid)            #=> "/admin/inbox/files/<uuid>"
 ```
 
-Every file becomes a **snapshot** in the module's hidden Storage library (slug `phoenix-kit-inbox`, created on first use): it isn't listed in Media, has no permanent URL, and doesn't change when the file it was copied from is edited or deleted. A file gets in as an upload in compose (kept in the browser session's temporary upload until the draft is saved or the message sent — an abandoned compose stores nothing), a Storage file the sender may read, a file the host vouched for (`attachments_authorized:`), bytes the host made (`attachments_data:`), or a forward of a file on a message the sender sent or still has a copy of. Trashed and system-managed files are refused; anything else is `{:error, {:attachment_forbidden, uuid}}`. At most 50 files per message, each up to `inbox_max_upload_bytes`.
+Every file becomes a **snapshot** in the module's Storage library (slug `phoenix-kit-inbox`, created on first use): a record of its own that has no permanent URL and doesn't change when the file it was copied from is edited or deleted. Its stored objects may be the same ones as the original's (the core's `Storage.link_copy/3`, where it has it), so a snapshot of a file already in Media costs no second copy of the bytes. A file gets in as an upload in compose (kept in the browser session's temporary upload until the draft is saved or the message sent — an abandoned compose stores nothing), a Storage file the sender may read, a file the host vouched for (`attachments_authorized:`), bytes the host made (`attachments_data:`), or a forward of a file on a message the sender sent or still has a copy of. Trashed and system-managed files are refused; anything else is `{:error, {:attachment_forbidden, uuid}}`. At most 50 files per message, each up to `inbox_max_upload_bytes`.
 
 "Attach existing file" is core's media picker, limited to the user's own Media files (`UserMediaSelectorModal`); a system role (Owner, Admin) browses the whole library. Each pick is still checked, and a refused file is named only when the user may read it. A file uploaded *inside* the picker lands in Media first (as the picker does everywhere) and is snapshotted at send.
 
-**Requires** a PhoenixKit core with hidden system libraries (core #949) and `Storage.store_file_in_buckets/7` `dedup: false` — core 2.64.0 or later, which `mix.exs` requires. On an older core every attachment is refused with `{:error, :storage_unsupported}` (logged); messages without attachments work as before.
+**Requires** a PhoenixKit core with hidden system libraries (core #949) and `Storage.store_file_in_buckets/7` `dedup: false` — core 2.64.0 or later, which `mix.exs` requires. On an older core every attachment is refused with `{:error, :storage_unsupported}` (logged); messages without attachments work as before. A core that also has `Storage.link_copy/3` shares objects instead of copying (for uploads and host bytes it looks for a donor by checksum in Media, which has no index on `file_checksum`: the cost grows with Media), and one with managed libraries shows the library in Media (below); each is used when it is there.
 
 Downloads go through the module's own route, `GET /admin/inbox/files/:attachment_uuid` (`route_module/0`), behind core's admin pipeline: the sender and anyone holding a non-deleted copy of the message get the file as a download, everyone else a 404.
 
@@ -295,6 +295,35 @@ It is asked on every send and forward carrying attachments about everyone who wi
 Snapshots are stored before the message's transaction and deleted if it rolls back, raises or exits. Compose sends and saves in a task, so the page stays responsive while files are copied; a failure leaves the text, the uploads and the attachments in the form, and leaving the page does not stop a send that is under way (unless the module's task supervisor is not running: then the send runs with the page and stops with it). A process killed after storing the snapshots and before the commit leaves its snapshots in the library with nothing naming them (Storage's orphan cleanup skips hidden libraries), and rolling back to before V03 drops the attachment rows but not the snapshots; neither is swept by the module yet.
 
 The older `send_message(from_mailbox, sender_user_uuid, attrs)` form refuses attachments with `{:error, :attachments_need_scope}`.
+
+#### The library in Media
+
+Where the core has managed libraries, the attachments library is **listed in Media** under the name *Mail attachments* and **read-only**: nobody changes, deletes, moves or renames its files there, Owner included — the core refuses it. Files lie in folders: `<mailbox> / <YYYY-MM> / <date time — subject>` for a sent message, `<mailbox> / Drafts` for a draft's new files; a message that names a file already filed elsewhere (a forward) gets a link in its own folder.
+
+```elixir
+config :phoenix_kit_inbox, media_listing: :uploaders        # :uploaders (default) | :admins | :own_only | :none
+config :phoenix_kit_inbox, library_name: "Mail attachments" # the library's name in Media
+config :phoenix_kit_inbox, attachment_folder: {MyApp.Inbox, :attachment_folder}
+# (message, sending_mailbox) -> ["Orders", "order-123"] | nil
+```
+
+- `media_listing` says who finds the library in Media: `:none` no one (it stays hidden), `:admins` Owner/Admin, `:uploaders` Owner/Admin see every file and any other holder of the `media` permission the files they uploaded, `:own_only` everyone only their own. A library an earlier version made hidden is brought up to date on the first use of a node.
+- **Media does not ask `attachment_policy`.** Under `:admins` and `:uploaders` an Owner/Admin sees every attachment of every message, past the policy. A host whose policy hides files from its administrators sets `:own_only` or `:none`. Recipients don't see the files they were sent in Media (they aren't uploaders); they read them in Inbox.
+- `attachment_folder` replaces the `<mailbox>/<YYYY-MM>` part: a non-empty list of names, each a non-blank string of at most 255 characters without `/` or control characters. `nil`, any other answer, a raise, exit or throw means the default path (a warning for all but `nil`). It runs in the process that sends, after the commit, so it can read the host's per-request context; Compose's background task and the maintenance task have none, so there the default path is used.
+- Folder names carry the message's subject and the mailbox's name; under `:admins` and `:uploaders` an Owner/Admin sees them in Media, past Inbox's own access rules.
+- A file is filed with the first sent message that names it. Filing is best effort and never fails a send; whatever it misses stays in the root or in `Drafts` until the task below files it.
+
+##### Moving existing snapshots
+
+Snapshots stored before this (full copies) can be moved onto the objects of an active file that holds the same bytes (a Media file, or a snapshot already on Media's objects), and the messages sent before filed in folders — in two phases, so nothing is deleted before it has been checked. Needs a core with `Storage.relink_file/3` (otherwise the task says so and does nothing):
+
+```bash
+mix phoenix_kit_inbox.relink_attachments                                   # dry run: what would be done, writes nothing
+mix phoenix_kit_inbox.relink_attachments --apply --manifest relink.json    # phase 1
+mix phoenix_kit_inbox.relink_attachments --purge-old --manifest relink.json # phase 2
+```
+
+Phase 1 first checks the manifest can be written, then relinks each snapshot that has a donor (same checksum and size, in Media or already on Media's objects) and adds it to the manifest at once (each record's uuid, checksum and old keys, only canonical ones under the library's own key prefix), files every sent message that isn't filed, and reads every relinked file back to compare its sha256 (`"verified": true` only on a match); the old objects stay. A snapshot that doesn't qualify (not active, being edited) or a message whose mailbox is gone is reported as skipped, not as an error. Each record is put on the manifest before it is moved and again after, and a `<manifest>.lock` file keeps two runs apart (delete it by hand after a killed run). A run cut short, or a file that did not read back, is re-checked by running `--apply` again; a record deleted meanwhile is marked `gone`; a file that does not match stays relinked and its old objects are never deleted (unless the record is deleted later, then they go in phase 2 once nothing names them) — restore the dump if it matters. Phase 2 deletes the manifest's old keys that nothing names any more, dropping any key that is not a plain key under the library's prefix (`..` and the like) and every key an unverified entry names. A dry run only reads. Keep the database dump from before phase 1, and copy the library's directory in the bucket before phase 2. A second run changes nothing. The report counts records, relinked, filed, bytes to free and errors; the exit code is 1 when anything failed.
 
 ### Drafts
 
