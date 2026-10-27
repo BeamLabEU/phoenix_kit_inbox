@@ -103,7 +103,8 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
   @doc """
   Phase 1. Options: `apply: true` to write (default: plan only), `manifest:`
   the manifest's path (needed to apply; an existing manifest is added to, not
-  replaced). Returns the report.
+  replaced). Returns the report. Applying inside a caller's transaction is
+  refused with `{:error, :in_transaction}`: its rollback cannot undo the manifest.
   """
   @spec relink(keyword()) :: {:ok, report()} | {:error, term()}
   def relink(opts \\ []) do
@@ -111,7 +112,8 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
     manifest = Keyword.get(opts, :manifest)
 
     with :ok <- check_supported(),
-         :ok <- check_manifest_given(apply?, manifest) do
+         :ok <- check_manifest_given(apply?, manifest),
+         :ok <- check_transaction(apply?) do
       relink_library(Attachments.existing_library(), apply?, manifest)
     end
   end
@@ -171,6 +173,12 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
   end
 
   defp check_supported, do: if(supported?(), do: :ok, else: {:error, :core_unsupported})
+
+  defp check_transaction(true) do
+    if repo().in_transaction?(), do: {:error, :in_transaction}, else: :ok
+  end
+
+  defp check_transaction(false), do: :ok
 
   defp check_manifest_given(true, nil), do: {:error, :manifest_required}
   defp check_manifest_given(_, _), do: :ok
@@ -631,7 +639,7 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
          {:ok, entries} <- manifest_entries(doc),
          :ok <- same_library(doc, library_uuid),
          :ok <- same_version(doc) do
-      {:ok, decode_entries(entries)}
+      decode_entries(entries)
     else
       {:error, reason} when reason in [:manifest_other_library, :manifest_version] ->
         {:error, reason}
@@ -653,18 +661,26 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
   defp decode_entries(entries) do
     entries
     |> Enum.with_index(1)
-    |> Enum.reduce(%{entries: %{}, errors: []}, fn
-      {%{"uuid" => uuid} = entry, _}, acc when is_binary(uuid) ->
-        put_in(acc.entries[uuid], %{
-          uuid: uuid,
-          file_checksum: entry["file_checksum"],
-          old_keys: entry |> Map.get("old_keys", []) |> List.wrap() |> Enum.filter(&is_binary/1),
-          gone: entry["gone"] == true,
-          verified: entry["verified"] == true
-        })
+    |> Enum.reduce_while({:ok, %{entries: %{}, errors: []}}, fn
+      {%{"uuid" => uuid} = entry, _}, {:ok, acc} when is_binary(uuid) ->
+        if Map.has_key?(acc.entries, uuid) do
+          {:halt, {:error, {:manifest_unreadable, {:duplicate_uuid, uuid}}}}
+        else
+          decoded = %{
+            uuid: uuid,
+            file_checksum: entry["file_checksum"],
+            old_keys:
+              entry |> Map.get("old_keys", []) |> List.wrap() |> Enum.filter(&is_binary/1),
+            gone: entry["gone"] == true,
+            verified: entry["verified"] == true
+          }
 
-      {_, index}, acc ->
-        %{acc | errors: acc.errors ++ ["manifest entry #{index} has no uuid: skipped"]}
+          {:cont, {:ok, put_in(acc.entries[uuid], decoded)}}
+        end
+
+      {_, index}, {:ok, acc} ->
+        {:cont,
+         {:ok, %{acc | errors: acc.errors ++ ["manifest entry #{index} has no uuid: skipped"]}}}
     end)
   end
 
@@ -711,13 +727,15 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
   `true`). Returns `{:ok, %{keys: n, outside_prefix: n, unverified: n,
   kept: n, already_gone: n, deleted: n, left: n, errors: [..]}}`: `deleted`
   are the keys that are gone after the call, `left` those Storage kept
-  because something named them again meanwhile.
+  because something named them again meanwhile. Applying inside a caller's
+  transaction is refused with `{:error, :in_transaction}`.
   """
   @spec purge_old(Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def purge_old(path, opts \\ []) do
     apply? = Keyword.get(opts, :apply, true)
 
     with :ok <- check_supported(),
+         :ok <- check_transaction(apply?),
          {:ok, library} <- existing_library(),
          {:ok, prefix} <- library_prefix(library),
          {:ok, manifest} <- read_manifest(path, to_string(library.uuid)) do

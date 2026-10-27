@@ -189,6 +189,9 @@ defmodule Mix.Tasks.PhoenixKitInbox.RelinkAttachments do
   def error_message(:no_library), do: "There is no attachments library; nothing to do."
   def error_message(:manifest_required), do: "--manifest PATH is needed"
 
+  def error_message(:in_transaction),
+    do: "Run maintenance outside a database transaction; nothing was done."
+
   def error_message(:no_key_prefix),
     do: "The attachments library has no key prefix; nothing was done."
 

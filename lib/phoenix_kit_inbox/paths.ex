@@ -116,10 +116,17 @@ defmodule PhoenixKitInbox.Paths do
     do: Routes.path(@base <> "/files/" <> attachment_uuid, locale: :none)
 
   @doc """
-  The **raw** (unprefixed) path to a message, the module's own notification
-  link. Core stores and follows a notification link as given, so on an app
-  with a URL prefix or locale segments this link lacks them; a host can send
-  its readers elsewhere with `:notification_link` (`PhoenixKitInbox.Notify`).
+  A message path with the host's URL prefix and locale applied. Notification
+  links are followed verbatim by core; pass the reader's locale in `opts`.
+  """
+  @spec message_path(binary(), binary(), keyword()) :: String.t()
+  def message_path(mailbox_uuid, message_uuid, opts \\ []) do
+    Routes.path(raw_message_path(mailbox_uuid, message_uuid), opts)
+  end
+
+  @doc """
+  The raw message path before the host's prefix and locale are applied.
+  Use `message_path/3` for navigation and stored notification links.
   """
   @spec raw_message_path(binary(), binary()) :: String.t()
   def raw_message_path(mailbox_uuid, message_uuid) do

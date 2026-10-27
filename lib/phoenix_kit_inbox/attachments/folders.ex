@@ -309,19 +309,20 @@ defmodule PhoenixKitInbox.Attachments.Folders do
   # staying "sent": nothing writes the status "deleted" (a purge marks the
   # delivery); if a delete-for-everyone ever does, this must skip it.
   defp first_to_send?(file_uuid, message_uuid) do
-    first =
-      repo().one(
-        from(a in Attachment,
-          join: m in Message,
-          on: m.uuid == a.message_uuid,
-          where: a.file_uuid == ^file_uuid and m.status == "sent",
-          order_by: [asc: m.sent_at, asc: m.uuid],
-          limit: 1,
-          select: m.uuid
-        )
-      )
+    first_sent_message(file_uuid) in [nil, message_uuid]
+  end
 
-    first in [nil, message_uuid]
+  defp first_sent_message(file_uuid) do
+    repo().one(
+      from(a in Attachment,
+        join: m in Message,
+        on: m.uuid == a.message_uuid,
+        where: a.file_uuid == ^file_uuid and m.status == "sent",
+        order_by: [asc: m.sent_at, asc: m.uuid],
+        limit: 1,
+        select: m.uuid
+      )
+    )
   end
 
   defp move(file, folder) do
@@ -369,14 +370,18 @@ defmodule PhoenixKitInbox.Attachments.Folders do
   defp file_drafts(mailbox, file_uuids, library_uuid) do
     transaction(fn ->
       drafts = drafts_folder(mailbox, library_uuid)
-      Enum.each(file_uuids, &file_draft(&1, drafts, library_uuid))
+      file_uuids |> Enum.sort() |> Enum.each(&file_draft(&1, drafts, library_uuid))
     end)
   end
 
-  # Only a snapshot nothing has filed yet.
+  # Serialize with sent filings, then re-read: another page may have sent
+  # the snapshot since this draft save committed.
   defp file_draft(file_uuid, drafts, library_uuid) do
-    case library_file(file_uuid) do
-      %Storage.File{library_uuid: ^library_uuid, folder_uuid: nil} = file -> move(file, drafts)
+    with %{home: nil} <- lock_home(file_uuid),
+         nil <- first_sent_message(file_uuid),
+         %Storage.File{library_uuid: ^library_uuid} = file <- library_file(file_uuid) do
+      move(file, drafts)
+    else
       _ -> :ok
     end
   end

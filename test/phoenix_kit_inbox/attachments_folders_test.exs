@@ -697,6 +697,20 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   describe "drafts" do
     @describetag skip: @no_managed
 
+    test "a delayed draft filing leaves a snapshot already named by sent mail alone", ctx do
+      storage!(:move)
+      {message, _log} = with_log(fn -> send_data(ctx) end)
+      file = snapshot(message)
+      assert file.folder_uuid == nil
+      Application.delete_env(:phoenix_kit_inbox, :folder_test_fail)
+
+      assert :ok = Folders.lay_out_draft(ctx.alice_box, [file.uuid])
+      assert Storage.get_file(file.uuid).folder_uuid == nil
+
+      Folders.lay_out_sent(message, ctx.alice_box)
+      assert Folders.laid_out?(message)
+    end
+
     test "a draft's new snapshots are in mailbox / Drafts; the key is not written", ctx do
       draft = save_draft(ctx, data_opts("draft bytes"))
       file = snapshot(draft)

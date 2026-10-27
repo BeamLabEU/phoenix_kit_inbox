@@ -169,7 +169,8 @@ defmodule PhoenixKitInbox.Notify do
           "sender_mailbox" => sender.name,
           "notification_text" => notification_text(message, sender, locale),
           "notification_icon" => "hero-envelope",
-          "notification_link" => notification_link(message, recipient_mailbox, target_uuid)
+          "notification_link" =>
+            notification_link(message, recipient_mailbox, target_uuid, locale)
         }
       })
     end
@@ -183,8 +184,8 @@ defmodule PhoenixKitInbox.Notify do
   # where the host's `:notification_link` sends this reader. Anything but a
   # path on this site keeps the module's link, and so does a hook that fails —
   # the notification itself must still be written.
-  defp notification_link(message, recipient_mailbox, reader_uuid) do
-    default = Paths.raw_message_path(recipient_mailbox.uuid, message.uuid)
+  defp notification_link(message, recipient_mailbox, reader_uuid, locale) do
+    default = Paths.message_path(recipient_mailbox.uuid, message.uuid, locale: locale)
 
     case Application.get_env(:phoenix_kit_inbox, :notification_link) do
       {mod, fun} when is_atom(mod) and is_atom(fun) ->

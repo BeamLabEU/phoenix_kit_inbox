@@ -16,16 +16,16 @@ msgstr ""
 msgid "%{filename} is larger than the upload limit."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/notify.ex:369
+#: lib/phoenix_kit_inbox/notify.ex:370
 #, elixir-autogen, elixir-format
 msgid "%{sender} sent you a message."
 msgstr ""
 
 #: lib/phoenix_kit_inbox.ex:482
-#: lib/phoenix_kit_inbox/attachments/folders.ex:644
-#: lib/phoenix_kit_inbox/notify.ex:241
+#: lib/phoenix_kit_inbox/attachments/folders.ex:649
 #: lib/phoenix_kit_inbox/notify.ex:242
-#: lib/phoenix_kit_inbox/notify.ex:364
+#: lib/phoenix_kit_inbox/notify.ex:243
+#: lib/phoenix_kit_inbox/notify.ex:365
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:758
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:836
 #, elixir-autogen, elixir-format
@@ -283,7 +283,7 @@ msgstr ""
 msgid "Draft saved."
 msgstr ""
 
-#: lib/phoenix_kit_inbox/attachments/folders.ex:643
+#: lib/phoenix_kit_inbox/attachments/folders.ex:648
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:1079
 #, elixir-autogen, elixir-format
 msgid "Drafts"
@@ -449,7 +449,7 @@ msgstr ""
 msgid "New message"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/notify.ex:381
+#: lib/phoenix_kit_inbox/notify.ex:382
 #, elixir-autogen, elixir-format
 msgid "New message: %{subject}"
 msgstr ""
@@ -544,7 +544,7 @@ msgstr ""
 msgid "Read"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/notify.ex:371
+#: lib/phoenix_kit_inbox/notify.ex:372
 #, elixir-autogen, elixir-format
 msgid "Read it: %{url}"
 msgstr ""
@@ -721,7 +721,7 @@ msgstr ""
 msgid "Subject"
 msgstr ""
 
-#: lib/phoenix_kit_inbox/notify.ex:370
+#: lib/phoenix_kit_inbox/notify.ex:371
 #, elixir-autogen, elixir-format
 msgid "Subject: %{subject}"
 msgstr ""

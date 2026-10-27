@@ -323,6 +323,22 @@ defmodule PhoenixKitInbox.AttachmentsMaintenanceTest do
   end
 
   describe "phase 1, the rest" do
+    test "an apply inside a caller's transaction writes no manifest and moves nothing", ctx do
+      %{messages: [{_, snapshot}, _]} = group_fixture(ctx)
+
+      assert {:ok, :ok} =
+               Repo.transaction(fn ->
+                 assert {:error, :in_transaction} =
+                          Maintenance.relink(apply: true, manifest: ctx.manifest)
+
+                 :ok
+               end)
+
+      refute File.exists?(ctx.manifest)
+      refute File.exists?(ctx.manifest <> ".lock")
+      assert Storage.get_file(snapshot.uuid).file_path == snapshot.file_path
+    end
+
     test "a dry run files nothing and makes no library", ctx do
       assert Storage.Libraries.get_hidden_library_by_slug(Attachments.library_slug()) == nil
       assert {:ok, %{records: 0, relinked: 0, laid_out: 0}} = Maintenance.relink()
@@ -560,6 +576,37 @@ defmodule PhoenixKitInbox.AttachmentsMaintenanceTest do
         |> Enum.flat_map(& &1["old_keys"])
 
       Map.merge(fixture, %{old_keys: Enum.uniq(old_keys)})
+    end
+
+    test "a purge cannot delete objects whose references a caller later rolls back", ctx do
+      instance = add_instance(ctx.donor, "rollback", hd(ctx.old_keys), 7)
+
+      assert {:error, :rolled_back} =
+               Repo.transaction(fn ->
+                 Repo.delete!(instance)
+                 assert {:error, :in_transaction} = Maintenance.purge_old(ctx.manifest)
+                 Repo.rollback(:rolled_back)
+               end)
+
+      assert Repo.get(FileInstance, instance.uuid)
+      assert Enum.all?(ctx.old_keys, &stored?/1)
+    end
+
+    test "duplicate entries cannot override an unverified entry's protection", ctx do
+      rewrite_manifest(ctx.manifest, fn [first | rest] ->
+        [Map.put(first, "verified", false) | rest] ++ [first]
+      end)
+
+      before = File.read!(ctx.manifest)
+
+      assert {:error, {:manifest_unreadable, {:duplicate_uuid, _}}} =
+               Maintenance.purge_old(ctx.manifest)
+
+      assert {:error, {:manifest_unreadable, {:duplicate_uuid, _}}} =
+               Maintenance.relink(apply: true, manifest: ctx.manifest)
+
+      assert File.read!(ctx.manifest) == before
+      assert Enum.all?(ctx.old_keys, &stored?/1)
     end
 
     test "deletes the old keys nothing names", ctx do

@@ -2,7 +2,7 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
   @moduledoc """
   The host's `config :phoenix_kit_inbox, notification_link: {Mod, :fun}`
   picks where a reader's in-app notification of a received message leads;
-  without it, or when it answers anything but a raw path, the link stays the
+  without it, or when it answers anything but a path on this site, the link stays the
   module's own. Global application env, hence not async.
   """
 
@@ -10,6 +10,8 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
 
   import ExUnit.CaptureLog, only: [with_log: 1]
 
+  alias PhoenixKit.Modules.Languages
+  alias PhoenixKit.Utils.Routes
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Paths
@@ -85,8 +87,45 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
     message = send_to_bob(ctx)
 
     assert links(message.uuid) == %{
-             ctx.bob.uuid => Paths.raw_message_path(ctx.bob_mb.uuid, message.uuid)
+             ctx.bob.uuid => Paths.inbox(mailbox: ctx.bob_mb.uuid, message: message.uuid)
            }
+  end
+
+  test "the default and fallback links include the host prefix and the reader's locale", ctx do
+    prefix_key = {PhoenixKit.Config, :url_prefix}
+    previous = :persistent_term.get(prefix_key)
+    :persistent_term.put(prefix_key, "/portal")
+    on_exit(fn -> :persistent_term.put(prefix_key, previous) end)
+
+    assert {:ok, _} = Languages.enable_system()
+
+    ctx.bob
+    |> Ecto.Changeset.change(custom_fields: %{"preferred_locale" => "et"})
+    |> Repo.update!()
+
+    Gettext.put_locale(PhoenixKitWeb.Gettext, "ru")
+
+    for answer <- [nil, "//elsewhere.test", :raise] do
+      hook(if(answer == :raise, do: :broken, else: :link), answer)
+      {message, _log} = with_log(fn -> send_to_bob(ctx) end)
+
+      expected =
+        Routes.path(Paths.raw_message_path(ctx.bob_mb.uuid, message.uuid), locale: "et")
+
+      assert String.starts_with?(expected, "/portal/et/")
+      assert links(message.uuid) == %{ctx.bob.uuid => expected}
+    end
+  end
+
+  test "a host link with its own prefix and locale is stored verbatim", ctx do
+    prefix_key = {PhoenixKit.Config, :url_prefix}
+    previous = :persistent_term.get(prefix_key)
+    :persistent_term.put(prefix_key, "/portal")
+    on_exit(fn -> :persistent_term.put(prefix_key, previous) end)
+
+    hook(:link, "/portal/et/letters?x=1")
+    message = send_to_bob(ctx)
+    assert links(message.uuid) == %{ctx.bob.uuid => "/portal/et/letters?x=1"}
   end
 
   test "the host's path is the link; the hook gets the message, the mailbox and the reader",
@@ -114,7 +153,7 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
 
     assert links(message.uuid) == %{
              bob_uuid => "/portal/letters",
-             carol.uuid => Paths.raw_message_path(shared.uuid, message.uuid)
+             carol.uuid => Paths.inbox(mailbox: shared.uuid, message: message.uuid)
            }
   end
 
@@ -138,7 +177,7 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
       if answer, do: assert(log =~ "notification_link"), else: refute(log =~ "notification_link")
 
       assert links(message.uuid) == %{
-               ctx.bob.uuid => Paths.raw_message_path(ctx.bob_mb.uuid, message.uuid)
+               ctx.bob.uuid => Paths.inbox(mailbox: ctx.bob_mb.uuid, message: message.uuid)
              },
              "answer #{inspect(answer)}"
     end
@@ -153,7 +192,7 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
       assert log =~ "notification_link"
 
       assert links(message.uuid) == %{
-               ctx.bob.uuid => Paths.raw_message_path(ctx.bob_mb.uuid, message.uuid)
+               ctx.bob.uuid => Paths.inbox(mailbox: ctx.bob_mb.uuid, message: message.uuid)
              }
     end
   end

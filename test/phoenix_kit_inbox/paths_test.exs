@@ -45,7 +45,7 @@ defmodule PhoenixKitInbox.PathsTest do
     assert Paths.dashboard() =~ "/dashboard"
   end
 
-  test "raw_message_path is deliberately unprefixed for notification links" do
+  test "raw_message_path omits routing prefixes" do
     path = Paths.raw_message_path("mb-1", "msg-1")
 
     assert String.starts_with?(path, "/admin/inbox?")
