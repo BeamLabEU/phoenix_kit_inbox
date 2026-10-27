@@ -11,6 +11,7 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
 
   alias PhoenixKit.Modules.Storage
   alias PhoenixKit.Modules.Storage.Libraries
+  alias PhoenixKit.Modules.Storage.ShortCode
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
@@ -170,8 +171,16 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   defp clone_file(file, user) do
     uuid = UUIDv7.generate()
 
+    # Core 2.65+ gives every file a unique short code; a copy of the struct
+    # would carry the donor's.
+    short_code =
+      if Code.ensure_loaded?(ShortCode),
+        do: %{short_code: ShortCode.generate()},
+        else: %{}
+
     file
     |> Ecto.put_meta(state: :built)
+    |> Map.merge(short_code)
     |> Map.merge(%{
       uuid: uuid,
       user_uuid: user.uuid,
