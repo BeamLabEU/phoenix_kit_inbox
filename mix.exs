@@ -85,7 +85,7 @@ defmodule PhoenixKitInbox.MixProject do
       # with everything used here: sub_permissions and Scope.can?/2 (1.7.194),
       # the before_user_delete/1 callback (2.4.0), Activity.log permanent:
       # (2.16.0).
-      pk_dep(:phoenix_kit, "~> 2.64"),
+      pk_dep(:phoenix_kit, ">= 2.64.0 and < 4.0.0"),
 
       # The module's own Gettext backend and its catalogues under priv/gettext.
       {:gettext, "~> 1.0"},
@@ -101,6 +101,10 @@ defmodule PhoenixKitInbox.MixProject do
       # `Code.ensure_loaded?/1`, so hosts that also run phoenix_kit_emails get
       # outbound email notifications for free and hosts that don't are
       # unaffected. Adding a hard dep here would couple the two release cycles.
+
+      # Test-only: the email log's table belongs to Emails' chain, which the
+      # test helper runs (PHOENIX_KIT_EMAILS_PATH points at a checkout).
+      pk_dep(:phoenix_kit_emails, "~> 0.7", only: :test),
 
       # Optional: add ex_doc for generating documentation
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},

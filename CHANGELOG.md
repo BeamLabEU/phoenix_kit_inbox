@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Changed
+
+- **Core pin widened to accept core 3.x** (ceiling `< 4.0.0`; the floor is unchanged).
+
+- Tests build `phoenix_kit_email_logs` by running the Emails module's chain (`phoenix_kit_emails` is a test-only dependency); core 3.0 no longer creates it. Hosts without Emails are unaffected.
+
 ## 0.3.0 - 2026-10-24
 
 PRs #1–#7 and their Claude and Codex review fixes.

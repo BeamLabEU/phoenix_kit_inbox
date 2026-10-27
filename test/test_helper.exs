@@ -81,6 +81,12 @@ repo_available =
       # `phoenix_kit_activities`, and the `uuid_generate_v7()` function.
       PhoenixKit.Migration.ensure_current(PhoenixKitInbox.Test.Repo, log: false)
 
+      # The Emails module's own chain: the email log (`phoenix_kit_email_logs`)
+      # is its table, read by `PhoenixKitInbox.EmailLog`. A test-only dependency
+      # — hosts without it get the log's absence handled at runtime.
+      PhoenixKit.Modules.Emails.Migrations.up_statements()
+      |> Enum.each(&Ecto.Adapters.SQL.query!(PhoenixKitInbox.Test.Repo, &1, []))
+
       # Then this module's own tables, through the same coordinator a real host
       # runs via `mix phoenix_kit.update` — so the suite can never pass against
       # a schema that differs from what installs get.
