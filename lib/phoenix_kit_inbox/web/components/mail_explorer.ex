@@ -123,7 +123,7 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorer do
 
     stale? =
       not Map.has_key?(socket.assigns, :threads) or
-        Enum.any?(~w(scope filter folders link_to)a, fn key ->
+        Enum.any?(~w(scope filter folders link_to can_link? link_label)a, fn key ->
           Map.has_key?(assigns, key) and Map.get(socket.assigns, key) != assigns[key]
         end)
 
@@ -221,7 +221,15 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorer do
     socket
     |> assign_objects()
     |> assign_letters()
-    |> then(&assign(&1, can_pick?: linkable?(&1.assigns), now: DateTime.utc_now()))
+    |> then(fn socket ->
+      can_pick? = linkable?(socket.assigns)
+
+      assign(socket,
+        can_pick?: can_pick?,
+        picker: if(can_pick?, do: socket.assigns.picker),
+        now: DateTime.utc_now()
+      )
+    end)
   end
 
   # The letters of the chosen conversation, each with its body as HTML and its

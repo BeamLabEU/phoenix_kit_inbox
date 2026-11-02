@@ -351,6 +351,17 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
                )
     end
 
+    test "invalid recipient errors strip ASCII controls as well as direction marks", ctx do
+      for control <- [<<0>>, "\r", "\n", "\t", <<27>>, <<127>>] do
+        bad = "a" <> control <> "b@example.com"
+
+        assert {:error, {:invalid_recipient, "ab@example.com"}} =
+                 run(ctx, %{"to" => [bad]}, draft(ctx))
+      end
+
+      assert message_count() == 0
+    end
+
     test "route internal vs resolved email refused inside around_send", ctx do
       use_client_filter()
       client = %{address: "@#{ctx.client.username}", label: "Client", route: :internal}
@@ -564,7 +575,8 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
             "a@example.com;b@example.com",
             "x\ny@example.com"
           ] do
-        assert {:error, {:invalid_recipient, ^bad}} = run(ctx, %{"to" => [bad]}, draft(ctx))
+        expected = String.replace(bad, "\n", "")
+        assert {:error, {:invalid_recipient, ^expected}} = run(ctx, %{"to" => [bad]}, draft(ctx))
       end
 
       assert message_count() == 0

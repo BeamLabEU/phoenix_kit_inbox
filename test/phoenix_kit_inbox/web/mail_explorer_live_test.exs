@@ -74,6 +74,10 @@ defmodule PhoenixKitInbox.Web.MailExplorerLiveTest do
         extra
       )
 
+    scope_ref = ComponentHostLive.stash(assigns.scope)
+    on_exit(fn -> ComponentHostLive.unstash(scope_ref) end)
+    assigns = Map.put(assigns, :scope, scope_ref)
+
     session =
       %{
         "component" => MailExplorer,

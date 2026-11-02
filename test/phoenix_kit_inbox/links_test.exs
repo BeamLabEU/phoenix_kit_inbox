@@ -19,6 +19,17 @@ defmodule PhoenixKitInbox.LinksTest do
   alias PhoenixKitInbox.Test.OrderResolver
   alias PhoenixKitInbox.Test.RaisingResolver
 
+  defmodule IndeterminateResolver do
+    @behaviour PhoenixKitInbox.LinkResolver
+    def kind, do: "order"
+    def extract(_subject), do: ["true", "tuple", "atom", "false", "nil"]
+    def exists?("true"), do: true
+    def exists?("tuple"), do: {:error, :unavailable}
+    def exists?("atom"), do: :unknown
+    def exists?("false"), do: false
+    def exists?("nil"), do: nil
+  end
+
   @order %{kind: "order", ref: "o-1"}
 
   setup do
@@ -192,6 +203,12 @@ defmodule PhoenixKitInbox.LinksTest do
         send_to(ctx.alice_scope, ctx.alice_mb, ctx.bob, %{"subject" => "Offer #64 and #65"})
 
       assert links_of(message) == [{"order", "64", "subject"}]
+    end
+
+    test "a resolver links only on an explicit true answer", ctx do
+      resolvers([IndeterminateResolver], [])
+      message = send_to(ctx.alice_scope, ctx.alice_mb, ctx.bob)
+      assert links_of(message) == [{"order", "true", "subject"}]
     end
 
     test "resolver that raises does not block the message", ctx do

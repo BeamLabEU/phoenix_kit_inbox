@@ -97,6 +97,26 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
       |> LazyHTML.attribute("phx-value-id")
 
   describe "chips" do
+    test "an account chip shows the address the pipeline will actually use",
+         %{conn: conn} = ctx do
+      recipient = %{
+        user: ctx.bob.uuid,
+        address: "someone-else@example.com",
+        label: "Bobby",
+        route: :internal
+      }
+
+      view = mount_form(ctx, conn, draft(to: [recipient]))
+      assert text_of(view, "#compose-demo-to") =~ "@#{ctx.bob.username}"
+      refute render(view) =~ "someone-else@example.com"
+
+      gone = %{recipient | user: Ecto.UUID.generate()}
+      send(view.pid, {:test_assigns, %{draft: draft(to: [gone])}})
+      assert has_element?(view, "[data-unresolved]")
+      assert has_element?(view, "button[form=compose-demo-form][disabled]")
+      refute render(view) =~ "someone-else@example.com"
+    end
+
     test "chip shows label and internal marker from route", %{conn: conn} = ctx do
       draft =
         draft(

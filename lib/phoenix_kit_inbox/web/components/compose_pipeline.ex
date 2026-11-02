@@ -653,7 +653,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
       text
       |> String.replace_invalid("")
       |> String.replace(
-        ~r/[\x{80}-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u,
+        ~r/[\x00-\x1f\x7f-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u,
         ""
       )
 

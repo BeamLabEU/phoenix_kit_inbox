@@ -325,10 +325,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     address = field(entry, :address)
     label = field(entry, :label)
 
+    # The pipeline resolves a host-named account before considering its
+    # supplied address. Show that same address, including a missing account.
     cond do
-      is_binary(address) and String.trim(address) != "" ->
-        [%{user: user, address: String.trim(address), label: blank_to_nil(label), route: route}]
-
       user ->
         [
           %{
@@ -338,6 +337,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             route: route
           }
         ]
+
+      is_binary(address) and String.trim(address) != "" ->
+        [%{user: nil, address: String.trim(address), label: blank_to_nil(label), route: route}]
 
       blank_entry?(entry) ->
         []

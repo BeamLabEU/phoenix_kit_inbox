@@ -920,6 +920,28 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
   end
 
   describe "what the host says about the objects (link_label, link_to)" do
+    test "changing link callbacks refreshes controls and object labels", %{conn: conn} = ctx do
+      mail(ctx, :bob, handle(ctx.alice), %{}, links: [@order])
+      view = mount_explorer(ctx, conn, %{can_link?: allowing()})
+      assert has_element?(view, "button[phx-click=unlink]")
+      view |> element("button[phx-click=open_picker]") |> render_click()
+      assert has_element?(view, "#mail-picker-demo")
+
+      send(view.pid, {:test_assigns, %{can_link?: nil}})
+      refute has_element?(view, "button[phx-click=unlink]")
+      refute has_element?(view, "#mail-picker-demo")
+
+      send(view.pid, {:test_assigns, %{link_label: {:capture, __MODULE__, :labelling, 1}}})
+      assert render(element(view, "#mail-detail-demo")) =~ "Order #1042"
+
+      send(view.pid, {:test_assigns, %{link_label: nil}})
+      refute render(element(view, "#mail-detail-demo")) =~ "Order #1042"
+
+      send(view.pid, {:test_assigns, %{can_link?: allowing()}})
+      assert has_element?(view, "button[phx-click=unlink]")
+      refute has_element?(view, "#mail-picker-demo")
+    end
+
     setup do
       Application.put_env(:phoenix_kit_inbox, :explorer_test_pid, self())
       on_exit(fn -> Application.delete_env(:phoenix_kit_inbox, :explorer_test_pid) end)

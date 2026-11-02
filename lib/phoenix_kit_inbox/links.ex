@@ -195,7 +195,7 @@ defmodule PhoenixKitInbox.Links do
       subject
       |> resolver.extract()
       |> List.wrap()
-      |> Enum.filter(&(is_binary(&1) and resolver.exists?(&1)))
+      |> Enum.filter(&(is_binary(&1) and resolver.exists?(&1) == true))
       |> Enum.map(&%{kind: kind, ref: &1})
     end)
     |> case do
