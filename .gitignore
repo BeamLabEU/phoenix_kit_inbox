@@ -20,3 +20,6 @@ erl_crash.dump
 phoenix_kit_inbox-*.tar
 
 *.log
+
+# Local storage buckets that a test run could leave in the checkout.
+/priv/media/

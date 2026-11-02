@@ -1,0 +1,686 @@
+defmodule PhoenixKitInbox.Web.ComposeFormUiTest do
+  @moduledoc """
+  The compose form as a person sees it: what is on the page at once, what
+  sits behind the small buttons, what the host's draft fills in — and that
+  nothing the browser sends about the sender or the blocks is believed.
+  """
+
+  use PhoenixKitInbox.LiveCase
+
+  alias PhoenixKitInbox.Identities
+  alias PhoenixKitInbox.Mailboxes
+  alias PhoenixKitInbox.Signatures
+  alias PhoenixKitInbox.Test.ComponentHostLive
+  alias PhoenixKitInbox.Test.OutboundFilters
+  alias PhoenixKitInbox.Web.Components.ComposeDraft
+  alias PhoenixKitInbox.Web.Components.ComposeForm
+
+  @external ["inbox", "inbox.send_external"]
+
+  defmodule Heads do
+    @moduledoc false
+    # A source that offers one person under a heading.
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, "bob" <> _),
+      do: [%{address: "bobby@example.com", label: "Bobby", route: :email, group: "Clients"}]
+
+    def suggest(_scope, _context, _query), do: []
+  end
+
+  setup :outbound_setup
+
+  setup do
+    enable_inbox!()
+    admin = user_fixture()
+    alice = user_fixture(%{first_name: "Alice", last_name: "Smith"})
+    bob = user_fixture(%{first_name: "Bob"})
+    {:ok, alice_mb} = Mailboxes.ensure_user_mailbox(alice)
+    smtp = mail_integration_fixture(:system, username: "noreply@company.test")
+    senders = grant_role!(alice, @external)
+    manager = scope_for(admin, ["inbox", "inbox.manage_shared"])
+
+    desk = shared_mailbox_fixture(admin, %{name: "Desk", address: "desk@company.test"})
+    grant_fixture(desk, alice, "write")
+    archive = shared_mailbox_fixture(admin, %{name: "Archive", address: "archive@company.test"})
+    grant_fixture(archive, alice, "read")
+    elsewhere = shared_mailbox_fixture(admin, %{name: "Elsewhere", address: "else@company.test"})
+
+    {:ok, common} =
+      Identities.create_shared(manager, %{
+        "label" => "Common",
+        "from_name" => "Company",
+        "integration_uuid" => smtp
+      })
+
+    {:ok, closed} =
+      Identities.create_shared(manager, %{
+        "label" => "Closed",
+        "integration_uuid" => smtp,
+        "role_uuids" => []
+      })
+
+    %{
+      manager: manager,
+      alice: alice,
+      bob: bob,
+      alice_mb: alice_mb,
+      desk: desk,
+      archive: archive,
+      elsewhere: elsewhere,
+      common: common,
+      closed: closed,
+      scope: scope_for(alice, @external, [senders])
+    }
+  end
+
+  defp draft(attrs \\ []) do
+    struct!(
+      ComposeDraft,
+      Keyword.merge(
+        [
+          to: [%{address: "client@example.com", label: "The client", route: :email}],
+          subject: "Offer",
+          body: "Hello there",
+          attachments: [%{id: "a", file_uuid: Ecto.UUID.generate(), name: "offer.pdf"}]
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp mount_form(ctx, conn, draft, extra \\ %{}) do
+    scope = ComponentHostLive.stash(Map.get(extra, :scope, ctx.scope))
+    on_exit(fn -> ComponentHostLive.unstash(scope) end)
+    assigns = Map.merge(%{id: "demo", draft: draft}, Map.put(extra, :scope, scope))
+
+    conn =
+      Plug.Test.init_test_session(conn, %{
+        "component" => ComposeForm,
+        "assigns" => assigns,
+        "test_pid" => self()
+      })
+
+    {:ok, view, _html} = live(conn, "/component-host")
+    view
+  end
+
+  # An event the page never offers, as a browser could still send it.
+  defp forge(view, event, value) do
+    view |> with_target("#compose-form-demo") |> render_click(event, value)
+  end
+
+  describe "the first look" do
+    test "initial render shows from/to/subject/body/attachments only", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+
+      for part <- ~w(from to attachments) do
+        assert has_element?(view, "#compose-demo-#{part}"), "no #{part}"
+      end
+
+      assert has_element?(view, ~s(input#compose-demo-subject[value="Offer"]))
+      assert has_element?(view, "textarea#compose-demo-body", "Hello there")
+      assert render(element(view, "#compose-demo-to")) =~ "The client"
+      assert render(element(view, "#compose-demo-attachments")) =~ "offer.pdf"
+
+      # Everything else waits behind a small button.
+      for part <- ~w(cc bcc signature) do
+        refute has_element?(view, "#compose-demo-#{part}"), "#{part} is open"
+      end
+
+      assert has_element?(view, "button[phx-click=toggle][phx-value-block=cc]")
+      assert has_element?(view, "button[phx-click=toggle][phx-value-block=bcc]")
+      assert has_element?(view, "button[phx-click=cancel]")
+    end
+
+    test "cc, bcc, signature behind small buttons", %{conn: conn} = ctx do
+      {:ok, _} =
+        Signatures.create_signature(ctx.scope, ctx.alice_mb, %{
+          "label" => "Plain",
+          "body" => "Best regards, Alice"
+        })
+
+      view = mount_form(ctx, conn, draft())
+
+      for block <- ~w(cc bcc signature) do
+        button = "button[phx-click=toggle][phx-value-block=#{block}]"
+        assert has_element?(view, button)
+        assert has_element?(view, button <> "[aria-pressed=false]")
+
+        view |> element(button) |> render_click()
+        assert has_element?(view, "#compose-demo-#{block}"), "#{block} did not open"
+        assert has_element?(view, button <> "[aria-pressed=true]")
+
+        view |> element(button) |> render_click()
+        refute has_element?(view, "#compose-demo-#{block}"), "#{block} did not close"
+      end
+    end
+
+    test "the signature button is there only for a mailbox that has signatures",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      refute has_element?(view, "button[phx-click=toggle][phx-value-block=signature]")
+
+      forge(view, "toggle", %{"block" => "signature"})
+      refute has_element?(view, "#compose-demo-signature")
+    end
+
+    test "a chosen signature goes to the end of the text; a forged one does nothing",
+         %{conn: conn} = ctx do
+      {:ok, sig} =
+        Signatures.create_signature(ctx.scope, ctx.alice_mb, %{
+          "label" => "Plain",
+          "body" => "Best regards, Alice"
+        })
+
+      {:ok, foreign} =
+        Signatures.create_signature(ctx.manager, ctx.elsewhere, %{
+          "label" => "Desk",
+          "body" => "The desk speaks"
+        })
+
+      view = mount_form(ctx, conn, draft())
+      view |> element("button[phx-click=toggle][phx-value-block=signature]") |> render_click()
+
+      view
+      |> form("#compose-demo-signature-form", %{"signature" => sig.uuid})
+      |> render_change()
+
+      assert render(element(view, "#compose-demo-body")) =~ "Best regards, Alice"
+
+      forge(view, "select_signature", %{"signature" => foreign.uuid})
+      refute render(element(view, "#compose-demo-body")) =~ "The desk speaks"
+      forge(view, "select_signature", %{"signature" => "nope"})
+      assert render(element(view, "#compose-demo-body")) =~ "Best regards, Alice"
+
+      # "No signature" takes the block off again.
+      forge(view, "select_signature", %{"signature" => ""})
+      refute render(element(view, "#compose-demo-body")) =~ "Best regards"
+    end
+
+    test "a sender that is lost falls back with a word, and takes its signature off",
+         %{conn: conn} = ctx do
+      {:ok, sig} =
+        Signatures.create_signature(ctx.manager, ctx.desk, %{
+          "label" => "Desk",
+          "body" => "The desk speaks"
+        })
+
+      view = mount_form(ctx, conn, draft(from_editable: true))
+      forge(view, "select_from", %{"from" => "mailbox:#{ctx.desk.uuid}"})
+      view |> element("button[phx-click=toggle][phx-value-block=signature]") |> render_click()
+
+      view
+      |> form("#compose-demo-signature-form", %{"signature" => sig.uuid})
+      |> render_change()
+
+      assert render(element(view, "#compose-demo-body")) =~ "The desk speaks"
+
+      # The desk is taken away from Alice while the page is open.
+      :ok = Mailboxes.revoke_access(ctx.manager, ctx.desk, ctx.alice.uuid)
+      send(view.pid, {:test_assigns, %{scope: scope_for(ctx.alice, @external)}})
+      render(view)
+
+      refute render(element(view, "#compose-demo-body")) =~ "The desk speaks"
+      assert has_element?(view, "[role=alert]", "no longer available")
+    end
+
+    test "a signature the writer edited stays as text when the sender changes, with no note",
+         %{conn: conn} = ctx do
+      {:ok, sig} =
+        Signatures.create_signature(ctx.manager, ctx.desk, %{
+          "label" => "Desk",
+          "body" => "The desk speaks"
+        })
+
+      view = mount_form(ctx, conn, draft(from_editable: true))
+      forge(view, "select_from", %{"from" => "mailbox:#{ctx.desk.uuid}"})
+      view |> element("button[phx-click=toggle][phx-value-block=signature]") |> render_click()
+
+      view
+      |> form("#compose-demo-signature-form", %{"signature" => sig.uuid})
+      |> render_change()
+
+      view
+      |> form("#compose-demo-form", %{"body" => "Hello\n\n-- \nThe desk speaks, edited"})
+      |> render_change()
+
+      forge(view, "select_from", %{"from" => "user_default"})
+
+      # The writer's own text stays, and nothing hangs about it.
+      assert render(element(view, "#compose-demo-body")) =~ "The desk speaks, edited"
+      refute has_element?(view, "[role=alert]")
+    end
+
+    test "host-filled bcc opens its block", %{conn: conn} = ctx do
+      bcc = [%{address: "designer@company.test", label: "Designer", route: :email}]
+      view = mount_form(ctx, conn, draft(bcc: bcc))
+
+      assert has_element?(view, "#compose-demo-bcc")
+      assert render(element(view, "#compose-demo-bcc")) =~ "Designer"
+      refute has_element?(view, "#compose-demo-cc")
+
+      assert has_element?(
+               view,
+               "button[phx-click=toggle][phx-value-block=bcc][aria-pressed=true]"
+             )
+
+      # A block that holds people is not hidden by a click: they would still
+      # get the letter.
+      view |> element("button[phx-click=toggle][phx-value-block=bcc]") |> render_click()
+      assert has_element?(view, "#compose-demo-bcc")
+    end
+
+    test "personal mailbox shows the visible-only-to-you warning", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      assert has_element?(view, "#compose-demo-personal-note")
+      assert render(element(view, "#compose-demo-personal-note")) =~ "only you"
+
+      shared = draft(from: {:mailbox, ctx.desk.uuid}, from_editable: false)
+      view = mount_form(ctx, conn, shared)
+      refute has_element?(view, "#compose-demo-personal-note")
+    end
+
+    test "the warning follows the chosen sender", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      assert has_element?(view, "#compose-demo-personal-note")
+
+      view
+      |> form("#compose-demo-from-form", %{"from" => "mailbox:#{ctx.desk.uuid}"})
+      |> render_change()
+
+      refute has_element?(view, "#compose-demo-personal-note")
+
+      view
+      |> form("#compose-demo-from-form", %{"from" => "user_default"})
+      |> render_change()
+
+      assert has_element?(view, "#compose-demo-personal-note")
+    end
+
+    test "reply-to line shows the host value", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(reply_to_trusted: "orders@company.test"))
+      assert render(element(view, "#compose-demo-reply-to")) =~ "orders@company.test"
+
+      refute has_element?(mount_form(ctx, conn, draft()), "#compose-demo-reply-to")
+    end
+
+    test "scope without inbox renders nothing", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(), %{scope: scope_for(ctx.alice, [])})
+
+      assert has_element?(view, "#compose-form-demo")
+      refute has_element?(view, "#compose-form-demo *")
+
+      for event <- ~w(cancel toggle select_from submit change) do
+        forge(view, event, %{"block" => "cc", "from" => "user_default"})
+      end
+
+      refute_receive {:inbox_compose, _, _}, 100
+      refute has_element?(view, "#compose-form-demo *")
+    end
+  end
+
+  describe "who it is from" do
+    test "the choice lists what the person may write as, and nothing else", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      select = render(element(view, "#compose-demo-from-select"))
+
+      assert select =~ ~s(value="user_default")
+      assert select =~ ~s(value="mailbox:#{ctx.desk.uuid}")
+      assert select =~ ~s(value="identity:#{ctx.common.uuid}")
+      assert select =~ "Desk"
+      assert select =~ "Common"
+
+      # Read-only mailboxes, other people's mailboxes and closed identities
+      # are not offered.
+      refute select =~ ctx.archive.uuid
+      refute select =~ ctx.elsewhere.uuid
+      refute select =~ ctx.closed.uuid
+    end
+
+    test "a sender the host fixed is shown, not offered", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(from: {:mailbox, ctx.desk.uuid}, from_editable: false))
+
+      refute has_element?(view, "#compose-demo-from-select")
+      assert render(element(view, "#compose-demo-from")) =~ "Desk"
+
+      # Whatever the browser sends changes nothing.
+      forge(view, "select_from", %{"from" => "user_default"})
+      assert render(element(view, "#compose-demo-from")) =~ "Desk"
+      refute has_element?(view, "#compose-demo-personal-note")
+    end
+
+    test "a sender the person may not use is refused, whatever the browser sends",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(from: {:mailbox, ctx.desk.uuid}))
+      assert has_element?(view, ~s(option[value="mailbox:#{ctx.desk.uuid}"][selected]))
+
+      for forged <- [
+            "mailbox:#{ctx.elsewhere.uuid}",
+            "mailbox:#{ctx.archive.uuid}",
+            "identity:#{ctx.closed.uuid}",
+            "identity:#{Ecto.UUID.generate()}",
+            "mailbox:nonsense",
+            1,
+            nil
+          ] do
+        forge(view, "select_from", %{"from" => forged})
+      end
+
+      assert has_element?(view, ~s(option[value="mailbox:#{ctx.desk.uuid}"][selected]))
+    end
+
+    test "one place to write from is not a choice", %{conn: conn} = ctx do
+      lone = user_fixture()
+      view = mount_form(ctx, conn, draft(), %{scope: scope_for(lone)})
+
+      refute has_element?(view, "#compose-demo-from-select")
+      assert has_element?(view, "#compose-demo-from")
+    end
+  end
+
+  describe "the form's own events" do
+    test "typing keeps subject and text; the browser cannot add fields", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+
+      view
+      |> form("#compose-demo-form", %{"subject" => "New subject", "body" => "New text"})
+      |> render_change()
+
+      assert has_element?(view, ~s(input#compose-demo-subject[value="New subject"]))
+      assert has_element?(view, "textarea#compose-demo-body", "New text")
+
+      # Not text, or not ours: ignored.
+      forge(view, "change", %{"subject" => 1, "body" => %{"x" => 1}, "links" => "[]"})
+      assert has_element?(view, ~s(input#compose-demo-subject[value="New subject"]))
+      refute render(view) =~ "links"
+    end
+
+    test "nothing the form renders is a field the host did not give the person",
+         %{conn: conn} = ctx do
+      draft =
+        draft(
+          html_body: "<b>host html</b>",
+          links: [%{kind: "order", ref: "o-1"}],
+          reply_to_message: Ecto.UUID.generate(),
+          idempotency_key: "key-1",
+          reply_to_trusted: "orders@company.test"
+        )
+
+      view = mount_form(ctx, conn, draft)
+      html = render(view)
+
+      for name <- ~w(identity_uuid links html_body reply_to_message idempotency_key reply_to) do
+        refute html =~ ~s(name="#{name}"), "#{name} is a field"
+      end
+
+      refute html =~ "host html"
+      refute html =~ "key-1"
+    end
+
+    test "cancel tells the parent", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      view |> element("button[phx-click=cancel]") |> render_click()
+      assert_receive {:inbox_compose, "demo", :cancelled}
+    end
+
+    # Enter in the subject is an implicit submission of the form. A browser
+    # fires it at the form's first submit button and does nothing at all when
+    # that button is disabled. The real Send button sits outside the form
+    # (bound by `form=`), so the form holds a disabled one of its own, first.
+    # Confirmed here by the markup, not by a browser.
+    test "Enter in the subject cannot send: the form's own submit button is disabled",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+
+      buttons = "#compose-demo-form button[type=submit]"
+      assert has_element?(view, buttons <> "[disabled][tabindex='-1'][aria-hidden=true]")
+
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(buttons)
+             |> Enum.count() ==
+               1
+
+      assert has_element?(view, "input#compose-demo-subject")
+      assert has_element?(view, "#compose-demo-form input#compose-demo-subject")
+    end
+
+    test "the Send button is outside the form, bound to it, and active", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+
+      refute has_element?(view, "#compose-demo-form button[type=submit]:not([disabled])")
+
+      assert has_element?(
+               view,
+               "button[type=submit][form=compose-demo-form]:not([disabled])",
+               "Send"
+             )
+    end
+
+    test "an unknown block is not opened", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+
+      for block <- ["to", "attachments", "", nil, 1, "cc "] do
+        forge(view, "toggle", %{"block" => block})
+      end
+
+      refute has_element?(view, "#compose-demo-cc")
+    end
+  end
+
+  describe "for people who do not use a mouse" do
+    test "the file input is hidden from the eye but not from the keyboard", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+
+      assert has_element?(view, "#compose-demo-upload-form input[type=file].sr-only")
+      refute has_element?(view, "#compose-demo-upload-form input[type=file].hidden")
+    end
+
+    test "the line above the button is announced when it changes", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      assert has_element?(view, "#compose-demo-summary-live[aria-live=polite]")
+
+      view |> element("#compose-demo-to li button[phx-click=remove]") |> render_click()
+
+      # Still there when it has nothing to say: a region that appears with
+      # its text is not announced.
+      assert has_element?(view, "#compose-demo-summary-live[aria-live=polite]")
+    end
+
+    test "the suggestions are a list the field points at", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      input = "#compose-demo-to-input"
+
+      assert has_element?(
+               view,
+               input <>
+                 "[role=combobox][aria-autocomplete=list][aria-expanded=false]" <>
+                 "[aria-controls=compose-demo-to-suggestions]"
+             )
+
+      view |> form("#compose-demo-to-form", %{"query" => "bob"}) |> render_change()
+
+      assert has_element?(view, input <> "[aria-expanded=true]")
+      assert has_element?(view, "#compose-demo-to-suggestions[role=listbox]")
+      assert has_element?(view, "#compose-demo-to-suggestions [role=option]")
+    end
+
+    test "a listbox holds options and named groups, nothing else; no match is a status",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(), %{recipient_sources: [Heads]})
+      view |> form("#compose-demo-to-form", %{"query" => "bob"}) |> render_change()
+
+      roles =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#compose-demo-to-suggestions > *")
+        |> Enum.map(&(&1 |> LazyHTML.attribute("role") |> List.first()))
+
+      assert roles != []
+      assert Enum.all?(roles, &(&1 in ["option", "group"]))
+      assert has_element?(view, "#compose-demo-to-suggestions [role=group][aria-labelledby]")
+
+      # The picker with nobody in it: a status line, not an empty listbox.
+      view |> form("#compose-demo-to-form", %{"query" => ""}) |> render_change()
+      view |> element("button[phx-click=toggle_picker][phx-value-role=to]") |> render_click()
+
+      refute has_element?(view, "#compose-demo-to-suggestions[role=listbox]")
+      assert has_element?(view, "#compose-demo-to-suggestions[role=status]", "No addresses")
+      assert has_element?(view, "#compose-demo-to-input[aria-expanded=false]")
+    end
+  end
+
+  describe "what the draft says, read the way the pipeline reads it" do
+    test "a from_editable that is not true is not editable", %{conn: conn} = ctx do
+      for value <- [nil, false] do
+        view = mount_form(ctx, conn, draft(from_editable: value))
+        refute has_element?(view, "#compose-demo-from-select"), "#{inspect(value)} is editable"
+      end
+
+      view = mount_form(ctx, conn, draft(from_editable: true))
+      assert has_element?(view, "#compose-demo-from-select")
+    end
+
+    test "an empty trusted Reply-To does not hide the draft's own", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(reply_to_trusted: "", reply_to: "desk@company.test"))
+
+      assert render(element(view, "#compose-demo-reply-to")) =~ "desk@company.test"
+    end
+
+    test "the personal mailbox's note says where the letter will not be", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+
+      note = render(element(view, "#compose-demo-personal-note"))
+      assert note =~ "will not appear in the shared feed"
+      assert note =~ "only you"
+    end
+  end
+
+  describe "outside mail and the sender it will go as" do
+    defp summary_text(view),
+      do:
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#compose-demo-summary")
+        |> LazyHTML.text()
+
+    defp second_sender!(ctx) do
+      {:ok, second} =
+        Identities.create_shared(ctx.manager, %{
+          "label" => "Second",
+          "from_name" => "Second Co",
+          "integration_uuid" => ctx.common.integration_uuid
+        })
+
+      second
+    end
+
+    defp send_disabled?(view),
+      do: has_element?(view, "button[type=submit][form=compose-demo-form][disabled]")
+
+    test "the one sender open to the person is named before the send", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+
+      assert summary_text(view) =~ "goes out as"
+      assert summary_text(view) =~ "noreply@company.test"
+      refute has_element?(view, "#compose-demo-from-error")
+    end
+
+    test "the filter is asked with the sender that will really be used", %{conn: conn} = ctx do
+      PhoenixKitInbox.DataCase.outbound_filter({OutboundFilters, :record_context})
+
+      _view = mount_form(ctx, conn, draft())
+
+      assert_receive {:filter_context, %{preview: true, identity_uuid: uuid}}, 1000
+      assert uuid == ctx.common.uuid
+    end
+
+    test "the filter is asked with the fields the real send gives it", %{conn: conn} = ctx do
+      PhoenixKitInbox.DataCase.outbound_filter({OutboundFilters, :record_context})
+
+      _view = mount_form(ctx, conn, draft())
+
+      assert_receive {:filter_context, context}, 1000
+      assert context.kind == :message
+      assert context.preview == true
+      assert context.identity_uuid == ctx.common.uuid
+      assert context.integration_uuid == ctx.common.integration_uuid
+      assert context.user_uuid == to_string(ctx.alice.uuid)
+    end
+
+    test "a sender that can not be worked out is nil in the filter's context, not a tuple",
+         %{conn: conn} = ctx do
+      PhoenixKitInbox.DataCase.outbound_filter({OutboundFilters, :record_context})
+
+      _view = mount_form(ctx, conn, draft(from: {:identity, ctx.closed.uuid}))
+
+      assert_receive {:filter_context, context}, 1000
+      assert context.identity_uuid == nil
+      assert context.integration_uuid == nil
+    end
+
+    test "two senders and no clear choice: the error is at From and the send is held",
+         %{conn: conn} = ctx do
+      second = second_sender!(ctx)
+      view = mount_form(ctx, conn, draft())
+
+      assert has_element?(view, "#compose-demo-from-error[role=alert]", "Choose which sender")
+      assert send_disabled?(view)
+
+      view
+      |> form("#compose-demo-from-form")
+      |> render_change(%{"from" => "identity:" <> second.uuid})
+
+      refute has_element?(view, "#compose-demo-from-error")
+      refute send_disabled?(view)
+      assert summary_text(view) =~ "goes out as"
+    end
+
+    test "a send forced past the held button is refused by the server too", %{conn: conn} = ctx do
+      _second = second_sender!(ctx)
+      view = mount_form(ctx, conn, draft())
+
+      view |> form("#compose-demo-form") |> render_submit()
+
+      refute_receive {:inbox_compose, _, {:sent, _}}, 200
+      assert has_element?(view, "#compose-demo-from-error[role=alert]")
+    end
+
+    test "mail to people inside needs no sender", %{conn: conn} = ctx do
+      _second = second_sender!(ctx)
+      inside = draft(to: [%{user: ctx.bob.uuid, route: :internal}])
+
+      view = mount_form(ctx, conn, inside)
+
+      refute has_element?(view, "#compose-demo-from-error")
+      refute send_disabled?(view)
+    end
+
+    test "with nobody in To the line has no dangling arrow", %{conn: conn} = ctx do
+      view =
+        mount_form(
+          ctx,
+          conn,
+          draft(to: [], cc: [%{address: "cc@example.com", route: :email}])
+        )
+
+      line = summary_text(view)
+      assert line =~ "1 in copy"
+      refute line =~ "→"
+    end
+
+    test "the error follows the recipients", %{conn: conn} = ctx do
+      _second = second_sender!(ctx)
+      view = mount_form(ctx, conn, draft())
+      assert has_element?(view, "#compose-demo-from-error")
+
+      view |> element("#compose-demo-to li button[phx-click=remove]") |> render_click()
+
+      refute has_element?(view, "#compose-demo-from-error")
+    end
+  end
+end

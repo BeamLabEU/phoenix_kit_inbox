@@ -348,9 +348,19 @@ Messages.draft_recipients(draft)   #=> %{"to" => "@bob", "cc" => "", "bcc" => ""
 
 Pages of the host can carry the module's parts. Everything below checks the viewer's `scope` again on the server; what a page does not offer is only hidden, never trusted.
 
-### Sending from a form of the host
+### The compose form
 
-`PhoenixKitInbox.Web.Components.ComposePipeline` is the server-side half of a compose form: it rechecks a form's send against what the host's draft says. The bullets below describe it.
+```heex
+<.live_component
+  module={PhoenixKitInbox.Web.Components.ComposeForm}
+  id="order-letter" scope={@scope} draft={@draft}
+  around_send={&MyHost.around_send/3}
+  authorize_attachments={&MyHost.authorize_attachments/3}
+  recipient_sources={[MyHost.ClientSource]}
+/>
+```
+
+`ComposeForm` is a view over `PhoenixKitInbox.Web.Components.ComposePipeline`; its moduledoc lists what the host must do (handle `{:inbox_compose, id, _}`, close the form after `{:sent, message}`, build the draft outside `render`). `PhoenixKitInbox.TaskSupervisor` is started by PhoenixKit itself: do not add it to your tree.
 
 - `ComposeDraft` is the host's side: recipients, subject, text, files, `links`, `html_body`, `reply_to_trusted`, `context`. What it sets is the host's word; what the browser sends is checked against it.
 - `ComposePipeline.run/4` is the send without a LiveView: scope, form params, draft, and the callbacks `around_send: fn scope, draft, send_fun -> result end` (the host's rules around the one send; `send_fun` sends at most once and must not be called inside a transaction of the host's) and `authorize_attachments: fn scope, context, file_uuids -> :ok | {:ok, [%{file_uuid, name, flags}]} | {:error, reason} end`. A host's own refusal text is `{:error, {:refused, text}}`; any other text or unknown reason shows as "could not be sent". It does not depend on a LiveView and can be called from an API.
@@ -385,7 +395,7 @@ Never filled from a form: `links:`, `html_body:` (the host's HTML for the outsid
 
 ### The outbound filter
 
-`config :phoenix_kit_inbox, :outbound_filter` is called for every email that leaves, and also with `preview: true` in its context when a host only shows where the mail would go (`Outbound.preview/2`). A filter must have no side effects: a look is not a send.
+`config :phoenix_kit_inbox, :outbound_filter` is called for every email that leaves, and also with `preview: true` in its context when the compose form only shows where the mail would go (`Outbound.preview/2`). A filter must have no side effects: a look is not a send.
 
 ## Settings
 
