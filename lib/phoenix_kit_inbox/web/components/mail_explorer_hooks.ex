@@ -37,6 +37,17 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorerHooks do
   swallow what the host asked for. A page with no clause for the message
   crashes on it.
 
+  **Topics the hook owns.** The hook subscribes the page's process to the
+  topic of each linked object (`Links.subscribe/2`), of each readable
+  mailbox's external-status events (`External.subscribe/1`) and of the
+  user's access events. PubSub keeps one registration list per process and
+  topic, and `unsubscribe` removes all of the process's registrations on a
+  topic: a page that subscribed itself to the same object, mailbox or user
+  topic loses that subscription when the hook lets go of it (when the last
+  explorer is detached, or an object is no longer wanted). A page that needs
+  those topics for itself should subscribe again after `detach/2`, or take
+  its events from the hook's messages instead.
+
   `attach/3` is idempotent per explorer `id`: calling it again with another
   filter replaces the explorer's filter, and the page follows the objects
   now wanted and lets go of the ones no explorer wants. `detach/2` forgets an

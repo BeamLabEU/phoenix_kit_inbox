@@ -167,6 +167,9 @@ defmodule PhoenixKitInbox.Errors do
 
   def message(:invalid_html_body), do: gettext("The email's HTML cannot be sent as it is.")
 
+  def message(:compose_failed),
+    do: gettext("The form could not be opened. Try again.")
+
   def message({:internal_recipients, addresses}),
     do:
       gettext(

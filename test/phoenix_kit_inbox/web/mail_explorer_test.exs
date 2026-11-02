@@ -28,6 +28,9 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
 
   def raising(_scope, _kind, _ref), do: raise("host bug about o-1")
 
+  def compose_raising(_attrs), do: raise("host bug in the draft")
+  def compose_throwing(_attrs), do: throw(:host_gave_up)
+
   def allow_all(_scope, _kind, _ref), do: true
 
   def flipping(_scope, _kind, _ref),
@@ -886,6 +889,33 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
 
       assert log =~ "can_link?"
       refute log =~ "o-1"
+    end
+  end
+
+  describe "a compose callback that fails" do
+    test "raising or throwing is an error line, not a dead page", %{conn: conn} = ctx do
+      letter = mail(ctx, :bob, handle(ctx.alice), %{"subject" => "A"}, links: [@order])
+
+      for fun <- [:compose_raising, :compose_throwing] do
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            view = mount_explorer(ctx, conn, %{compose: {:capture, __MODULE__, fun, 1}})
+
+            view |> element("button[phx-click=write]") |> render_click()
+            assert has_element?(view, "[role=alert]")
+
+            view
+            |> element("button[phx-click=reply][phx-value-uuid='#{letter.uuid}']")
+            |> render_click()
+
+            assert render(view) =~ "A"
+            assert has_element?(view, "[role=alert]")
+          end)
+
+        assert log =~ "compose"
+        refute log =~ "draft"
+        refute_receive {:inbox_explorer, _, {:compose, _}}, 50
+      end
     end
   end
 

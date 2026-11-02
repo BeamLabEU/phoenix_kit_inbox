@@ -409,11 +409,33 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorer do
   defp compose(socket, reply_to) do
     case socket.assigns.compose do
       compose when is_function(compose, 1) ->
-        notify(socket, {:compose, compose.(%{reply_to_message: reply_to})})
+        case build_draft(compose, reply_to) do
+          {:ok, draft} -> notify(socket, {:compose, draft})
+          :error -> fail(socket, :compose_failed)
+        end
 
       _ ->
         socket
     end
+  end
+
+  # The host's builder runs in the page's process: a failure there must not
+  # take the page down. Logged by the kind of failure only, as for the other
+  # callbacks.
+  defp build_draft(compose, reply_to) do
+    {:ok, compose.(%{reply_to_message: reply_to})}
+  rescue
+    exception -> compose_failed(exception.__struct__)
+  catch
+    kind, _reason -> compose_failed(kind)
+  end
+
+  defp compose_failed(failure) do
+    Logger.warning(
+      "[Inbox] MailExplorer: the host's compose callback failed (#{inspect(failure)})"
+    )
+
+    :error
   end
 
   defp done(socket, message) do

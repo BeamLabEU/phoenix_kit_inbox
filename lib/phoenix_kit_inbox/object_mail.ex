@@ -121,7 +121,8 @@ defmodule PhoenixKitInbox.ObjectMail do
         from(m in visible(mailbox_uuids),
           where: not exists(unlinked),
           order_by: [desc: m.sent_at, desc: m.uuid],
-          limit: ^limit(opts)
+          limit: ^limit(opts),
+          select: Messages.lean(m)
         )
         |> repo().all()
         |> entries(mailbox_uuids, [])

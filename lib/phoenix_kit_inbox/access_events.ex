@@ -34,7 +34,10 @@ defmodule PhoenixKitInbox.AccessEvents do
 
   def subscribe_user(_user_uuid), do: :ok
 
-  @doc "Undoes `subscribe_user/1` for the caller."
+  @doc """
+  Undoes `subscribe_user/1` for the caller. It removes **all** of the
+  caller's registrations on that user's topic, also one made elsewhere.
+  """
   @spec unsubscribe_user(binary() | nil) :: :ok | {:error, term()}
   def unsubscribe_user(user_uuid) when is_binary(user_uuid),
     do: PubSub.unsubscribe(user_topic(user_uuid))
