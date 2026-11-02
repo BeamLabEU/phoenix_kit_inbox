@@ -299,6 +299,52 @@ defmodule PhoenixKitInbox.Mailboxes do
 
   def user_handle(%{email: email}), do: email
 
+  @doc false
+  # Server-side only, for a user uuid the host's own draft names (never one
+  # from a browser: see `member_recipient_address/1`). The text that addresses
+  # the user `user_uuid` in a To/Cc/Bcc field by the `route` chosen for them:
+  # their handle (`user_handle/1`) for `:internal`, their login email for
+  # `:email`. Says nothing about whether they may be addressed that way — the
+  # send decides — and `{:error, :recipient_not_found}` only for no such user.
+  @spec recipient_address(term(), :internal | :email) ::
+          {:ok, String.t()} | {:error, :recipient_not_found}
+  def recipient_address(user_uuid, route)
+      when is_binary(user_uuid) and route in [:internal, :email] do
+    with {:ok, uuid} <- Ecto.UUID.cast(user_uuid),
+         %User{} = user <- repo().get(User, uuid),
+         address when is_binary(address) <- address_for(user, route) do
+      {:ok, address}
+    else
+      _ -> {:error, :recipient_not_found}
+    end
+  end
+
+  def recipient_address(_user_uuid, _route), do: {:error, :recipient_not_found}
+
+  @doc """
+  The inside address of a user the browser named: their handle
+  (`user_handle/1`: `"@username"`, or the login email of a user who has no
+  username) only when the user is inside the recipient circle
+  (`Members.member?/1`), else `{:error, :recipient_not_found}` — the same
+  answer as for no such user, so it tells nobody who exists.
+  """
+  @spec member_recipient_address(term()) :: {:ok, String.t()} | {:error, :recipient_not_found}
+  def member_recipient_address(user_uuid) when is_binary(user_uuid) do
+    with {:ok, uuid} <- Ecto.UUID.cast(user_uuid),
+         %User{} = user <- repo().get(User, uuid),
+         true <- Members.member?(user),
+         address when is_binary(address) <- user_handle(user) do
+      {:ok, address}
+    else
+      _ -> {:error, :recipient_not_found}
+    end
+  end
+
+  def member_recipient_address(_user_uuid), do: {:error, :recipient_not_found}
+
+  defp address_for(user, :internal), do: user_handle(user)
+  defp address_for(user, :email), do: user.email
+
   @doc """
   Addressable recipients, for the compose field's suggestion list.
 

@@ -1,0 +1,452 @@
+defmodule PhoenixKitInbox.RecipientSourceTest do
+  @moduledoc """
+  Where a compose form gets the people to suggest: the module's own members
+  and whatever sources a host adds, merged into one list without doubles.
+  """
+
+  use PhoenixKitInbox.DataCase, async: false
+
+  import ExUnit.CaptureLog
+
+  alias PhoenixKitInbox.RecipientSource
+  alias PhoenixKitInbox.RecipientSources.Members
+
+  defmodule Sourced do
+    @moduledoc false
+    # Answers what the test put into the context under its own key, and tells
+    # the test what it was asked.
+    defmacro __using__(key) do
+      quote do
+        @behaviour PhoenixKitInbox.RecipientSource
+
+        @impl true
+        def suggest(_scope, context, query) do
+          if pid = context[:pid], do: send(pid, {unquote(key), query})
+          Map.get(context, unquote(key), [])
+        end
+      end
+    end
+  end
+
+  defmodule SourceA do
+    @moduledoc false
+    use PhoenixKitInbox.RecipientSourceTest.Sourced, :a
+  end
+
+  defmodule SourceB do
+    @moduledoc false
+    use PhoenixKitInbox.RecipientSourceTest.Sourced, :b
+  end
+
+  defmodule Odd do
+    @moduledoc false
+    defstruct route: :email, address: "odd@example.com"
+  end
+
+  defmodule Raises do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, query), do: raise("lookup failed for #{query}")
+  end
+
+  defmodule Throws do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, query), do: throw({:secret, query})
+  end
+
+  defmodule Exits do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, query), do: exit({:gone, query})
+  end
+
+  defmodule Remembers do
+    @moduledoc false
+    # Tells the test what it was asked to remember; fails as the test says.
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, _query), do: []
+
+    @impl true
+    def remember(_scope, context, address, label) do
+      send(context.pid, {:remembered, __MODULE__, address, label})
+
+      case context[:fail] do
+        :raise -> raise "secret lookup failed for #{address}"
+        :throw -> throw({:secret, address})
+        :exit -> exit({:secret, address})
+        :error -> {:error, {:secret, address}}
+        :slow -> Process.sleep(5_000)
+        _ -> :ok
+      end
+    end
+  end
+
+  defmodule AlsoRemembers do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, _query), do: []
+
+    @impl true
+    def remember(_scope, context, address, label) do
+      send(context.pid, {:remembered, __MODULE__, address, label})
+      :ok
+    end
+  end
+
+  defmodule LocaleEcho do
+    @moduledoc false
+    # Tells the language of the process it is asked in.
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, _query) do
+      [
+        %{
+          address: "echo@example.com",
+          route: :email,
+          group: Gettext.get_locale() <> "/" <> Gettext.get_locale(PhoenixKitInbox.Gettext)
+        }
+      ]
+    end
+  end
+
+  defmodule Slow do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, _query) do
+      Process.sleep(5_000)
+      [%{address: "late@example.com", route: :email}]
+    end
+  end
+
+  defmodule NotAList do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, _query), do: :nope
+  end
+
+  setup do
+    enable_inbox!()
+    alice = user_fixture(%{username: "alice_src", first_name: "Alice", last_name: "Source"})
+    bob = user_fixture(%{username: "bob_src", first_name: "Bob", last_name: "Member"})
+    outsider = user_fixture(%{username: "carol_src", inbox_member: false})
+    desk = shared_mailbox_fixture(alice, %{name: "Desk src", address: "desk-src@company.test"})
+
+    %{
+      alice: alice,
+      bob: bob,
+      outsider: outsider,
+      desk: desk,
+      scope: scope_for(alice)
+    }
+  end
+
+  describe "RecipientSources.Members" do
+    test "members source returns internal users with route internal", ctx do
+      suggestions = Members.suggest(ctx.scope, %{}, "src")
+
+      assert %{address: "@bob_src", route: :internal, label: label, group: group} =
+               Enum.find(suggestions, &(&1.address == "@bob_src"))
+
+      assert label =~ "Bob"
+      assert is_binary(group)
+      assert Enum.all?(suggestions, &(&1.route == :internal))
+
+      # Shared mailboxes are inside the application too.
+      assert Enum.any?(suggestions, &(&1.address == ctx.desk.slug))
+
+      # Not oneself, not someone outside the circle.
+      refute Enum.any?(suggestions, &(&1.address == "@alice_src"))
+      refute Enum.any?(suggestions, &(&1.address == "@carol_src"))
+
+      # Narrowed by the query.
+      assert [%{address: "@bob_src"}] = Members.suggest(ctx.scope, %{}, "bob_src")
+    end
+
+    test "members source is empty without the inbox permission or a scope", ctx do
+      assert Members.suggest(scope_for(ctx.alice, []), %{}, "bob") == []
+      assert Members.suggest(nil, %{}, "bob") == []
+    end
+  end
+
+  describe "remember_all/4" do
+    @entries [
+      %{address: "one@example.com", label: "One Ltd"},
+      %{address: "two@example.com", label: "two@example.com"}
+    ]
+
+    test "each source that can remember is told each address with its label", ctx do
+      context = %{pid: self()}
+
+      assert :ok =
+               RecipientSource.remember_all(
+                 [Members, SourceA, Remembers, AlsoRemembers],
+                 ctx.scope,
+                 context,
+                 @entries
+               )
+
+      for module <- [Remembers, AlsoRemembers],
+          {address, label} <- [
+            {"one@example.com", "One Ltd"},
+            {"two@example.com", "two@example.com"}
+          ] do
+        assert_received {:remembered, ^module, ^address, ^label}
+      end
+
+      refute_received {:remembered, _, _, _}
+    end
+
+    test "nothing to remember, or no sources, is nothing", ctx do
+      assert :ok = RecipientSource.remember_all([Remembers], ctx.scope, %{pid: self()}, [])
+      assert :ok = RecipientSource.remember_all([], ctx.scope, %{pid: self()}, @entries)
+      assert :ok = RecipientSource.remember_all(nil, ctx.scope, %{pid: self()}, @entries)
+      refute_received {:remembered, _, _, _}
+    end
+
+    test "a source that fails costs nothing but its own memory, and the log has no address",
+         ctx do
+      for fail <- [:raise, :throw, :exit, :error] do
+        log =
+          capture_log(fn ->
+            assert :ok =
+                     RecipientSource.remember_all(
+                       [Remembers, AlsoRemembers],
+                       ctx.scope,
+                       %{pid: self(), fail: fail},
+                       @entries
+                     )
+          end)
+
+        assert log =~ "Remembers", inspect(fail)
+        refute log =~ "secret", inspect(fail)
+        refute log =~ "one@example.com", inspect(fail)
+        assert_received {:remembered, AlsoRemembers, "one@example.com", _}
+      end
+    end
+
+    test "a source that is too slow is left behind", ctx do
+      Application.put_env(:phoenix_kit_inbox, :recipient_source_timeout, 100)
+      on_exit(fn -> Application.delete_env(:phoenix_kit_inbox, :recipient_source_timeout) end)
+
+      {microseconds, :ok} =
+        :timer.tc(fn ->
+          RecipientSource.remember_all(
+            [Remembers],
+            ctx.scope,
+            %{pid: self(), fail: :slow},
+            @entries
+          )
+        end)
+
+      assert microseconds < 2_000_000
+    end
+  end
+
+  describe "suggest_all/4" do
+    test "an entry that is a struct is dropped, not a crash", ctx do
+      context = %{a: [%Odd{}, %{address: "ok@example.com", route: :email}]}
+
+      assert [%{address: "ok@example.com"}] =
+               RecipientSource.suggest_all([SourceA], ctx.scope, context, "x")
+    end
+
+    test "at most fifty suggestions are kept, the first ones", ctx do
+      many = for n <- 1..80, do: %{address: "p#{n}@example.com", route: :email}
+
+      kept = RecipientSource.suggest_all([SourceA], ctx.scope, %{a: many}, "p")
+
+      assert length(kept) == 50
+      assert hd(kept).address == "p1@example.com"
+      assert List.last(kept).address == "p50@example.com"
+    end
+
+    test "a source that is too slow is skipped and the others answer", ctx do
+      Application.put_env(:phoenix_kit_inbox, :recipient_source_timeout, 100)
+      on_exit(fn -> Application.delete_env(:phoenix_kit_inbox, :recipient_source_timeout) end)
+      context = %{a: [%{address: "fast@example.com", route: :email}]}
+      started = System.monotonic_time(:millisecond)
+
+      log =
+        capture_log(fn ->
+          assert [%{address: "fast@example.com"}] =
+                   RecipientSource.suggest_all([Slow, SourceA], ctx.scope, context, "zzquery")
+        end)
+
+      assert System.monotonic_time(:millisecond) - started < 2_000
+      assert log =~ "Slow"
+      assert log =~ "too slow"
+      refute log =~ "zzquery"
+    end
+
+    test "the caller's language is the language the sources are asked in", ctx do
+      Gettext.put_locale("et")
+      Gettext.put_locale(PhoenixKitInbox.Gettext, "ru")
+
+      assert [%{group: "et/ru"}] = RecipientSource.suggest_all([LocaleEcho], ctx.scope, %{}, "x")
+    end
+
+    test "the module's own group heading comes in the caller's language", ctx do
+      for {locale, heading} <- [
+            {"ru", "Люди и общие ящики"},
+            {"et", "Inimesed ja ühised postkastid"}
+          ] do
+        Gettext.put_locale(PhoenixKitInbox.Gettext, locale)
+        groups = ctx.scope |> then(&RecipientSource.suggest_all([Members], &1, %{}, "src"))
+
+        assert groups != []
+        assert Enum.all?(groups, &(&1.group == heading)), locale
+      end
+    end
+
+    test "a timeout that is no number does not break the suggestions", ctx do
+      for bad <- ["oops", nil, -5, 0, 1.5] do
+        Application.put_env(:phoenix_kit_inbox, :recipient_source_timeout, bad)
+        on_exit(fn -> Application.delete_env(:phoenix_kit_inbox, :recipient_source_timeout) end)
+        context = %{a: [%{address: "fast@example.com", route: :email}]}
+
+        assert [%{address: "fast@example.com"}] =
+                 RecipientSource.suggest_all([SourceA], ctx.scope, context, "x")
+      end
+    end
+
+    test "more sources than are asked at a time are all asked", ctx do
+      context = %{pid: self(), a: [%{address: "x@example.com", route: :email}]}
+
+      assert [%{address: "x@example.com"}] =
+               RecipientSource.suggest_all(List.duplicate(SourceA, 20), ctx.scope, context, "q")
+
+      for _ <- 1..20, do: assert_received({:a, "q"})
+    end
+
+    test "sources are asked at once, not one after the other", ctx do
+      Application.put_env(:phoenix_kit_inbox, :recipient_source_timeout, 400)
+      on_exit(fn -> Application.delete_env(:phoenix_kit_inbox, :recipient_source_timeout) end)
+      started = System.monotonic_time(:millisecond)
+
+      capture_log(fn ->
+        RecipientSource.suggest_all([Slow, Slow, Slow, Slow], ctx.scope, %{}, "q")
+      end)
+
+      assert System.monotonic_time(:millisecond) - started < 1_000
+    end
+
+    test "merged and deduplicated across sources", ctx do
+      user = Ecto.UUID.generate()
+
+      context = %{
+        a: [
+          %{address: "Client@Example.com", label: nil, route: :email},
+          %{user: user, label: "Anna", route: :internal},
+          %{address: "only-a@example.com", route: :email}
+        ],
+        b: [
+          # The same address, spelled differently, but with a name: it wins.
+          %{address: " client@example.com ", label: "The Client", group: "CRM", route: :email},
+          %{user: user, label: "Anna Again", route: :internal},
+          %{address: "only-b@example.com", label: "B", route: :email}
+        ]
+      }
+
+      assert [client, anna, only_a, only_b] =
+               RecipientSource.suggest_all([SourceA, SourceB], ctx.scope, context, "x")
+
+      assert client.address == "client@example.com"
+      assert client.label == "The Client"
+      assert client.group == "CRM"
+      # A user is one entry whoever lists them; the first named one stays.
+      assert anna == %{user: user, label: "Anna", group: nil, route: :internal}
+      assert only_a.address == "only-a@example.com"
+      assert only_a.label == nil
+      assert only_b.label == "B"
+    end
+
+    test "the first source keeps a tie, and order follows first appearance", ctx do
+      context = %{
+        a: [%{address: "z@example.com", label: "From A", route: :email}],
+        b: [
+          %{address: "y@example.com", label: "Y", route: :email},
+          %{address: "Z@example.com", label: "From B", route: :email}
+        ]
+      }
+
+      assert [z, y] = RecipientSource.suggest_all([SourceA, SourceB], ctx.scope, context, "")
+      assert {z.address, z.label} == {"z@example.com", "From A"}
+      assert y.address == "y@example.com"
+
+      assert [y, z] = RecipientSource.suggest_all([SourceB, SourceA], ctx.scope, context, "")
+      assert y.address == "y@example.com"
+      assert {String.downcase(z.address), z.label} == {"z@example.com", "From B"}
+    end
+
+    test "a failing source does not take the others down, nor leak into the log", ctx do
+      context = %{a: [%{address: "ok@example.com", label: "Ok", route: :email}]}
+      sources = [Raises, SourceA, Throws, Exits, NotAList]
+
+      log =
+        capture_log(fn ->
+          assert [%{address: "ok@example.com"}] =
+                   RecipientSource.suggest_all(sources, ctx.scope, context, "jane@private.test")
+        end)
+
+      assert log =~ "recipient source"
+      assert log =~ "Raises"
+      refute log =~ "jane@private.test"
+      refute log =~ "private"
+    end
+
+    test "the query is trimmed; an empty or missing query is asked as empty", ctx do
+      context = %{pid: self(), a: [], b: []}
+
+      RecipientSource.suggest_all([SourceA, SourceB], ctx.scope, context, "  ann ")
+      assert_received {:a, "ann"}
+      assert_received {:b, "ann"}
+
+      RecipientSource.suggest_all([SourceA], ctx.scope, context, "")
+      assert_received {:a, ""}
+
+      RecipientSource.suggest_all([SourceA], ctx.scope, context, nil)
+      assert_received {:a, ""}
+    end
+
+    test "entries that are not suggestions are dropped, the rest normalised", ctx do
+      context = %{
+        a: [
+          :junk,
+          %{label: "no address or user", route: :email},
+          %{address: "x@example.com", route: :carrier_pigeon},
+          %{address: "", route: :email},
+          %{address: "ok@example.com", label: "  ", group: 5, route: :internal, extra: "ignored"}
+        ]
+      }
+
+      assert [entry] = RecipientSource.suggest_all([SourceA], ctx.scope, context, "")
+      assert entry == %{address: "ok@example.com", label: nil, group: nil, route: :internal}
+    end
+
+    test "no sources, or none that is a module, gives nothing", ctx do
+      assert RecipientSource.suggest_all([], ctx.scope, %{}, "x") == []
+      assert RecipientSource.suggest_all(nil, ctx.scope, %{}, "x") == []
+
+      assert capture_log(fn ->
+               assert RecipientSource.suggest_all(["no", 1], ctx.scope, %{}, "x") == []
+             end) =~ "recipient source"
+    end
+
+    test "Members merges with a host source", ctx do
+      unnamed = %{a: [%{address: "@bob_src", route: :internal}]}
+
+      for sources <- [[Members, SourceA], [SourceA, Members]] do
+        assert [%{address: "@bob_src", label: "Bob Member", route: :internal}] =
+                 RecipientSource.suggest_all(sources, ctx.scope, unnamed, "bob_src")
+      end
+    end
+  end
+end

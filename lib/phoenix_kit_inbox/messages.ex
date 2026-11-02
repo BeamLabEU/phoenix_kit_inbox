@@ -320,6 +320,20 @@ defmodule PhoenixKitInbox.Messages do
   def html_body_max_bytes, do: @html_body_max_bytes
 
   @doc """
+  Whether a message with this uuid is stored, in any status, for anyone.
+  Server-side only: it says nothing about who may read it.
+  """
+  @spec exists?(term()) :: boolean()
+  def exists?(message_uuid) when is_binary(message_uuid) do
+    case Ecto.UUID.cast(message_uuid) do
+      {:ok, uuid} -> repo().exists?(from(m in Message, where: m.uuid == ^uuid))
+      :error -> false
+    end
+  end
+
+  def exists?(_message_uuid), do: false
+
+  @doc """
   The recipient mailboxes of a message, with their roles — every row, `bcc`
   included. For showing a message to someone, use `list_recipients/2`.
   """
