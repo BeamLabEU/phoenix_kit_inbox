@@ -31,7 +31,7 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorerHooks do
   **The page must have a catch-all `handle_info/2`.** The user's access topic
   the hook subscribes to also brings `{:inbox_access_changed, :senders}` (when
   one of their personal senders changes), which the explorers have no use for
-  but a page may: a host that keeps a compose form current subscribes to the
+  but a page may: a host that keeps a `ComposeForm` current subscribes to the
   senders itself (`PhoenixKitInbox.Web.ScopeRefresh.subscribe/2`) and the hook
   can not tell its message from its own, so it passes them all on rather than
   swallow what the host asked for. A page with no clause for the message
