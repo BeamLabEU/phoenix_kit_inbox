@@ -149,6 +149,24 @@ defmodule PhoenixKitInbox.Errors do
 
   def message(:nothing_to_retry), do: gettext("There is nothing to send again.")
 
+  def message(:idempotency_key_taken),
+    do: gettext("This send key was already used by someone else. Reopen the form and try again.")
+
+  def message(:invalid_idempotency_key),
+    do: gettext("The send key is not valid. Reopen the form and try again.")
+
+  def message(:links_failed),
+    do: gettext("The links to the related objects could not be saved; the message was not sent.")
+
+  def message(:invalid_link), do: gettext("The link to the related object is not valid.")
+
+  def message(:invalid_reply_to),
+    do: gettext("The Reply-To address is not a valid email address.")
+
+  def message(:html_body_too_large), do: gettext("The email's HTML is too large to send.")
+
+  def message(:invalid_html_body), do: gettext("The email's HTML cannot be sent as it is.")
+
   def message({:internal_recipients, addresses}),
     do:
       gettext(

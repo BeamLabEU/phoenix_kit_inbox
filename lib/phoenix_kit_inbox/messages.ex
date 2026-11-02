@@ -9,15 +9,26 @@ defmodule PhoenixKitInbox.Messages do
     1. resolve every recipient string to a mailbox (unknown ones fail the whole
        send — silently dropping a recipient is worse than refusing)
     2. insert or update the message with `status: "sent"` and a `sent_at` stamp
-    3. fan out one `Delivery` per recipient into their `"inbox"`, plus the
+    3. store the links to the host's objects: the ones the host gave
+       (`links:`) and the ones inherited from the conversation
+       (`PhoenixKitInbox.Links`)
+    4. fan out one `Delivery` per recipient into their `"inbox"`, plus the
        sender's own copy into `"sent"`, and one `"pending"` row per external
        recipient (`PhoenixKitInbox.External`)
+
+  A host that gives `idempotency_key:` can repeat a send safely: the key is
+  checked first, before anything is stored or sent, and recorded in the same
+  transaction as the message, so a repeat answers with the first message and
+  does nothing else (see `send_message/4`).
 
   Notifications are fired *after* the transaction commits, by
   `PhoenixKitInbox.Notify`, and so is the email to external recipients — a
   notification for a message that got rolled back would be a lie, and an
   outbound-email failure must never roll back a successfully delivered
-  internal message.
+  internal message. The host's subject resolvers (`PhoenixKitInbox.Links`)
+  run last of all, after the commit and the notifications: they can not undo
+  the send, but a slow one delays `send_message/4` returning to its caller
+  (the letter itself is already stored and on its way).
 
   ## Reads
 
@@ -35,6 +46,7 @@ defmodule PhoenixKitInbox.Messages do
   alias PhoenixKitInbox.Attachments.Folders
   alias PhoenixKitInbox.External
   alias PhoenixKitInbox.Identities
+  alias PhoenixKitInbox.Links
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Notify
   alias PhoenixKitInbox.Outbound
@@ -42,6 +54,8 @@ defmodule PhoenixKitInbox.Messages do
   alias PhoenixKitInbox.Schemas.ExternalRecipient
   alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.Message
+  alias PhoenixKitInbox.Schemas.SendKey
+  alias PhoenixKitInbox.Text
 
   @default_limit 50
   @recipient_roles ~w(to cc bcc)
@@ -50,7 +64,10 @@ defmodule PhoenixKitInbox.Messages do
   # Where a draft keeps the chosen identity and Reply-To — unchecked until sent.
   @draft_sender_key "draft_sender"
   # Metadata only a send writes; a caller's copy of them is dropped.
-  @sent_only_keys ["identity", "reply_to"]
+  @sent_only_keys ["identity", "reply_to", "html_body"]
+  # The host's ready-made HTML of the external email, at most this many bytes.
+  @html_body_max_bytes 256 * 1024
+  @reply_to_max_chars 254
 
   @typedoc """
   A message as the UI consumes it: the delivery row (folder/seen/starred state
@@ -59,6 +76,20 @@ defmodule PhoenixKitInbox.Messages do
   @type listed :: %{delivery: Delivery.t(), message: Message.t()}
 
   defp repo, do: PhoenixKit.RepoHelper.repo()
+
+  @doc false
+  # The message as a list reads it: the whole row but `metadata["html_body"]`,
+  # dropped in the database. The host's HTML (up to 256 KiB, kept for the retry
+  # of an external email) is for the email alone: a page of letters must not
+  # carry it out of Postgres to be thrown away by `project_for_viewer/2`,
+  # which stays as the guard. Use as `select: lean(m)` / `select: {d, lean(m)}`
+  # (`require` this module elsewhere). Whoever sends or retries reads the row
+  # whole.
+  defmacro lean(message) do
+    quote do
+      %{unquote(message) | metadata: fragment("? - 'html_body'", unquote(message).metadata)}
+    end
+  end
 
   # ── reads ───────────────────────────────────────────────────────────────────
 
@@ -82,7 +113,7 @@ defmodule PhoenixKitInbox.Messages do
     |> offset(^Keyword.get(opts, :offset, 0))
     |> repo().all()
     |> Enum.map(fn {delivery, message} ->
-      %{delivery: delivery, message: for_viewer(message, mailbox_uuid)}
+      %{delivery: delivery, message: project_for_viewer(message, mailbox_uuid)}
     end)
   end
 
@@ -112,7 +143,7 @@ defmodule PhoenixKitInbox.Messages do
       where: d.folder == ^folder,
       where: d.status == "active",
       order_by: [desc: d.inserted_at, desc: d.uuid],
-      select: {d, m}
+      select: {d, lean(m)}
     )
     |> maybe_unseen_only(Keyword.get(opts, :unseen_only, false))
     |> maybe_search(Keyword.get(opts, :search))
@@ -156,6 +187,36 @@ defmodule PhoenixKitInbox.Messages do
 
   def fetch_for_mailbox(_, _), do: {:error, :message_not_found}
 
+  @doc """
+  Fetches one message as the person behind `scope` may read it: through the
+  first mailbox they can reach (their own or one they hold a grant on) that
+  has an active copy of it, the way `fetch_for_mailbox/2` reads it.
+
+  `{:error, :message_not_found}` when no such copy exists, when the person
+  cannot use the inbox at all, or when `message_uuid` is not a uuid — the same
+  answer for a message that does not exist and one that is not theirs.
+  """
+  @spec fetch_for_scope(Scope.t(), binary()) :: {:ok, listed()} | {:error, :message_not_found}
+  def fetch_for_scope(%Scope{} = scope, message_uuid) do
+    with true <- Scope.can?(scope, "inbox"),
+         {:ok, user_uuid} <- Mailboxes.scope_user_uuid(scope) do
+      user_uuid
+      |> Mailboxes.list_accessible_mailboxes()
+      |> Enum.find_value({:error, :message_not_found}, &found_in(&1, message_uuid))
+    else
+      _ -> {:error, :message_not_found}
+    end
+  end
+
+  def fetch_for_scope(_scope, _message_uuid), do: {:error, :message_not_found}
+
+  defp found_in(mailbox, message_uuid) do
+    case fetch_for_mailbox(mailbox.uuid, message_uuid) do
+      {:ok, _listed} = found -> found
+      {:error, _} -> nil
+    end
+  end
+
   defp fetch_delivered(mailbox_uuid, message_uuid) do
     query =
       from(d in Delivery,
@@ -165,7 +226,7 @@ defmodule PhoenixKitInbox.Messages do
         where: d.message_uuid == ^message_uuid,
         where: d.status == "active",
         limit: 1,
-        select: {d, m}
+        select: {d, lean(m)}
       )
 
     case repo().one(query) do
@@ -173,7 +234,7 @@ defmodule PhoenixKitInbox.Messages do
         {:error, :message_not_found}
 
       {delivery, message} ->
-        {:ok, %{delivery: delivery, message: for_viewer(message, mailbox_uuid)}}
+        {:ok, %{delivery: delivery, message: project_for_viewer(message, mailbox_uuid)}}
     end
   end
 
@@ -190,10 +251,11 @@ defmodule PhoenixKitInbox.Messages do
       where: m.status == "sent",
       # `inserted_at` has second precision; the UUIDv7 key breaks a tie in
       # creation order instead of whatever order the rows come back in.
-      order_by: [asc: m.inserted_at, asc: m.uuid]
+      order_by: [asc: m.inserted_at, asc: m.uuid],
+      select: lean(m)
     )
     |> repo().all()
-    |> Enum.map(&for_viewer(&1, nil))
+    |> Enum.map(&project_for_viewer(&1, nil))
   end
 
   @doc """
@@ -223,15 +285,25 @@ defmodule PhoenixKitInbox.Messages do
     end
   end
 
-  # What a reader may see of the server-written metadata: the Bcc rule of
-  # `recipient_snapshot/2`, and the sending identity (an integration uuid is
-  # admin configuration) only for the sending mailbox. The Reply-To stays —
-  # recipients reply to it.
-  defp for_viewer(%Message{metadata: metadata} = message, viewer) when is_map(metadata) do
+  @doc """
+  The message as `viewer_mailbox_uuid` may read it: what every read function
+  of this module returns. Of the server-written metadata a reader gets the
+  Bcc rule of `recipient_snapshot/2`, and the sending identity (an integration
+  uuid is admin configuration) only for the sending mailbox. The Reply-To
+  stays — recipients reply to it. The host's `html_body` (kept for the retry
+  of an external email) is for nobody: it is never in the projection, not
+  even for the sender. `nil` as the viewer is a reader of no mailbox.
+
+  Use it on any `Message` read straight from the database before it goes to
+  a person.
+  """
+  @spec project_for_viewer(Message.t(), binary() | nil) :: Message.t()
+  def project_for_viewer(%Message{metadata: metadata} = message, viewer) when is_map(metadata) do
     sender? = is_binary(viewer) and message.sender_mailbox_uuid == viewer
 
     metadata =
       metadata
+      |> Map.delete("html_body")
       |> then(&if sender?, do: &1, else: Map.delete(&1, "identity"))
       |> then(fn
         %{"recipients" => _} = m -> Map.put(m, "recipients", recipient_snapshot(message, viewer))
@@ -241,7 +313,11 @@ defmodule PhoenixKitInbox.Messages do
     %{message | metadata: metadata}
   end
 
-  defp for_viewer(message, _viewer), do: message
+  def project_for_viewer(message, _viewer), do: message
+
+  @doc "The most bytes of the host's `html_body` a send takes."
+  @spec html_body_max_bytes() :: pos_integer()
+  def html_body_max_bytes, do: @html_body_max_bytes
 
   @doc """
   The recipient mailboxes of a message, with their roles — every row, `bcc`
@@ -466,11 +542,17 @@ defmodule PhoenixKitInbox.Messages do
   # The caller's "metadata" when it is a map, else what the message had. The
   # key the server writes for the message's attachments folder is never the
   # caller's: it would send the files into a folder of their choosing.
+  # Atom keys are the strings they are stored as, so that the server-only
+  # keys cannot be reached by spelling them as atoms.
   defp caller_metadata(attrs, base) do
     case Map.get(attrs, "metadata") do
       metadata when is_map(metadata) -> metadata
       _ -> base.metadata || %{}
     end
+    |> Map.new(fn
+      {key, value} when is_atom(key) -> {Atom.to_string(key), value}
+      pair -> pair
+    end)
     |> Map.delete(Folders.folder_key())
   end
 
@@ -581,7 +663,7 @@ defmodule PhoenixKitInbox.Messages do
       `Identities.resolve/3` against the sending mailbox
       (`{:error, {:identity_unusable, reason}}`) and recorded in the
       message's `metadata["identity"]` (uuid, kind, integration, From name and
-      address) — what external recipients are sent as.
+      address, and the name of the sender the From name was built from) — what external recipients are sent as.
     * `"reply_to"` — one of `Identities.reply_to_options/2`
       (`{:error, :reply_to_not_allowed}`), recorded in `metadata["reply_to"]`
     * `"uuid"` — promotes an existing draft instead of creating a new message;
@@ -606,6 +688,20 @@ defmodule PhoenixKitInbox.Messages do
 
   `opts` — server-side only, never filled from a form:
 
+    * `reply_to_trusted: address` — a Reply-To the host vouches for, recorded
+      in `metadata["reply_to"]` whatever `Identities.reply_to_options/2` says
+      (`{:error, :invalid_reply_to}` when it is not an email address; `nil` or
+      `""` is no Reply-To). A
+      `"reply_to"` in `attrs` still has to be one of those options.
+    * `html_body: html` — the host's ready-made HTML for the email to external
+      recipients, instead of the one built from the body. At most 256 KiB
+      (`{:error, :html_body_too_large}`), valid UTF-8 without NUL
+      (`{:error, :invalid_html_body}`). Kept in `metadata["html_body"]` so a
+      retry sends the same; the text part is still built from the body. Never
+      returned to a reader (`project_for_viewer/2`), nor to the caller. The
+      host answers for its content. A `"html_body"` in `attrs["metadata"]` is
+      dropped.
+
     * `attachments_authorized: [file_uuid]` — files the host checked itself;
       copied without the read check (trashed or system-managed ones are
       still refused)
@@ -614,6 +710,35 @@ defmodule PhoenixKitInbox.Messages do
     * `attachments_data: [%{binary: bytes} | %{path: path}]` with
       `filename:`, `content_type:` and `flags:` — bytes the host made,
       stored as they are
+    * `links: [%{kind: kind, ref: ref}]` — objects of the host the message is
+      linked to (source `"host"`, see `PhoenixKitInbox.Links`). Stored in the
+      send's own transaction, with the links inherited from the conversation:
+      if that fails the send fails with `{:error, :links_failed}` and nothing
+      is sent. Malformed entries are dropped (and logged). The links the
+      host's resolvers find in the subject come last, after the commit, and
+      never lose the message. A `"links"` entry in `attrs` is ignored.
+    * `idempotency_key: key` — a string (at most 255 characters, no NUL byte) the host
+      issues per opening of its form. Make it unguessable (a UUID, say): keys
+      are one space for all senders, a key already used by someone else is
+      refused (`:idempotency_key_taken`), and a guessable one lets a stranger
+      take yours first. Repeating a send with a key already used
+      returns `{:ok, message}` with the message the first send made (its
+      `external_status` as that send answered it) and does nothing else: no
+      second message, email, nudge or notification. Two sends racing with one
+      key make one message. A key used by another sender is
+      `{:error, :idempotency_key_taken}`, a longer one
+      `{:error, :invalid_idempotency_key}`. Keys are kept 30 days at most:
+      they are purged a batch at a time by later keyed sends, so a key older
+      than that can still answer a repeat until one of them purges it. `nil` or
+      `""`, or an `"idempotency_key"` in `attrs`, means no key; any other
+      value that is not text is `{:error, :invalid_idempotency_key}`.
+
+  **Inside a transaction of the caller's own**, two things do not hold: a lost
+  race for an `idempotency_key` is a failed statement that aborts the caller's
+  transaction (the recovery that answers with the rival's message needs the
+  send's own), and the `{:inbox_message_linked, _}` events of `links:` fire
+  before the caller commits, so a subscriber may read before the rows are
+  visible. Send outside the caller's transaction when either matters.
 
   Returns `{:error, {:unknown_recipients, ["typo@example.com"]}}` when an
   address doesn't resolve — the whole send is refused so the sender finds out
@@ -656,11 +781,17 @@ defmodule PhoenixKitInbox.Messages do
   # `scope` is nil for the three-argument form.
   defp deliver(mailbox, sender_user_uuid, attrs, scope, opts) do
     attrs = normalize_attrs(attrs)
+    key = send_key(opts)
 
-    with :ok <- ensure_active(mailbox),
+    with :ok <- check_send_key(key, mailbox, sender_user_uuid),
+         {:ok, host_record} <- host_options(opts),
+         :ok <- ensure_active(mailbox),
          {:ok, sender_record} <- sender_options(scope, mailbox, attrs),
+         sender_record = Map.merge(sender_record, host_record),
          {:ok, recipients, externals} <- resolve_recipients(attrs),
          {:ok, externals} <- admit_externals(scope, mailbox, sender_record, externals),
+         # Only an email to outsiders can be sent again, and so needs its HTML.
+         sender_record = keep_html_for_externals(sender_record, externals),
          :ok <- ensure_any_recipient(recipients ++ externals),
          {:ok, existing} <- draft_from_attrs(mailbox, attrs),
          {:ok, items} <- plan_attachments(scope, sender_user_uuid, existing, attrs, opts),
@@ -671,16 +802,24 @@ defmodule PhoenixKitInbox.Messages do
          {:ok, {message, external_rows}} <-
            created
            |> with_snapshots(fn ->
-             do_send(
-               mailbox,
-               sender_user_uuid,
-               attrs,
-               {recipients, externals, sender_record},
-               existing,
-               items
-             )
+             do_send(%{
+               mailbox: mailbox,
+               sender_user_uuid: sender_user_uuid,
+               attrs: attrs,
+               recipients: recipients,
+               externals: externals,
+               sender_record: sender_record,
+               existing: existing,
+               items: items,
+               send_key: key,
+               host_links: Keyword.get(opts, :links, [])
+             })
            end)
            |> finish_attachments(created) do
+      # The watchers of the objects hear of the links first; they cost one
+      # read of our own table.
+      Links.announce(message)
+
       if items != [], do: Folders.lay_out_sent(message, mailbox)
 
       # Post-commit, deliberately: see the moduledoc.
@@ -689,8 +828,186 @@ defmodule PhoenixKitInbox.Messages do
         attachments: length(items)
       })
 
-      {:ok, start_external(message, external_rows, scope, mailbox)}
+      sent = start_external(message, external_rows, scope, mailbox)
+
+      # Last, after the commit and after the email and nudges have been handed
+      # off (the email goes in a task; it may still be on its way): the
+      # host's resolvers run here, and a slow or failing one must not hold
+      # back the external send or poison the transaction of a message that is
+      # otherwise fine. The links of the host and of the conversation are
+      # already stored (in `do_send/1`) and announced. `apply_to_new_message/1`
+      # never raises.
+      Links.apply_to_new_message(message)
+
+      # The HTML was for the email (it travelled in `message`); the caller
+      # does not get it back.
+      {:ok, without_html_body(sent)}
+    else
+      {:replay, message} ->
+        {:ok, message}
+
+      # Lost the race for the key: the rival's message is the answer.
+      {:error, :send_key_taken} ->
+        replay_send_key(key, mailbox, sender_user_uuid)
+
+      # A draft sent twice at once: the second finds it sent already.
+      {:error, :message_not_found} = error when is_binary(key) ->
+        case replay_send_key(key, mailbox, sender_user_uuid) do
+          {:ok, _message} = replayed -> replayed
+          _ -> error
+        end
+
+      other ->
+        other
     end
+  end
+
+  defp keep_html_for_externals(sender_record, []), do: Map.delete(sender_record, "html_body")
+  defp keep_html_for_externals(sender_record, _externals), do: sender_record
+
+  defp without_html_body(%Message{metadata: %{"html_body" => _} = metadata} = message),
+    do: %{message | metadata: Map.delete(metadata, "html_body")}
+
+  defp without_html_body(message), do: message
+
+  # ── host options ────────────────────────────────────────────────────────────
+
+  # The server-side options that become metadata of the message. Never read
+  # from `attrs`: a form cannot name its own Reply-To or the HTML of the
+  # email.
+  defp host_options(opts) do
+    with {:ok, reply_to} <- trusted_reply_to(Keyword.get(opts, :reply_to_trusted)),
+         {:ok, html} <- html_body_option(Keyword.get(opts, :html_body)) do
+      {:ok, Map.merge(reply_to, html)}
+    end
+  end
+
+  # An address the host vouches for: taken as it is, once it is an address.
+  defp trusted_reply_to(blank) when blank in [nil, ""], do: {:ok, %{}}
+
+  defp trusted_reply_to(address) when is_binary(address) do
+    address = String.trim(address)
+
+    if Text.fits?(address, @reply_to_max_chars) and External.address?(address),
+      do: {:ok, %{"reply_to" => address}},
+      else: {:error, :invalid_reply_to}
+  end
+
+  defp trusted_reply_to(_), do: {:error, :invalid_reply_to}
+
+  defp html_body_option(blank) when blank in [nil, ""], do: {:ok, %{}}
+
+  defp html_body_option(html) when is_binary(html) do
+    cond do
+      byte_size(html) > @html_body_max_bytes -> {:error, :html_body_too_large}
+      not Text.fits?(html, @html_body_max_bytes) -> {:error, :invalid_html_body}
+      true -> {:ok, %{"html_body" => html}}
+    end
+  end
+
+  defp html_body_option(_), do: {:error, :invalid_html_body}
+
+  # ── idempotency key ─────────────────────────────────────────────────────────
+
+  @send_key_max_chars 255
+  @send_key_ttl_days 30
+  @send_key_purge_batch 100
+
+  # The key comes from the server-side `opts` only (never from `attrs`). Nil or
+  # an empty string means no key: the send behaves as it always did. Anything
+  # else that is not text is `:invalid`.
+  defp send_key(opts) do
+    case Keyword.get(opts, :idempotency_key) do
+      blank when blank in [nil, ""] -> nil
+      key when is_binary(key) -> key
+      _not_text -> :invalid
+    end
+  end
+
+  # Before anything is stored or sent: a key already used answers with its
+  # message, and nothing else happens. Only the sender who used the key gets
+  # the message back; anyone else is refused.
+  defp check_send_key(nil, _mailbox, _sender_user_uuid), do: :ok
+
+  defp check_send_key(:invalid, _mailbox, _sender_user_uuid),
+    do: {:error, :invalid_idempotency_key}
+
+  defp check_send_key(key, mailbox, sender_user_uuid) do
+    if Text.fits?(key, @send_key_max_chars) do
+      case replay_send_key(key, mailbox, sender_user_uuid) do
+        {:ok, message} -> {:replay, message}
+        {:error, :not_found} -> :ok
+        {:error, _} = error -> error
+      end
+    else
+      {:error, :invalid_idempotency_key}
+    end
+  end
+
+  defp replay_send_key(key, mailbox, sender_user_uuid) do
+    from(m in Message,
+      join: k in SendKey,
+      on: k.message_uuid == m.uuid,
+      where: k.key == ^key
+    )
+    |> repo().one()
+    |> case do
+      nil ->
+        {:error, :not_found}
+
+      %Message{sender_mailbox_uuid: mailbox_uuid, sender_user_uuid: user_uuid} = message
+      when mailbox_uuid == mailbox.uuid and user_uuid == sender_user_uuid ->
+        {:ok, %{without_html_body(message) | external_status: replayed_external_status(message)}}
+
+      %Message{} ->
+        {:error, :idempotency_key_taken}
+    end
+  end
+
+  # What the first send answered: pending when the message has external
+  # recipients, else none.
+  defp replayed_external_status(message) do
+    if External.list(message.uuid) == [], do: :none, else: :pending
+  end
+
+  # In the send's own transaction. A key that is already there fails the
+  # unique index, which rolls the whole send back. Keys older than the
+  # retention go along, a batch at a time: the module has no cron of its own.
+  defp record_send_key(multi, nil), do: multi
+
+  defp record_send_key(multi, key) do
+    Multi.run(multi, :send_key, fn repo, %{thread: message} ->
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      purge_expired_send_keys(repo, now)
+
+      %SendKey{key: key, message_uuid: message.uuid, inserted_at: now}
+      |> Ecto.Changeset.change()
+      |> Ecto.Changeset.unique_constraint(:key)
+      |> repo.insert()
+      |> case do
+        {:ok, row} -> {:ok, row}
+        {:error, %Ecto.Changeset{errors: [key: _]}} -> {:error, :send_key_taken}
+        {:error, changeset} -> {:error, changeset}
+      end
+    end)
+  end
+
+  defp purge_expired_send_keys(repo, now) do
+    cutoff = DateTime.add(now, -@send_key_ttl_days * 86_400, :second)
+
+    # The oldest first, and rows another send is purging at the same moment
+    # are skipped, not waited for: two sends that purge together neither
+    # block each other nor deadlock on the same rows.
+    expired =
+      from(k in SendKey,
+        where: k.inserted_at < ^cutoff,
+        order_by: [asc: k.inserted_at, asc: k.key],
+        limit: @send_key_purge_batch,
+        lock: "FOR UPDATE SKIP LOCKED",
+        select: k.key
+      )
+
+    repo.delete_all(from(k in SendKey, where: k.key in subquery(expired)))
   end
 
   # External addresses need a scope (the three-argument form has none), the
@@ -769,7 +1086,10 @@ defmodule PhoenixKitInbox.Messages do
              "kind" => resolved.kind,
              "integration_uuid" => resolved.integration_uuid,
              "from_address" => resolved.from_address,
-             "from_name" => resolved.from_name
+             "from_name" => resolved.from_name,
+             # Whose name the From name was built from: a retry by someone
+             # else keeps it (`PhoenixKitInbox.External.retry/3`).
+             "sender_name" => resolved.sender_name
            }
          }}
 
@@ -847,14 +1167,22 @@ defmodule PhoenixKitInbox.Messages do
 
   defp thread_for(%Message{uuid: uuid}, nil), do: uuid
 
-  defp do_send(
-         mailbox,
-         sender_user_uuid,
-         attrs,
-         {recipients, externals, sender_record},
-         existing,
-         items
-       ) do
+  # The map carries everything the transaction writes: the sending mailbox and
+  # user, the normalized attrs, the resolved recipients (internal and
+  # external), the sender's recorded options, the draft being promoted (or
+  # nil), the attachment items, the send key and the host's links.
+  defp do_send(%{
+         mailbox: mailbox,
+         sender_user_uuid: sender_user_uuid,
+         attrs: attrs,
+         recipients: recipients,
+         externals: externals,
+         sender_record: sender_record,
+         existing: existing,
+         items: items,
+         send_key: send_key,
+         host_links: host_links
+       }) do
     base = existing || %Message{}
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -882,6 +1210,12 @@ defmodule PhoenixKitInbox.Messages do
     Multi.new()
     |> Multi.run(:message, fn repo, _ -> write_message(repo, changeset, existing) end)
     |> Multi.run(:thread, &backfill_thread_uuid/2)
+    |> record_send_key(send_key)
+    |> Multi.run(:links, fn _repo, %{thread: message} ->
+      with :ok <- Links.write_host(message.uuid, host_links),
+           :ok <- Links.write_thread(message),
+           do: {:ok, :written}
+    end)
     |> Multi.run(:sender_copy, fn repo, %{thread: message} ->
       # Moves the draft's own delivery row from "drafts" to "sent" when
       # promoting a draft, or creates it outright for a fresh send.
@@ -1025,6 +1359,60 @@ defmodule PhoenixKitInbox.Messages do
         delivery
         |> Delivery.changeset(%{folder: folder, status: "active"})
         |> repo.update()
+    end
+  end
+
+  @doc """
+  The way each of `addresses` would travel if sent now, by the send path's own
+  lookup (`Mailboxes.fetch_mailbox_by_recipient/2`, the one `send_message/4`
+  resolves recipients with, so the two cannot disagree): `:internal` when the
+  text names a member or a shared mailbox (`@username`, an email, a mailbox
+  name) — with the `mailbox_uuid` it lands in, or `nil` for a member who has no
+  personal mailbox yet (the send makes it; this does not) — else `:email`.
+  Text that is no address and names nobody, and text that names two people, is
+  `:email` too: the send refuses those itself (an ambiguous address is
+  `:email` here, and `{:error, {:ambiguous_recipients, _}}` in the send).
+
+  **One address per entry.** The send takes a recipient string apart at commas
+  and semicolons; this does not. An entry holding several addresses is
+  `:email`, whatever they are — pass them one by one. Padding around a single
+  address is trimmed, as in the send. The entries keep their order and their
+  spelling; entries that are not text are skipped.
+
+  Needs `Scope.can?(scope, "inbox")` like the other readers of this module;
+  without it (or without a scope) the answer is `[]`. Reads the database and
+  writes nothing — no message, no mailbox. Who counts as a member can depend
+  on the process it runs in (a host's `recipient_filter`, see
+  `PhoenixKitInbox.Members`, may read the process dictionary): ask in the same
+  context the send will run in, or the answer may differ from the send's.
+  """
+  @spec resolve_recipient_routes(Scope.t() | nil, [String.t()]) :: [
+          %{address: String.t(), route: :internal | :email, mailbox_uuid: binary() | nil}
+        ]
+  def resolve_recipient_routes(%Scope{} = scope, addresses) when is_list(addresses) do
+    if Scope.can?(scope, "inbox"),
+      do: for(address <- addresses, is_binary(address), do: recipient_route(address)),
+      else: []
+  end
+
+  def resolve_recipient_routes(_scope, _addresses), do: []
+
+  defp recipient_route(address) do
+    case parse_recipient_list(address) do
+      [entry] ->
+        case Mailboxes.fetch_mailbox_by_recipient(entry, create: false) do
+          {:ok, %Mailbox{} = mailbox} ->
+            %{address: address, route: :internal, mailbox_uuid: mailbox.uuid}
+
+          {:ok, {:member, _user}} ->
+            %{address: address, route: :internal, mailbox_uuid: nil}
+
+          {:error, _} ->
+            %{address: address, route: :email, mailbox_uuid: nil}
+        end
+
+      _none_or_several ->
+        %{address: address, route: :email, mailbox_uuid: nil}
     end
   end
 
