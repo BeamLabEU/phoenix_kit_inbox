@@ -11,9 +11,10 @@ defmodule PhoenixKitInbox.Migrations.V07 do
   subject by a host resolver) or `manual` (a person linked it); a CHECK keeps
   it to those. `linked_by_user_uuid` is the person who linked it, cleared
   (`ON DELETE SET NULL`) when that user is deleted — the link outlives them.
-  Rows go with their message. Unique on `(message_uuid, kind, ref)`; indexed
-  by `(kind, ref)` for "the mail of this object" and by `message_uuid` for the
-  cascade and "the objects of this message".
+  Rows go with their message. Unique on `(message_uuid, kind, ref)`, whose
+  index also serves the cascade and "the objects of this message"; indexed by
+  `(kind, ref)` for "the mail of this object" and by `linked_by_user_uuid`, so
+  that deleting a user does not scan the table.
 
   `phoenix_kit_inbox_send_keys` — a key the host gave a send so that repeating
   it answers with the same message instead of sending twice. Unique on `key`;
@@ -82,7 +83,10 @@ defmodule PhoenixKitInbox.Migrations.V07 do
     )
 
     create_if_not_exists(index(:phoenix_kit_inbox_message_links, [:kind, :ref], prefix: prefix))
-    create_if_not_exists(index(:phoenix_kit_inbox_message_links, [:message_uuid], prefix: prefix))
+
+    create_if_not_exists(
+      index(:phoenix_kit_inbox_message_links, [:linked_by_user_uuid], prefix: prefix)
+    )
 
     add_check(
       prefix,

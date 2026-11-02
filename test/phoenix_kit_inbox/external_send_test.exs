@@ -100,7 +100,7 @@ defmodule PhoenixKitInbox.ExternalSendTest do
   end
 
   describe "host subject resolvers" do
-    test "run after the external email has gone, so a slow one holds nothing back", ctx do
+    test "run after the external email is handed off, so a slow one holds nothing back", ctx do
       Application.put_env(:phoenix_kit_inbox, :link_resolvers, [
         PhoenixKitInbox.Test.WaitingResolver
       ])

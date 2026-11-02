@@ -179,7 +179,8 @@ defmodule PhoenixKitInbox.IdempotencyTest do
     assert [_] = External.list(first.uuid)
   end
 
-  test "the loser of a race gets the winner's message and leaves no snapshot", ctx do
+  test "a rival that commits between the key check and the commit (simulated in the policy hook): the loser gets its message and leaves no snapshot",
+       ctx do
     attachment = [attachments_data: [%{binary: "bytes", filename: "a.txt"}]]
 
     Application.put_env(:phoenix_kit_inbox, :attachment_policy, {RacingPolicy, :race})
@@ -291,7 +292,7 @@ defmodule PhoenixKitInbox.IdempotencyTest do
   end
 
   # The repeat is answered by the early check here; the branch for a draft the
-  # rival sent in between is the race test below.
+  # rival sent in between is the simulated-rival test below.
   test "a draft sent twice with one key is one message", ctx do
     {:ok, draft} = Messages.save_draft(ctx.scope, ctx.alice_mb, attrs(ctx))
 
@@ -303,7 +304,8 @@ defmodule PhoenixKitInbox.IdempotencyTest do
     assert message_count("Once") == 1
   end
 
-  test "a draft sent by two at once: the loser gets the winner's message", ctx do
+  test "a rival that sends the same draft in between (simulated in the policy hook): the loser gets its message",
+       ctx do
     {:ok, draft} = Messages.save_draft(ctx.scope, ctx.alice_mb, attrs(ctx))
     attachment = [attachments_data: [%{binary: "bytes", filename: "a.txt"}]]
     rival_attrs = attrs(ctx, %{"uuid" => draft.uuid})

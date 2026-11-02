@@ -26,6 +26,8 @@ defmodule PhoenixKitInbox.Links do
   able to read the message they link, no more. Linking the root of a
   conversation writes the link onto every sent message of it, those in
   mailboxes the person cannot read included (they gain no way to read them).
+  This is intended: a link belongs to the conversation, and `can_link?` is
+  asked only as `(scope, kind, ref)`, never about each message it lands on.
   Unlinking takes the link off **one** message: the other messages of the
   conversation that are still linked pass it on to the replies that come
   later.

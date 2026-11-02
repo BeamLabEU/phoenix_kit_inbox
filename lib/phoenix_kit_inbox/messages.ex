@@ -727,9 +727,18 @@ defmodule PhoenixKitInbox.Messages do
       second message, email, nudge or notification. Two sends racing with one
       key make one message. A key used by another sender is
       `{:error, :idempotency_key_taken}`, a longer one
-      `{:error, :invalid_idempotency_key}`. Keys are kept 30 days. `nil` or
+      `{:error, :invalid_idempotency_key}`. Keys are kept 30 days at most:
+      they are purged a batch at a time by later keyed sends, so a key older
+      than that can still answer a repeat until one of them purges it. `nil` or
       `""`, or an `"idempotency_key"` in `attrs`, means no key; any other
       value that is not text is `{:error, :invalid_idempotency_key}`.
+
+  **Inside a transaction of the caller's own**, two things do not hold: a lost
+  race for an `idempotency_key` is a failed statement that aborts the caller's
+  transaction (the recovery that answers with the rival's message needs the
+  send's own), and the `{:inbox_message_linked, _}` events of `links:` fire
+  before the caller commits, so a subscriber may read before the rows are
+  visible. Send outside the caller's transaction when either matters.
 
   Returns `{:error, {:unknown_recipients, ["typo@example.com"]}}` when an
   address doesn't resolve — the whole send is refused so the sender finds out
@@ -821,7 +830,8 @@ defmodule PhoenixKitInbox.Messages do
 
       sent = start_external(message, external_rows, scope, mailbox)
 
-      # Last, after the commit and after the email and nudges have gone: the
+      # Last, after the commit and after the email and nudges have been handed
+      # off (the email goes in a task; it may still be on its way): the
       # host's resolvers run here, and a slow or failing one must not hold
       # back the external send or poison the transaction of a message that is
       # otherwise fine. The links of the host and of the conversation are
@@ -1360,7 +1370,8 @@ defmodule PhoenixKitInbox.Messages do
   name) — with the `mailbox_uuid` it lands in, or `nil` for a member who has no
   personal mailbox yet (the send makes it; this does not) — else `:email`.
   Text that is no address and names nobody, and text that names two people, is
-  `:email` too: the send refuses those itself.
+  `:email` too: the send refuses those itself (an ambiguous address is
+  `:email` here, and `{:error, {:ambiguous_recipients, _}}` in the send).
 
   **One address per entry.** The send takes a recipient string apart at commas
   and semicolons; this does not. An entry holding several addresses is

@@ -109,7 +109,7 @@ Consequences worth remembering before changing anything:
 
 Given by the host's code, never read from a form's `attrs` (a caller's copy in `attrs`, including `attrs["metadata"]`, is dropped):
 
-- `links: [%{kind:, ref:}]` — objects of the host the message is linked to; stored in the send's transaction with the links inherited from the conversation. Host subject resolvers (`link_resolver.ex`) run last, after the email has gone.
+- `links: [%{kind:, ref:}]` — objects of the host the message is linked to; stored in the send's transaction with the links inherited from the conversation. Host subject resolvers (`link_resolver.ex`) run last, after the email has been handed off (it goes in a task).
 - `reply_to_trusted: address` — a Reply-To the host vouches for, validated as an address but not matched against `reply_to_options`.
 - `html_body: html` — the host's HTML for the email to external recipients (≤ 256 KiB), kept in `metadata["html_body"]` for a retry and only when the message has external recipients. It never reaches a reader: every read function goes through `Messages.project_for_viewer/2`.
 - `idempotency_key: key` — a repeat answers with the first message and does nothing else; recorded in `phoenix_kit_inbox_send_keys` in the send's transaction.

@@ -52,7 +52,6 @@ defmodule PhoenixKitInbox.MigrationsV07Test do
              )
 
       assert index_exists?("public", "phoenix_kit_inbox_message_links_kind_ref_index")
-      assert index_exists?("public", "phoenix_kit_inbox_message_links_message_uuid_index")
       assert index_exists?("public", "phoenix_kit_inbox_send_keys_key_index")
 
       refute column_nullable?("public", @identities, "personalize_from_name")
@@ -149,6 +148,10 @@ defmodule PhoenixKitInbox.MigrationsV07Test do
       assert fk_delete_rule(@probe, @links, "linked_by_user_uuid") == "n"
       assert fk_delete_rule(@probe, @keys, "message_uuid") == "c"
       assert index_exists?(@probe, "phoenix_kit_inbox_message_links_kind_ref_index")
+      # The deletion of a user clears `linked_by_user_uuid`: that needs its own index.
+      assert index_exists?(@probe, "phoenix_kit_inbox_message_links_linked_by_user_uuid_index")
+      # The unique (message_uuid, kind, ref) index already serves lookups by message.
+      refute index_exists?(@probe, "phoenix_kit_inbox_message_links_message_uuid_index")
       assert index_exists?(@probe, "phoenix_kit_inbox_send_keys_inserted_at_index")
       assert index_exists?(@probe, "phoenix_kit_inbox_send_keys_message_uuid_index")
       assert column_default(@probe, @identities, "personalize_from_name") == "false"

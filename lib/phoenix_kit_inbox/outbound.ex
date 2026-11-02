@@ -64,14 +64,14 @@ defmodule PhoenixKitInbox.Outbound do
 
   @typedoc """
   What a send is: `:kind` (`:message` — a message or its retry, `:nudge`),
-  `:integration_uuid` (required), `:user_uuid` (who sent the message),
+  `:integration_uuid` (required by `deliver/2`; `preview/2` needs none), `:user_uuid` (who sent the message),
   `:message_uuid` (the Inbox message), `:identity_uuid` (the sending identity).
   A filter is also told `preview: true` when the email is only being shown
   (`preview/2`); a real send has no such key.
   """
   @type context :: %{
           required(:kind) => :message | :nudge,
-          required(:integration_uuid) => String.t() | nil,
+          optional(:integration_uuid) => String.t() | nil,
           optional(:user_uuid) => String.t() | nil,
           optional(:message_uuid) => String.t() | nil,
           optional(:identity_uuid) => String.t() | nil,

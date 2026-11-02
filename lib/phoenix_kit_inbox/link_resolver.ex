@@ -21,6 +21,11 @@ defmodule PhoenixKitInbox.LinkResolver do
   the process that sends the message, after the send has been stored, so keep
   them cheap.
 
+  **The subject is chosen by the sender.** A resolver must treat it as
+  untrusted input: bound the work it does on it (no pattern that backtracks
+  without limit), and let `exists?/1` be the check — a ref that `extract/1`
+  returns is only a claim.
+
   Return a ref from `extract/1` only when the subject names the object
   unambiguously — a number shared by two objects is better left to a person
   to link by hand.
