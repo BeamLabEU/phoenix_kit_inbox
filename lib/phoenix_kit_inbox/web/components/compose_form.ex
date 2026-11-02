@@ -258,9 +258,11 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     recipients = %{to: to, cc: cc, bcc: bcc}
 
     socket
+    |> drop_uploads(:all)
     |> assign(
       source_draft: draft,
       pending_draft: nil,
+      send_upload_refs: [],
       subject: text(draft.subject),
       body: text(draft.body),
       recipients: recipients,
@@ -270,6 +272,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       list_seq: 0,
       recipient_error: nil,
       host_files: host_files(draft.attachments),
+      bad_host_files: bad_host_files(draft.attachments),
       picked: [],
       file_seq: length(List.wrap(draft.attachments)) + 1,
       files_error: nil,
@@ -365,7 +368,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # Nothing can be sent while a chip has no address, or while the sender of
   # the outside mail is not chosen.
   defp blocked?(assigns) do
-    assigns.from_error != nil or
+    assigns.from_error != nil or assigns.bad_host_files > 0 or
       Enum.any?([:to, :cc, :bcc], fn role ->
         Enum.any?(assigns.recipients[role], &unresolved?/1)
       end)
@@ -383,6 +386,18 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   defp blank_to_nil(_), do: nil
+
+  # A chip with a name shows its address beside it, so that the person sees
+  # who they are really writing to, not only on hover.
+  defp labelled?(%{label: label, address: address}) when is_binary(label) and is_binary(address),
+    do: label != address
+
+  defp labelled?(_chip), do: false
+
+  # What a screen reader says of a chip: the name and, if it has one, the address.
+  defp chip_name(chip) do
+    if labelled?(chip), do: "#{chip_text(chip)} <#{chip.address}>", else: chip_text(chip)
+  end
 
   defp chip_text(%{label: label}) when is_binary(label), do: label
   defp chip_text(%{address: address}) when is_binary(address), do: address
@@ -450,16 +465,38 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     options = from_options(socket.assigns.scope)
     draft = socket.assigns.source_draft
 
-    {options, key} =
+    {options, key, fell_back?} =
       cond do
-        Enum.any?(options, &(&1.key == key)) -> {options, key}
-        key == choice_key(draft.from) -> {options ++ [unavailable(draft.from)], key}
-        true -> {options, options |> List.first(%{key: "user_default"}) |> Map.fetch!(:key)}
+        Enum.any?(options, &(&1.key == key)) ->
+          {options, key, false}
+
+        key == choice_key(draft.from) ->
+          {options ++ [unavailable(draft.from)], key, false}
+
+        true ->
+          {options, options |> List.first(%{key: "user_default"}) |> Map.fetch!(:key), true}
       end
 
     socket
     |> assign(from_options: options, from: key, options_scope: socket.assigns.scope)
     |> assign_signatures()
+    |> tell_fallback(fell_back?)
+  end
+
+  # The sender the person had chosen is gone (their access changed while the
+  # page was open) and the form went on with the first one it has: said, not
+  # silent, because the letter would go out as someone else.
+  defp tell_fallback(socket, false), do: socket
+
+  defp tell_fallback(socket, true) do
+    sender = socket.assigns |> current_option() |> then(&((&1 && &1.label) || "?"))
+
+    assign(socket,
+      error:
+        gettext("The sender you chose is no longer available. The letter will go from %{sender}.",
+          sender: sender
+        )
+    )
   end
 
   defp unavailable(choice) do
@@ -484,8 +521,15 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       end
 
     selected = socket.assigns[:signature_uuid]
-    selected = if Enum.any?(signatures, &(&1.uuid == selected)), do: selected, else: ""
-    assign(socket, signatures: signatures, signature_uuid: selected)
+
+    if selected in ["", nil] or Enum.any?(signatures, &(&1.uuid == selected)) do
+      assign(socket, signatures: signatures, signature_uuid: selected || "")
+    else
+      # The signature of the mailbox the letter no longer goes from: its block
+      # comes off the text; one the writer edited stays as their own text. Either
+      # way no signature is chosen any more and nothing is noted about it.
+      socket |> assign(signatures: signatures) |> drop_signature()
+    end
   end
 
   # As the pipeline reads them: only `true` lets the person choose the sender,
@@ -761,7 +805,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
     ref = System.unique_integer([:positive])
 
+    started = DateTime.utc_now()
+
     told = %{
+      started: started,
       sources: socket.assigns.recipient_sources,
       context: context(socket),
       entries: typed_entries(socket.assigns.recipients)
@@ -769,7 +816,13 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
     case start_task(scope, id, ref, params, draft, callbacks, links, told) do
       :ok ->
-        assign(socket, sending: true, send_ref: ref, send_started: DateTime.utc_now(), error: nil)
+        assign(socket,
+          sending: true,
+          send_ref: ref,
+          send_started: started,
+          send_upload_refs: for(%{id: "upload-" <> ref} <- uploads, do: ref),
+          error: nil
+        )
 
       :error ->
         Enum.each(links, &File.rm/1)
@@ -815,13 +868,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # After a send that went, once the page has its answer: the sources that
   # can keep an address are told the typed ones. Whatever happens here is
   # not the send's: it was answered above.
-  defp remember({:ok, %Message{}}, scope, told) do
-    RecipientSource.remember_all(
-      Enum.uniq(told.sources),
-      scope,
-      told.context,
-      told.entries
-    )
+  defp remember({:ok, %Message{} = message}, scope, told) do
+    # A letter the same key had answered before this attempt is not this
+    # attempt's: the addresses typed now were not used by it.
+    unless replayed?(message, told.started), do: tell_sources(scope, told)
   catch
     kind, reason ->
       failure = ComposePipeline.describe_failure(kind, reason, __STACKTRACE__)
@@ -829,6 +879,15 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   defp remember(_result, _scope, _told), do: :ok
+
+  defp tell_sources(scope, told) do
+    RecipientSource.remember_all(
+      Enum.uniq(told.sources),
+      scope,
+      told.context,
+      told.entries
+    )
+  end
 
   # The send runs under the module's task supervisor, not linked to the page:
   # leaving or crashing the page between the commit and the external part must
@@ -928,9 +987,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   defp finish_send(socket, {:ok, %Message{} = message}) do
     send(self(), {:inbox_compose, socket.assigns.id, {:sent, message}})
 
-    assign(socket,
+    socket
+    |> drop_uploads(socket.assigns[:send_upload_refs] || [])
+    |> assign(
       sending: false,
       sent: true,
+      send_upload_refs: [],
       replayed: replayed?(message, socket.assigns[:send_started]),
       send_ref: nil,
       error: nil
@@ -943,11 +1005,25 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   defp finish_send(socket, _other),
     do: assign(socket, sending: false, send_ref: nil, error: Errors.message(:send_failed))
 
+  # The entries of the form's own uploads that were sent (or, for a new draft,
+  # all of them): a letter that went has its files, and the form must not
+  # carry them into the next one. `consume_uploaded_entries` with `:postpone`
+  # leaves them on the page so that a failed try can be made again.
+  defp drop_uploads(socket, :all),
+    do: drop_uploads(socket, Enum.map(socket.assigns.uploads.attachments.entries, & &1.ref))
+
+  defp drop_uploads(socket, refs) do
+    for %{ref: ref} <- socket.assigns.uploads.attachments.entries, ref in refs, reduce: socket do
+      acc -> cancel_upload(acc, :attachments, ref)
+    end
+  end
+
   # ── the line above the button ───────────────────────────────────────────────
 
   # Who gets it, as the person sees it — and, for the outside addresses, where
   # the host's filter would really send it (`Outbound.preview/2`; nothing is
-  # sent). A filter that refuses or fails leaves the plain line.
+  # sent). Outside mail that cannot go out — closed, refused by the filter,
+  # left with nobody, or a filter that cannot be asked — is said in the line.
   defp refresh_summary(socket) do
     %{recipients: r} = socket.assigns
     people = r.to ++ r.cc ++ r.bcc
@@ -958,7 +1034,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       if people == [] do
         nil
       else
-        {outside, unchecked?} = outside_addresses(socket, identity)
+        {outside, problem} = outside_addresses(socket, identity)
 
         %{
           from: socket.assigns |> current_option() |> then(&(&1 && &1.label)),
@@ -966,7 +1042,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           cc: length(r.cc),
           bcc: length(r.bcc),
           outside: outside,
-          unchecked: unchecked?,
+          problem: problem,
           sender_as: sender_as(people, identity)
         }
       end
@@ -999,8 +1075,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp sender_as(_people, _identity), do: nil
 
-  # {where the filter would send it (nil when as typed), whether the filter
-  # could not be asked}.
+  # {where the filter would send it (nil when as typed), what is wrong with
+  # the outside mail: nil, `:unchecked` (the filter could not be asked),
+  # `:closed` (outside mail is off, or no filter is set up), `:refused` (the
+  # filter says no) or `:dropped` (the filter leaves nobody to send to)}.
   defp outside_addresses(socket, identity) do
     r = socket.assigns.recipients
 
@@ -1013,12 +1091,15 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
     case typed do
       [] ->
-        {nil, false}
+        {nil, nil}
 
       _ ->
         case Outbound.preview(preview_email(typed), preview_context(socket, identity)) do
-          {:ok, email} -> {rewritten(email, typed), false}
-          {:error, _reason} -> {nil, true}
+          {:ok, email} -> {rewritten(email, typed), nil}
+          {:error, :external_disabled} -> {nil, :closed}
+          {:error, :no_recipients} -> {nil, :dropped}
+          {:error, {:filter_refused, _reason}} -> {nil, :refused}
+          {:error, _reason} -> {nil, :unchecked}
         end
     end
   end
@@ -1072,11 +1153,29 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         gettext("outside mail goes out as %{sender}", sender: summary.sender_as),
       summary.outside &&
         gettext("outside mail goes to %{addresses}", addresses: Enum.join(summary.outside, ", ")),
-      summary.unchecked && gettext("Where the outside mail goes could not be checked.")
+      problem_text(summary.problem)
     ]
     |> Enum.filter(& &1)
     |> Enum.join("; ")
   end
+
+  defp send_label(true, _sent), do: gettext("Sending…")
+  defp send_label(false, true), do: pgettext("compose button after a send", "Sent")
+  defp send_label(false, false), do: gettext("Send")
+
+  defp problem_text(nil), do: nil
+
+  defp problem_text(:unchecked),
+    do: gettext("Where the outside mail goes could not be checked.")
+
+  defp problem_text(:closed),
+    do: gettext("Outside mail is not set up, so it will not go out.")
+
+  defp problem_text(:dropped),
+    do: gettext("The mail rules leave nobody to send the outside mail to, so it will not go out.")
+
+  defp problem_text(:refused),
+    do: gettext("The outside mail will not go out: the mail rules refuse it.")
 
   defp base_text(from, []), do: gettext("From %{from}", from: from)
 
@@ -1095,6 +1194,16 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   defp host_files(_), do: []
+
+  # How many entries of the draft's list are no file (not a plain map). They
+  # are not shown and not sent; the form says so and does not send, because a
+  # letter that silently lacks a file the host meant to attach is worse than
+  # one that does not go. A list that is no list counts as one.
+  defp bad_host_files(list) when is_list(list),
+    do: Enum.count(list, &(not is_map(&1) or is_struct(&1)))
+
+  defp bad_host_files(nil), do: 0
+  defp bad_host_files(_other), do: 1
 
   defp with_stable_id(item, index) do
     id = field(item, :id)
@@ -1146,16 +1255,32 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     if file_count(socket) + length(uuids) > max do
       assign(socket, files_error: Errors.message({:too_many_attachments, max}))
     else
-      case ComposePipeline.authorize_picks(
-             socket.assigns.scope,
-             socket.assigns.source_draft,
-             uuids,
-             socket.assigns[:authorize_attachments]
-           ) do
+      case ask_picks(socket, uuids) do
         {:ok, items} -> add_picks(socket, uuids, items)
         {:error, reason} -> assign(socket, files_error: Errors.user_message(reason))
       end
     end
+  end
+
+  # The host's callback runs in the page's own process: a failure there must
+  # not take the page and the typed letter with it. Logged by the kind of
+  # failure only (never what it carried), shown as a plain refusal.
+  defp ask_picks(socket, uuids) do
+    ComposePipeline.authorize_picks(
+      socket.assigns.scope,
+      socket.assigns.source_draft,
+      uuids,
+      socket.assigns[:authorize_attachments]
+    )
+  rescue
+    exception -> pick_failed(inspect(exception.__struct__))
+  catch
+    kind, _reason -> pick_failed("a #{kind}")
+  end
+
+  defp pick_failed(failure) do
+    Logger.warning("[Inbox] the host's authorize_attachments failed at a pick (#{failure})")
+    {:error, :send_failed}
   end
 
   # A pick is shown under the name the host gave with its yes, else by a
@@ -1360,7 +1485,22 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     )
   end
 
-  # Swaps the signature block at the end of the text; an edited block stays.
+  # No signature any more: its block comes off the end of the text; one the
+  # writer edited stays as their own text.
+  defp drop_signature(socket) do
+    %{body: body, signature_block: inserted} = socket.assigns
+
+    body =
+      case Signatures.swap_block(body, inserted, nil) do
+        {:ok, body} -> body
+        :edited -> body
+      end
+
+    assign(socket, body: body, signature_uuid: "", signature_block: "")
+  end
+
+  # Swaps the signature block at the end of the text; an edited block stays,
+  # with a word.
   defp switch_signature(socket, signature) do
     %{body: body, signature_block: inserted} = socket.assigns
 
@@ -1609,6 +1749,14 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           {upload_error_text(error)}
         </p>
         <p
+          :if={@bad_host_files > 0}
+          id={"compose-#{@id}-draft-files-error"}
+          role="alert"
+          class="text-xs text-error"
+        >
+          {gettext("Some of the files this letter should carry could not be read, so it is not sent.")}
+        </p>
+        <p
           :if={@files_error}
           id={"compose-#{@id}-files-error"}
           role="alert"
@@ -1635,6 +1783,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
       <%!-- The region is always there: one that appears with its text is not announced. --%>
       <div id={"compose-#{@id}-summary-live"} aria-live="polite">
+        <p :if={@sent} id={"compose-#{@id}-sent"} class="text-sm font-medium">
+          {gettext("The letter was sent.")}
+        </p>
         <p
           :if={@summary}
           id={"compose-#{@id}-summary"}
@@ -1662,7 +1813,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           disabled={@sending or @sent or @blocked?}
           aria-busy={to_string(@sending)}
         >
-          {if @sending, do: gettext("Sending…"), else: gettext("Send")}
+          {send_label(@sending, @sent)}
         </.button>
       </div>
     </div>
@@ -1726,10 +1877,13 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         >
           <.internal_marker :if={chip.route == :internal} />
           {chip_text(chip)}
+          <span :if={labelled?(chip)} data-chip-address class="text-xs opacity-70">
+            {chip.address}
+          </span>
           <button
             type="button"
             class="btn btn-ghost btn-circle btn-xs size-4 min-h-0"
-            aria-label={gettext("Remove %{name}", name: chip_text(chip))}
+            aria-label={gettext("Remove %{name}", name: chip_name(chip))}
             phx-click="remove"
             phx-value-key={chip.key}
             phx-target={@target}
@@ -1757,7 +1911,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           phx-debounce="300"
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={to_string(@line.list != nil)}
+          aria-expanded={to_string(@line.list != nil and @line.list.items != [])}
           aria-controls={"compose-#{@id}-#{@role}-suggestions"}
           wrapper_class="grow"
           class="input-sm"
@@ -1802,35 +1956,63 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     assigns = assign(assigns, :groups, groups(assigns.list.items))
 
     ~H"""
+    <p
+      :if={@list.items == []}
+      id={"compose-#{@id}-#{@role}-suggestions"}
+      role="status"
+      class="rounded-box border border-base-300 bg-base-100 px-2 py-1 text-sm text-base-content/60"
+    >
+      {gettext("No addresses found.")}
+    </p>
+    <%!-- A listbox holds options (and named groups of them) and nothing else --%>
     <div
+      :if={@list.items != []}
       id={"compose-#{@id}-#{@role}-suggestions"}
       role="listbox"
       aria-label={gettext("Suggestions")}
       class="flex flex-col gap-1 rounded-box border border-base-300 bg-base-100 p-1"
     >
-      <p :if={@list.items == []} class="px-2 py-1 text-sm text-base-content/60">
-        {gettext("No addresses found.")}
-      </p>
-      <div :for={{group, items} <- @groups} class="flex flex-col">
-        <p :if={group} class="px-2 pt-1 text-xs font-medium text-base-content/60">{group}</p>
-        <button
-          :for={item <- items}
-          type="button"
-          role="option"
-          aria-selected="false"
-          class="btn btn-ghost btn-sm justify-start gap-2 font-normal"
-          phx-click="pick"
-          phx-value-id={item.id}
-          phx-target={@target}
+      <%= for {{group, items}, index} <- Enum.with_index(@groups) do %>
+        <div
+          :if={group}
+          role="group"
+          aria-labelledby={"compose-#{@id}-#{@role}-group-#{index}"}
+          class="flex flex-col"
         >
-          <.internal_marker :if={item.entry.route == :internal} />
-          {chip_text(item.entry)}
-          <span :if={item.entry[:label] && item.entry[:address]} class="text-xs text-base-content/60">
-            {item.entry.address}
+          <span
+            id={"compose-#{@id}-#{@role}-group-#{index}"}
+            class="px-2 pt-1 text-xs font-medium text-base-content/60"
+          >
+            {group}
           </span>
-        </button>
-      </div>
+          <.suggestion :for={item <- items} item={item} target={@target} />
+        </div>
+        <.suggestion :for={item <- items} :if={is_nil(group)} item={item} target={@target} />
+      <% end %>
     </div>
+    """
+  end
+
+  attr(:item, :map, required: true)
+  attr(:target, :any, required: true)
+
+  defp suggestion(assigns) do
+    ~H"""
+    <button
+      type="button"
+      role="option"
+      aria-selected="false"
+      class="btn btn-ghost btn-sm justify-start gap-2 font-normal"
+      phx-click="pick"
+      phx-value-id={@item.id}
+      phx-target={@target}
+    >
+      <.internal_marker :if={@item.entry.route == :internal} />
+      {chip_text(@item.entry)}
+      <span :if={@item.entry[:label] && @item.entry[:address]} class="text-xs text-base-content/60">
+        {@item.entry.address}
+      </span>
+    </button>
     """
   end
 

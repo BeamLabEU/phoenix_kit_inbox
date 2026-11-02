@@ -10,37 +10,35 @@ defmodule PhoenixKitInbox.Web.ComposeFormAttachmentsTest do
 
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Mailboxes
+  alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Test.ComponentHostLive
+  alias PhoenixKitInbox.Test.Repo
   alias PhoenixKitInbox.Web.Components.ComposeDraft
   alias PhoenixKitInbox.Web.Components.ComposeForm
 
   defmodule Authorizer do
     @moduledoc false
-    # Tells the test what it was asked; refuses when the draft's context says so.
+    # Tells the test what it was asked; answers as the draft's context says.
     def authorize(_scope, context, uuids) do
       if pid = Process.whereis(:compose_attachments_test),
         do: send(pid, {:authorize, context, uuids})
 
-      cond do
-        context[:deny] ->
-          {:error, {:attachment_forbidden, hd(uuids)}}
-
-        context[:raw] ->
-          {:error, "SQL timeout at db-7.internal:5432"}
-
-        context[:odd] ->
-          {:error, {:db_down, "10.0.0.7"}}
-
-        context[:refuse] ->
-          {:error, {:refused, "This file is private to the client."}}
-
-        context[:named] ->
-          {:ok, for(uuid <- uuids, do: %{file_uuid: uuid, name: "Price list.pdf"})}
-
-        true ->
-          :ok
-      end
+      answer(context, uuids)
     end
+
+    defp answer(%{deny: true}, uuids), do: {:error, {:attachment_forbidden, hd(uuids)}}
+    defp answer(%{boom: true}, _uuids), do: raise("host bug with secret-token")
+    defp answer(%{throw: true}, _uuids), do: throw({:secret, "secret-token"})
+    defp answer(%{raw: true}, _uuids), do: {:error, "SQL timeout at db-7.internal:5432"}
+    defp answer(%{odd: true}, _uuids), do: {:error, {:db_down, "10.0.0.7"}}
+
+    defp answer(%{refuse: true}, _uuids),
+      do: {:error, {:refused, "This file is private to the client."}}
+
+    defp answer(%{named: true}, uuids),
+      do: {:ok, for(uuid <- uuids, do: %{file_uuid: uuid, name: "Price list.pdf"})}
+
+    defp answer(_context, _uuids), do: :ok
   end
 
   @external ["inbox", "inbox.send_external"]
@@ -133,6 +131,22 @@ defmodule PhoenixKitInbox.Web.ComposeFormAttachmentsTest do
       assert files(view) == 1
       refute has_element?(view, "#compose-demo-attachments", "offer-1.pdf")
       assert has_element?(view, "#compose-demo-attachments", "offer-2.pdf")
+    end
+
+    test "an entry of the draft that is no file is an error that holds the send, not a gap",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(attachments: [host_file(1), "junk", nil]))
+
+      assert files(view) == 1
+      assert has_element?(view, "#compose-demo-draft-files-error[role=alert]")
+      assert has_element?(view, "button[type=submit][form=compose-demo-form][disabled]")
+
+      view
+      |> form("#compose-demo-form", %{"subject" => "Offer", "body" => "Hello"})
+      |> render_submit()
+
+      refute_receive {:authorize, _, _}, 100
+      assert Repo.aggregate(Message, :count) == 0
     end
 
     test "a key that is not on the page changes nothing", %{conn: conn} = ctx do
@@ -240,6 +254,26 @@ defmodule PhoenixKitInbox.Web.ComposeFormAttachmentsTest do
       assert context.links == [%{kind: "order", ref: "o-1"}]
       assert context.note == "x"
       assert files(view) == 3
+    end
+
+    test "a callback that raises or throws is an error line, not a dead page and a lost letter",
+         %{conn: conn} = ctx do
+      for context <- [%{boom: true}, %{throw: true}] do
+        view = mount_form(ctx, conn, draft(context: context))
+        uuid = Ecto.UUID.generate()
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            forge(view, "pick_attachments", %{"uuids" => [uuid]})
+          end)
+
+        assert files(view) == 2
+        assert has_element?(view, "#compose-demo-files-error[role=alert]", "could not be sent")
+        refute render(view) =~ "secret-token"
+        refute log =~ "secret-token"
+        assert log =~ "pick"
+        assert Process.alive?(view.pid)
+      end
     end
 
     test "refused pick adds nothing", %{conn: conn} = ctx do

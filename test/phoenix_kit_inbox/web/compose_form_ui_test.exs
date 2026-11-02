@@ -17,6 +17,17 @@ defmodule PhoenixKitInbox.Web.ComposeFormUiTest do
 
   @external ["inbox", "inbox.send_external"]
 
+  defmodule Heads do
+    @moduledoc false
+    # A source that offers one person under a heading.
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, "bob" <> _),
+      do: [%{address: "bobby@example.com", label: "Bobby", route: :email, group: "Clients"}]
+
+    def suggest(_scope, _context, _query), do: []
+  end
+
   setup :outbound_setup
 
   setup do
@@ -185,6 +196,60 @@ defmodule PhoenixKitInbox.Web.ComposeFormUiTest do
       # "No signature" takes the block off again.
       forge(view, "select_signature", %{"signature" => ""})
       refute render(element(view, "#compose-demo-body")) =~ "Best regards"
+    end
+
+    test "a sender that is lost falls back with a word, and takes its signature off",
+         %{conn: conn} = ctx do
+      {:ok, sig} =
+        Signatures.create_signature(ctx.manager, ctx.desk, %{
+          "label" => "Desk",
+          "body" => "The desk speaks"
+        })
+
+      view = mount_form(ctx, conn, draft(from_editable: true))
+      forge(view, "select_from", %{"from" => "mailbox:#{ctx.desk.uuid}"})
+      view |> element("button[phx-click=toggle][phx-value-block=signature]") |> render_click()
+
+      view
+      |> form("#compose-demo-signature-form", %{"signature" => sig.uuid})
+      |> render_change()
+
+      assert render(element(view, "#compose-demo-body")) =~ "The desk speaks"
+
+      # The desk is taken away from Alice while the page is open.
+      :ok = Mailboxes.revoke_access(ctx.manager, ctx.desk, ctx.alice.uuid)
+      send(view.pid, {:test_assigns, %{scope: scope_for(ctx.alice, @external)}})
+      render(view)
+
+      refute render(element(view, "#compose-demo-body")) =~ "The desk speaks"
+      assert has_element?(view, "[role=alert]", "no longer available")
+    end
+
+    test "a signature the writer edited stays as text when the sender changes, with no note",
+         %{conn: conn} = ctx do
+      {:ok, sig} =
+        Signatures.create_signature(ctx.manager, ctx.desk, %{
+          "label" => "Desk",
+          "body" => "The desk speaks"
+        })
+
+      view = mount_form(ctx, conn, draft(from_editable: true))
+      forge(view, "select_from", %{"from" => "mailbox:#{ctx.desk.uuid}"})
+      view |> element("button[phx-click=toggle][phx-value-block=signature]") |> render_click()
+
+      view
+      |> form("#compose-demo-signature-form", %{"signature" => sig.uuid})
+      |> render_change()
+
+      view
+      |> form("#compose-demo-form", %{"body" => "Hello\n\n-- \nThe desk speaks, edited"})
+      |> render_change()
+
+      forge(view, "select_from", %{"from" => "user_default"})
+
+      # The writer's own text stays, and nothing hangs about it.
+      assert render(element(view, "#compose-demo-body")) =~ "The desk speaks, edited"
+      refute has_element?(view, "[role=alert]")
     end
 
     test "host-filled bcc opens its block", %{conn: conn} = ctx do
@@ -440,6 +505,31 @@ defmodule PhoenixKitInbox.Web.ComposeFormUiTest do
       assert has_element?(view, input <> "[aria-expanded=true]")
       assert has_element?(view, "#compose-demo-to-suggestions[role=listbox]")
       assert has_element?(view, "#compose-demo-to-suggestions [role=option]")
+    end
+
+    test "a listbox holds options and named groups, nothing else; no match is a status",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(), %{recipient_sources: [Heads]})
+      view |> form("#compose-demo-to-form", %{"query" => "bob"}) |> render_change()
+
+      roles =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#compose-demo-to-suggestions > *")
+        |> Enum.map(&(&1 |> LazyHTML.attribute("role") |> List.first()))
+
+      assert roles != []
+      assert Enum.all?(roles, &(&1 in ["option", "group"]))
+      assert has_element?(view, "#compose-demo-to-suggestions [role=group][aria-labelledby]")
+
+      # The picker with nobody in it: a status line, not an empty listbox.
+      view |> form("#compose-demo-to-form", %{"query" => ""}) |> render_change()
+      view |> element("button[phx-click=toggle_picker][phx-value-role=to]") |> render_click()
+
+      refute has_element?(view, "#compose-demo-to-suggestions[role=listbox]")
+      assert has_element?(view, "#compose-demo-to-suggestions[role=status]", "No addresses")
+      assert has_element?(view, "#compose-demo-to-input[aria-expanded=false]")
     end
   end
 

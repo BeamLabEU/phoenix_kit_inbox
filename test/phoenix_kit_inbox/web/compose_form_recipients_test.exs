@@ -119,10 +119,16 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
                "internal"
              )
 
-      # The address behind a name is one hover away.
+      # The address behind a name is on the chip itself, not only on hover.
       assert ["client@example.com"] =
                nodes(view, ~s(#compose-demo-to li[data-route=email]))
                |> LazyHTML.attribute("title")
+
+      assert has_element?(
+               view,
+               ~s(#compose-demo-to li[data-route=email] [data-chip-address]),
+               "client@example.com"
+             )
     end
 
     test "a chip's remove button names the person for a screen reader", %{conn: conn} = ctx do
@@ -133,6 +139,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
                |> LazyHTML.attribute("aria-label")
 
       assert label =~ "The client"
+      assert label =~ "client@example.com"
     end
 
     test "removing a chip takes it off; a forged key changes nothing", %{conn: conn} = ctx do

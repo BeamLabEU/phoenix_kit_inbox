@@ -623,6 +623,10 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
   end
 
   describe "the task and the page" do
+    # A send with a file stores a snapshot of it: into a bucket of the test's
+    # own, never the checkout's priv/media.
+    setup :storage_setup
+
     defp put_env!(key, value) do
       Application.put_env(:phoenix_kit_inbox, key, value)
       on_exit(fn -> Application.delete_env(:phoenix_kit_inbox, key) end)
@@ -672,6 +676,90 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       assert text(view, "[role=alert]") =~ "could not be sent"
       refute send_button_disabled?(view)
       assert messages() == 0
+    end
+
+    test "a new draft from the parent drops the uploads of the one before", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(ctx))
+
+      file =
+        file_input(view, "#compose-demo-upload-form", :attachments, [
+          %{name: "first.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(file, "first.txt")
+      assert has_element?(view, "#compose-demo-attachments li[data-upload]", "first.txt")
+
+      send(view.pid, {:test_assigns, %{draft: draft(ctx, subject: "Next letter")}})
+      render(view)
+
+      refute has_element?(view, "#compose-demo-attachments li[data-upload]")
+
+      view
+      |> form("#compose-demo-form", %{"subject" => "Next letter", "body" => "Hello there"})
+      |> render_submit()
+
+      assert_receive {:around, _, given}, 2000
+      assert given.attachments == []
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "Next letter"}}}, 2000
+    end
+
+    test "a letter that went takes the uploads it used with it", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(ctx))
+
+      file =
+        file_input(view, "#compose-demo-upload-form", :attachments, [
+          %{name: "sent.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(file, "sent.txt")
+      submit(view)
+
+      assert_receive {:around, _, %{attachments: [%{filename: "sent.txt"}]}}, 2000
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{}}}, 2000
+      eventually(fn -> not has_element?(view, "#compose-demo-attachments li[data-upload]") end)
+    end
+
+    test "the file of one letter does not go with the next one", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(ctx))
+
+      file =
+        file_input(view, "#compose-demo-upload-form", :attachments, [
+          %{name: "first.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(file, "first.txt")
+      submit(view)
+
+      assert_receive {:around, _, %{attachments: [%{filename: "first.txt"}]}}, 2000
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "Offer"}}}, 2000
+      eventually(fn -> not has_element?(view, "#compose-demo-attachments li[data-upload]") end)
+
+      send(view.pid, {:test_assigns, %{draft: draft(ctx, subject: "Second letter")}})
+      render(view)
+
+      view
+      |> form("#compose-demo-form", %{"subject" => "Second letter", "body" => "Hello again"})
+      |> render_submit()
+
+      assert_receive {:around, _, %{attachments: []}}, 2000
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "Second letter"}}}, 2000
+    end
+
+    test "a letter that failed keeps its uploads for the next try", %{conn: conn} = ctx do
+      mode(:error)
+      view = mount_form(ctx, conn, draft(ctx))
+
+      file =
+        file_input(view, "#compose-demo-upload-form", :attachments, [
+          %{name: "again.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(file, "again.txt")
+      submit(view)
+
+      assert_receive {:around, _, _}, 2000
+      eventually(fn -> text(view, "[role=alert]") =~ "could not be sent" end)
+      assert has_element?(view, "#compose-demo-attachments li[data-upload]", "again.txt")
     end
 
     test "a new draft from the parent while a send runs is ignored", %{conn: conn} = ctx do
@@ -889,6 +977,19 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       assert has_element?(view, "#compose-demo-replay-note[role=status]", "already sent")
     end
 
+    test "a letter that went is announced and the button reads Sent", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(ctx))
+      refute has_element?(view, "#compose-demo-sent")
+      submit(view)
+
+      assert_receive {:inbox_compose, "demo", {:sent, _}}, 2000
+      eventually(fn -> has_element?(view, "#compose-demo-sent") end)
+
+      assert has_element?(view, "#compose-demo-summary-live #compose-demo-sent", "was sent")
+      assert text(view, "button[type=submit][form=compose-demo-form]") =~ "Sent"
+      assert send_button_disabled?(view)
+    end
+
     test "a first send carries no such note", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft(ctx))
       submit(view)
@@ -964,8 +1065,49 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       refute text(view, "#compose-demo-summary") =~ "could not be checked"
     end
 
-    test "a filter that refuses, or breaks, leaves a plain line", %{conn: conn} = ctx do
-      for filter <- [:refuse, :raises, :throws, :garbage] do
+    test "a filter that refuses says the outside mail will not go out", %{conn: conn} = ctx do
+      PhoenixKitInbox.DataCase.outbound_filter({OutboundFilters, :refuse})
+      view = mount_form(ctx, conn, outside_draft(ctx))
+      line = text(view, "#compose-demo-summary")
+
+      assert line =~ "The client"
+      assert line =~ "will not go out"
+      refute line =~ "could not be checked"
+    end
+
+    test "outside mail that is switched off says it is not set up", %{conn: conn} = ctx do
+      {:ok, _} = PhoenixKitInbox.set_external_enabled(false)
+      view = mount_form(ctx, conn, outside_draft(ctx))
+      line = text(view, "#compose-demo-summary")
+
+      assert line =~ "not set up"
+      refute line =~ "could not be checked"
+    end
+
+    test "outside mail with no filter configured does not claim to be turned off",
+         %{conn: conn} = ctx do
+      PhoenixKitInbox.DataCase.outbound_filter(nil)
+      assert PhoenixKitInbox.external_enabled?()
+      view = mount_form(ctx, conn, outside_draft(ctx))
+      line = text(view, "#compose-demo-summary")
+
+      assert line =~ "not set up"
+      refute line =~ "turned off"
+    end
+
+    test "a filter that leaves nobody says there is no one to send to", %{conn: conn} = ctx do
+      PhoenixKitInbox.DataCase.outbound_filter({OutboundFilters, :drops_everyone})
+      view = mount_form(ctx, conn, outside_draft(ctx))
+      line = text(view, "#compose-demo-summary")
+
+      assert line =~ "leave nobody"
+      assert line =~ "will not go out"
+      refute line =~ "could not be checked"
+      refute line =~ "not set up"
+    end
+
+    test "a filter that breaks leaves a plain line", %{conn: conn} = ctx do
+      for filter <- [:raises, :throws, :garbage] do
         PhoenixKitInbox.DataCase.outbound_filter({OutboundFilters, filter})
         view = mount_form(ctx, conn, outside_draft(ctx))
         line = text(view, "#compose-demo-summary")
@@ -1047,6 +1189,25 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       assert_receive {:inbox_compose, "demo", {:sent, %Message{}}}, 2000
       assert_receive {:remembered, "typed@example.com", "typed@example.com"}, 2000
       refute_receive {:remembered, _, _}, 200
+    end
+
+    test "a send the same key answered with an earlier letter remembers nothing",
+         %{conn: conn} = ctx do
+      mode(:error)
+      view = with_spy(ctx, conn, ctx.spy_draft)
+      type_in_cc(view, "typed@example.com")
+      submit(view)
+      assert_receive {:around, _, %{idempotency_key: key}}, 2000
+      eventually(fn -> has_element?(view, "[role=alert]") end)
+      earlier = earlier_letter!(ctx, key, 3600)
+
+      mode(:pass)
+      submit(view)
+
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{} = message}}, 2000
+      assert message.uuid == earlier.uuid
+      assert has_element?(view, "#compose-demo-replay-note")
+      refute_receive {:remembered, _, _}, 300
     end
 
     test "a send that was refused remembers nothing", %{conn: conn} = ctx do
