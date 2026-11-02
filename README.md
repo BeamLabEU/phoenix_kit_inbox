@@ -348,6 +348,14 @@ Messages.draft_recipients(draft)   #=> %{"to" => "@bob", "cc" => "", "bcc" => ""
 
 Pages of the host can carry the module's parts. Everything below checks the viewer's `scope` again on the server; what a page does not offer is only hidden, never trusted.
 
+### Sending from a form of the host
+
+`PhoenixKitInbox.Web.Components.ComposePipeline` is the server-side half of a compose form: it rechecks a form's send against what the host's draft says. The bullets below describe it.
+
+- `ComposeDraft` is the host's side: recipients, subject, text, files, `links`, `html_body`, `reply_to_trusted`, `context`. What it sets is the host's word; what the browser sends is checked against it.
+- `ComposePipeline.run/4` is the send without a LiveView: scope, form params, draft, and the callbacks `around_send: fn scope, draft, send_fun -> result end` (the host's rules around the one send; `send_fun` sends at most once and must not be called inside a transaction of the host's) and `authorize_attachments: fn scope, context, file_uuids -> :ok | {:ok, [%{file_uuid, name, flags}]} | {:error, reason} end`. A host's own refusal text is `{:error, {:refused, text}}`; any other text or unknown reason shows as "could not be sent". It does not depend on a LiveView and can be called from an API.
+- `RecipientSource` (`suggest/3`, optional `remember/4`) is how the host offers people to the To/Cc/Bcc fields; `remember/4` is told the outside addresses typed by hand after a send that went.
+
 ### The mail of an object
 
 ```heex

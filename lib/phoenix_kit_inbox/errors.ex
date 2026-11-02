@@ -18,6 +18,28 @@ defmodule PhoenixKitInbox.Errors do
 
   alias PhoenixKit.Utils.Format
 
+  @refused_max 300
+
+  @doc """
+  `message/1` for a person who is not the developer: what the application did
+  not mean to say — a reason that is text (it came from somewhere else) and
+  one with no message of its own — becomes the plain "could not be sent".
+  For the places a host's code can answer through, like a compose form.
+
+  A host that means to tell the person why it refused answers
+  `{:refused, text}`: its short, already translated text is shown as it is
+  (control and direction-changing characters taken out, at most
+  #{@refused_max} characters). That is the one way for a host's own words to
+  get through.
+  """
+  @spec user_message(term()) :: String.t()
+  def user_message(reason) when is_binary(reason), do: message(:send_failed)
+
+  def user_message(reason) do
+    text = message(reason)
+    if text == message_unexpected(reason), do: message(:send_failed), else: text
+  end
+
   @doc "Translates an error reason into a user-facing string."
   @spec message(term()) :: String.t()
   def message(:mailbox_not_found), do: gettext("Mailbox not found.")
@@ -27,6 +49,15 @@ defmodule PhoenixKitInbox.Errors do
   def message(:invalid_user), do: gettext("Could not identify the current user.")
 
   def message(:forbidden), do: gettext("You don't have permission to do that.")
+
+  def message({:refused, text}) when is_binary(text) do
+    case refused_text(text) do
+      "" -> message(:send_failed)
+      cleaned -> cleaned
+    end
+  end
+
+  def message({:refused, _other}), do: message(:send_failed)
 
   def message(:mailbox_access_denied),
     do: gettext("You don't have access to this mailbox.")
@@ -198,6 +229,57 @@ defmodule PhoenixKitInbox.Errors do
     )
   end
 
+  def message({:invalid_recipient, entry}),
+    do:
+      gettext("Not a valid recipient: %{entry}. Add one address at a time.",
+        entry: entry |> to_string() |> refused_text()
+      )
+
+  def message(:invalid_recipients), do: gettext("The recipients could not be read.")
+
+  def message({:too_many_recipients, role, max}),
+    do:
+      gettext("At most %{max} addresses in %{field}.",
+        max: max,
+        field: role_label(role)
+      )
+
+  def message(:subject_too_long),
+    do: gettext("The subject is too long (500 characters at most).")
+
+  def message(:invalid_text), do: gettext("The text contains characters that can't be sent.")
+
+  def message(:invalid_from), do: gettext("That sender is not valid.")
+
+  def message({:member_as_email, addresses}),
+    do:
+      ngettext(
+        "%{addresses} is inside this application. Choose them from the list as an internal recipient instead of typing the email.",
+        "%{addresses} are inside this application. Choose them from the list as internal recipients instead of typing the email.",
+        length(addresses),
+        addresses: Enum.join(addresses, ", ")
+      )
+
+  def message({:route_mismatch, mismatches}),
+    do:
+      gettext(
+        "These recipients would not be reached the way they were chosen: %{addresses}. Choose them again.",
+        addresses: Enum.map_join(mismatches, ", ", & &1.address)
+      )
+
+  def message(:route_check_failed),
+    do: gettext("The recipients could not be checked. Try again.")
+
+  def message(:send_failed), do: gettext("The message could not be sent.")
+
+  def message(:identity_required),
+    do: gettext("Choose which sender to use for the addresses outside this application.")
+
+  def message(:invalid_draft), do: gettext("The form has nothing to send.")
+
+  def message(:invalid_callbacks),
+    do: gettext("This form is not set up correctly, so nothing was sent.")
+
   def message(:ambiguous_recipient),
     do: gettext("That name matches more than one recipient.")
 
@@ -221,7 +303,35 @@ defmodule PhoenixKitInbox.Errors do
 
   def message(reason) when is_binary(reason), do: reason
 
-  def message(reason) do
+  def message(reason), do: message_unexpected(reason)
+
+  # The name of a recipient line, as the form shows it.
+  defp role_label(:to), do: gettext("To")
+  defp role_label(:cc), do: gettext("Cc")
+  defp role_label(:bcc), do: gettext("Bcc")
+  defp role_label(other), do: other |> to_string() |> String.capitalize()
+
+  # A host's words, made fit to show: valid text, one line, not too long, and
+  # without the marks that turn the text around or hide in it (the C1 controls
+  # and the left-to-right / right-to-left marks, embeddings and isolates).
+  defp refused_text(text) do
+    cleaned =
+      text
+      |> String.replace_invalid("")
+      |> String.replace(~r/[\x00-\x1f\x7f]+/u, " ")
+      |> String.replace(
+        ~r/[\x{80}-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u,
+        ""
+      )
+      |> String.replace(~r/ {2,}/, " ")
+      |> String.trim()
+
+    if String.length(cleaned) > @refused_max,
+      do: String.slice(cleaned, 0, @refused_max - 1) <> "…",
+      else: cleaned
+  end
+
+  defp message_unexpected(reason) do
     gettext("Unexpected error: %{reason}", reason: inspect(reason))
   end
 end
