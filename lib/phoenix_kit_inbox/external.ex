@@ -34,6 +34,11 @@ defmodule PhoenixKitInbox.External do
   the sender's roles anew — a role taken off after the commit stops the
   email — against the roles in effect in the same `%Scope{}`.
 
+  The email is built from the message as stored: a host's `html_body`
+  (`metadata["html_body"]`, see `Messages.send_message/4`) replaces the HTML
+  built from the body, for the first send and for a retry alike; the text part
+  is always the body's. A host's `reply_to_trusted` is the stored Reply-To.
+
   A transport that raises, exits or throws is a failed send. An exit after
   the relay took the message would make that a false "failed" — the retry's
   email-log guard is what keeps such a message from going twice.
@@ -395,6 +400,7 @@ defmodule PhoenixKitInbox.External do
         |> put_recipients(rows)
         |> put_reply_to(message.metadata)
         |> put_body(message)
+        |> put_html_body(message.metadata)
 
       {:ok, Enum.reduce(files, email, &Swoosh.Email.attachment(&2, &1))}
     end
@@ -432,6 +438,13 @@ defmodule PhoenixKitInbox.External do
   end
 
   defp put_body(email, %Message{body: body}), do: Swoosh.Email.text_body(email, body || "")
+
+  # The host's ready-made HTML replaces the one built from the body; the
+  # text part stays what the body gives.
+  defp put_html_body(email, %{"html_body" => html}) when is_binary(html) and html != "",
+    do: Swoosh.Email.html_body(email, html)
+
+  defp put_html_body(email, _metadata), do: email
 
   defp read_attachments(attachments) do
     Enum.reduce_while(attachments, {:ok, []}, fn row, {:ok, acc} ->
@@ -494,6 +507,14 @@ defmodule PhoenixKitInbox.External do
   (see the moduledoc). The sender's identity is checked again
   (`Identities.resolve/3`), as is the right to write externally. Returns
   `{:ok, :pending}` once the send is under way.
+
+  What the first send fixed, the retry keeps: the body, the host's HTML and
+  Reply-To, and the **name of the user** a From name was built from
+  (`metadata["identity"]["sender_name"]`) — whoever retries does not become
+  the sender. What is read anew, at the moment of delivery, is the identity
+  itself: its own name, its `personalize_from_name` flag, its integration and
+  who may use it. An identity renamed between the send and the retry is sent
+  as renamed, with the first sender's name in front.
   """
   @spec retry(Scope.t(), Mailbox.t(), binary()) ::
           {:ok, :pending} | {:error, term()}
@@ -529,8 +550,14 @@ defmodule PhoenixKitInbox.External do
   end
 
   # The message's identity as `scope` may send from it from `mailbox` now.
-  defp current_identity(scope, mailbox, %Message{metadata: %{"identity" => %{"uuid" => uuid}}}) do
-    case Identities.resolve(scope, uuid, mailbox) do
+  # Whether it may, and the identity's own name, are decided now; the user's
+  # part of a From name built from the sender (a common sender, a
+  # personalized one) is the name recorded when the message was sent, not the
+  # name of whoever retries.
+  defp current_identity(scope, mailbox, %Message{
+         metadata: %{"identity" => %{"uuid" => uuid} = recorded}
+       }) do
+    case Identities.resolve(scope, uuid, mailbox, recorded["sender_name"]) do
       {:ok, resolved} ->
         {:ok,
          %{

@@ -55,11 +55,13 @@ mix deps.get
 mix phoenix_kit.update   # generates + runs the host migration for this module
 ```
 
+**V07 is required.** The code reads the sending identity's flags and records every send's key in tables and columns that V07 adds: without `mix phoenix_kit.update` (and the migration it generates) reading the identities and every send fail. Run it before the new code serves requests.
+
 Then enable **Inbox** on the admin Modules page (or call `PhoenixKitInbox.enable_system/0`). The tab appears in the sidebar as **Mail** (with "Inbox" and "Mailboxes" under it; the shared-mail settings are a "Mail" page under Settings, for `inbox.manage_shared`); routes are generated at compile time from `admin_tabs/0`.
 
 ## Data model
 
-Seven tables. The split that matters is **message vs. delivery**: a message body is stored once, and each recipient mailbox gets its own delivery row carrying that mailbox's folder/seen/starred state. It's how every webmail works, and it's why "mark as read" doesn't leak across recipients.
+Eleven tables. The split that matters is **message vs. delivery**: a message body is stored once, and each recipient mailbox gets its own delivery row carrying that mailbox's folder/seen/starred state. It's how every webmail works, and it's why "mark as read" doesn't leak across recipients.
 
 ```
 phoenix_kit_inbox_mailboxes          one per user (kind: "user") + shared ones (kind: "shared")
@@ -68,6 +70,10 @@ phoenix_kit_inbox_mailboxes          one per user (kind: "user") + shared ones (
 phoenix_kit_inbox_messages           subject, body, thread_uuid, parent_uuid, sender  (stored ONCE)
  ├─ phoenix_kit_inbox_deliveries     one row per recipient mailbox: folder, seen_at, starred
  └─ phoenix_kit_inbox_attachments    one row per attached file: a reference, not the bytes
+
+phoenix_kit_inbox_external_recipients  one row per outside address of a message: status of its email
+phoenix_kit_inbox_message_links      a message's links to objects of the host (kind + ref, and where the link came from)
+phoenix_kit_inbox_send_keys          the idempotency keys of sends, kept 30 days: a repeat is the same message
 
 phoenix_kit_inbox_identities         sending identities: an email integration + the name shown
  └─ phoenix_kit_inbox_identity_roles the roles a common sender (shared, no mailbox) is open to
@@ -81,7 +87,7 @@ All primary keys are UUIDv7 and every schema carries `use PhoenixKit.SchemaPrefi
 Older PhoenixKit modules shipped their DDL inside core's versioned chain (the V90+ scheme). Inbox follows the newer pattern already used by `phoenix_kit_boards`, `phoenix_kit_web_analytics`, `phoenix_kit_legal`, and `phoenix_kit_stats`:
 
 - `PhoenixKitInbox.Migrations` is the coordinator, returned from `migration_module/0`
-- `PhoenixKitInbox.Migrations.V01` creates the tables; `V02` makes a user's deletion keep their mailboxes and every message (owner `ON DELETE SET NULL`, mailbox references `RESTRICT`) and makes shared addresses unique regardless of case; `V03` adds message attachments; `V04` adds sending identities and mailbox signatures; `V05` external recipients with their status; `V06` the roles of a common sender, given on the update to the roles holding `inbox.send_external` or `"*"` (Owner aside). Shipped versions are immutable
+- `PhoenixKitInbox.Migrations.V01` creates the tables; `V02` makes a user's deletion keep their mailboxes and every message (owner `ON DELETE SET NULL`, mailbox references `RESTRICT`) and makes shared addresses unique regardless of case; `V03` adds message attachments; `V04` adds sending identities and mailbox signatures; `V05` external recipients with their status; `V06` the roles of a common sender, given on the update to the roles holding `inbox.send_external` or `"*"` (Owner aside); `V07` links from messages to objects of the host, idempotent send keys, and a shared identity's sender-name flag. Shipped versions are immutable
 - Version is tracked in a `COMMENT ON TABLE` on `phoenix_kit_inbox_mailboxes`, so the coordinator can tell "not installed" from "installed at V1"
 - `mix phoenix_kit.update` discovers the coordinator, compares versions, and generates the host migration
 
@@ -337,6 +343,28 @@ Messages.draft_recipients(draft)   #=> %{"to" => "@bob", "cc" => "", "bcc" => ""
   "uuid" => draft.uuid, "to" => "bob@example.com", "subject" => "WIP"
 })
 ```
+
+## Embedding
+
+Pages of the host can carry the module's parts. Everything below checks the viewer's `scope` again on the server; what a page does not offer is only hidden, never trusted.
+
+### Links to the host's objects
+
+`PhoenixKitInbox.Links` ties a message to an object (`kind` + `ref`): by the host (`links:` option of `send_message/4`), by a person (`Links.link/5` / `unlink/5`, gated only by the host's `can_link?`), by the conversation (inherited) or by the subject. A link never widens who may read a message.
+
+```elixir
+config :phoenix_kit_inbox, link_resolvers: [MyApp.OrderLinks]   # PhoenixKitInbox.LinkResolver: kind/0, extract/1, exists?/1
+```
+
+Resolvers run in the sending process after the commit: they delay `send_message/4` returning (not the letter), so keep them cheap.
+
+### Server-side options of `send_message/4`
+
+Never filled from a form: `links:`, `html_body:` (the host's HTML for the outside email, up to 256 KiB), `reply_to_trusted:`, `idempotency_key:` (an unguessable string, one per opening of a form: the key space is global), `attachments_authorized:`, `attachment_flags:`, `attachments_data:`.
+
+### The outbound filter
+
+`config :phoenix_kit_inbox, :outbound_filter` is called for every email that leaves, and also with `preview: true` in its context when a host only shows where the mail would go (`Outbound.preview/2`). A filter must have no side effects: a look is not a send.
 
 ## Settings
 

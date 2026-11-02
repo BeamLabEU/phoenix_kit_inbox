@@ -32,6 +32,7 @@ support_dir = Path.expand("support", __DIR__)
   "outbound_stub.ex",
   "outbound_filters.ex",
   "fake_emails_module.ex",
+  "link_resolvers.ex",
   "data_case.ex",
   "live_case.ex"
 ]
