@@ -348,6 +348,19 @@ Messages.draft_recipients(draft)   #=> %{"to" => "@bob", "cc" => "", "bcc" => ""
 
 Pages of the host can carry the module's parts. Everything below checks the viewer's `scope` again on the server; what a page does not offer is only hidden, never trusted.
 
+### The mail of an object
+
+```heex
+<.live_component
+  module={PhoenixKitInbox.Web.Components.MailExplorer}
+  id="order-mail" scope={@scope}
+  filter={[%{kind: "order", ref: @order.uuid}]}
+  compose={&build_draft/1} can_link?={&can_link?/3}
+/>
+```
+
+`MailExplorer.attach/3` in `mount/3` keeps it current (the page needs a catch-all `handle_info/2`, see `MailExplorerHooks`). `PhoenixKitInbox.ObjectMail` is the same read without a page: the conversations about an object that the viewer's own mailboxes (and shared ones they hold a grant on) hold.
+
 ### Links to the host's objects
 
 `PhoenixKitInbox.Links` ties a message to an object (`kind` + `ref`): by the host (`links:` option of `send_message/4`), by a person (`Links.link/5` / `unlink/5`, gated only by the host's `can_link?`), by the conversation (inherited) or by the subject. A link never widens who may read a message.

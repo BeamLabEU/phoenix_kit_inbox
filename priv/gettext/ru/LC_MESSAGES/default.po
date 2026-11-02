@@ -26,6 +26,9 @@ msgstr "%{sender} отправил(а) вам сообщение."
 #: lib/phoenix_kit_inbox/notify.ex:242
 #: lib/phoenix_kit_inbox/notify.ex:243
 #: lib/phoenix_kit_inbox/notify.ex:365
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:656
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:685
+#: lib/phoenix_kit_inbox/web/components/mail_tree.ex:97
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:758
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:836
 #, elixir-autogen, elixir-format
@@ -42,7 +45,7 @@ msgstr "@имя_пользователя, email или общий ящик — �
 msgid "A file can't be attached: it is in the trash or no longer available."
 msgstr "Файл нельзя прикрепить: он в корзине или больше недоступен."
 
-#: lib/phoenix_kit_inbox/errors.ex:182
+#: lib/phoenix_kit_inbox/errors.ex:185
 #, elixir-autogen, elixir-format
 msgid "A recorded email names its recipients as external recipients, with their outcome."
 msgstr "В записанном письме получатели указаны как внешние, вместе с результатом отправки."
@@ -140,7 +143,7 @@ msgstr "Прикрепить существующие файлы"
 msgid "Attachments are not supported by this installation's file storage."
 msgstr "Файловое хранилище этой установки не поддерживает вложения."
 
-#: lib/phoenix_kit_inbox/errors.ex:185
+#: lib/phoenix_kit_inbox/errors.ex:188
 #, elixir-autogen, elixir-format
 msgid "Attachments are unavailable right now. Try again."
 msgstr "Вложения сейчас недоступны. Попробуйте ещё раз."
@@ -192,12 +195,14 @@ msgstr "Проверить"
 msgid "Choose a sender under “Send as” to write to addresses outside this application."
 msgstr "Чтобы писать на адреса вне приложения, выберите отправителя в поле «Отправить как»."
 
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:631
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:838
 #, elixir-autogen, elixir-format
 msgid "Close"
 msgstr "Закрыть"
 
 #: lib/phoenix_kit_inbox.ex:209
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:610
 #, elixir-autogen, elixir-format
 msgid "Compose"
 msgstr "Написать"
@@ -263,6 +268,7 @@ msgstr "Отбросить черновик"
 msgid "Discard this draft?"
 msgstr "Отбросить этот черновик?"
 
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:758
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:880
 #, elixir-autogen, elixir-format
 msgid "Download"
@@ -317,6 +323,7 @@ msgid "Grant access"
 msgstr "Дать доступ"
 
 #: lib/phoenix_kit_inbox.ex:195
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:794
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:77
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:1077
 #, elixir-autogen, elixir-format
@@ -342,6 +349,7 @@ msgstr "Больше допустимого размера."
 #: lib/phoenix_kit_inbox.ex:180
 #: lib/phoenix_kit_inbox.ex:240
 #: lib/phoenix_kit_inbox.ex:272
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:134
 #: lib/phoenix_kit_inbox/web/settings_live.ex:31
 #, elixir-autogen, elixir-format
 msgid "Mail"
@@ -425,7 +433,7 @@ msgstr "Сообщение отправлено. Письмо на внешни�
 msgid "Messages between users of this application"
 msgstr "Сообщения между пользователями этого приложения"
 
-#: lib/phoenix_kit_inbox/errors.ex:202
+#: lib/phoenix_kit_inbox/errors.ex:205
 #, elixir-autogen, elixir-format
 msgid "More than one recipient matches: %{recipients}. Use the full email address instead."
 msgstr "Подходит несколько получателей: %{recipients}. Укажите полный адрес email."
@@ -464,7 +472,7 @@ msgstr "Новый общий ящик"
 msgid "No Reply-To — replies go to this mailbox"
 msgstr "Без Reply-To — ответы придут в этот ящик"
 
-#: lib/phoenix_kit_inbox/errors.ex:192
+#: lib/phoenix_kit_inbox/errors.ex:195
 #, elixir-autogen, elixir-format
 msgid "No recipient matches: %{recipients}. Use @username, an email address, or a shared mailbox name."
 msgstr "Получатель не найден: %{recipients}. Укажите @имя_пользователя, адрес email или название общего ящика."
@@ -494,7 +502,7 @@ msgstr "Подписей пока нет."
 msgid "Not attached: %{names}. %{reason}"
 msgstr "Не прикреплено: %{names}. %{reason}"
 
-#: lib/phoenix_kit_inbox/errors.ex:178
+#: lib/phoenix_kit_inbox/errors.ex:181
 #, elixir-autogen, elixir-format
 msgid "Not email addresses: %{entries}."
 msgstr "Это не адреса email: %{entries}."
@@ -565,6 +573,7 @@ msgstr "Обновить"
 msgid "Remove attachment"
 msgstr "Убрать вложение"
 
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:785
 #: lib/phoenix_kit_inbox/web/compose_live.ex:441
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:1002
 #, elixir-autogen, elixir-format
@@ -756,7 +765,7 @@ msgstr "Это почтовое подключение недоступно дл
 msgid "That mail connection isn't connected."
 msgstr "Это почтовое подключение не подключено."
 
-#: lib/phoenix_kit_inbox/errors.ex:199
+#: lib/phoenix_kit_inbox/errors.ex:202
 #, elixir-autogen, elixir-format
 msgid "That name matches more than one recipient."
 msgstr "Это имя подходит нескольким получателям."
@@ -821,7 +830,7 @@ msgstr "Пока нет почтового подключения с адрес�
 msgid "There is nothing to send again."
 msgstr "Повторно отправлять нечего."
 
-#: lib/phoenix_kit_inbox/errors.ex:172
+#: lib/phoenix_kit_inbox/errors.ex:175
 #, elixir-autogen, elixir-format
 msgid "These addresses belong to people or mailboxes inside this application: %{addresses}."
 msgstr "Эти адреса принадлежат людям или ящикам внутри приложения: %{addresses}."
@@ -872,7 +881,7 @@ msgstr "Слишком много файлов."
 msgid "Trash"
 msgstr "Корзина"
 
-#: lib/phoenix_kit_inbox/errors.ex:222
+#: lib/phoenix_kit_inbox/errors.ex:225
 #, elixir-autogen, elixir-format
 msgid "Unexpected error: %{reason}"
 msgstr "Непредвиденная ошибка: %{reason}"
@@ -961,21 +970,25 @@ msgstr "Ваши настройки почты"
 msgid "a file"
 msgstr "файл"
 
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:810
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:956
 #, elixir-autogen, elixir-format
 msgid "not delivered"
 msgstr "не доставлено"
 
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:811
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:957
 #, elixir-autogen, elixir-format
 msgid "sending…"
 msgstr "отправляется…"
 
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:809
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:955
 #, elixir-autogen, elixir-format
 msgid "sent"
 msgstr "отправлено"
 
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:812
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:958
 #, elixir-autogen, elixir-format
 msgid "unknown — check the email log"
@@ -1221,6 +1234,7 @@ msgstr "У вас больше нет прав на работу с входящ
 msgid "You no longer have access to “%{name}”."
 msgstr "У вас больше нет доступа к ящику «%{name}»."
 
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:771
 #: lib/phoenix_kit_inbox/web/compose_live.ex:1147
 #: lib/phoenix_kit_inbox/web/inbox_live.ex:893
 #, elixir-autogen, elixir-format
@@ -1286,3 +1300,112 @@ msgstr "Ключ отправки недействителен. Откройте
 #, elixir-autogen, elixir-format
 msgid "This send key was already used by someone else. Reopen the form and try again."
 msgstr "Этот ключ отправки уже использован другим отправителем. Откройте форму заново и повторите попытку."
+
+#: lib/phoenix_kit_inbox/web/components/mail_tree.ex:101
+#, elixir-autogen, elixir-format
+msgid "%{count} letter"
+msgid_plural "%{count} letters"
+msgstr[0] "%{count} письмо"
+msgstr[1] "%{count} письма"
+msgstr[2] "%{count} писем"
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:793
+#, elixir-autogen, elixir-format
+msgid "All"
+msgstr "Все"
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:528
+#, elixir-autogen, elixir-format
+msgid "Folder"
+msgstr "Папка"
+
+#: lib/phoenix_kit_inbox/web/components/mail_tree.ex:135
+#, elixir-autogen, elixir-format
+msgid "Incoming"
+msgstr "Входящее"
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:550
+#, elixir-autogen, elixir-format
+msgid "Link a letter"
+msgstr "Привязать письмо"
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:639
+#, elixir-autogen, elixir-format
+msgid "No letters without a link."
+msgstr "Нет писем без привязки."
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:566
+#, elixir-autogen, elixir-format
+msgid "No letters yet."
+msgstr "Писем пока нет."
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:646
+#, elixir-autogen, elixir-format
+msgid "Only the %{count} newest letters are shown."
+msgstr "Показаны только %{count} самых новых писем."
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:600
+#, elixir-autogen, elixir-format
+msgid "Other people's personal mail is not shown here."
+msgstr "Личные письма других сотрудников здесь не показываются."
+
+#: lib/phoenix_kit_inbox/web/components/mail_tree.ex:136
+#, elixir-autogen, elixir-format
+msgid "Outgoing"
+msgstr "Исходящее"
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:627
+#, elixir-autogen, elixir-format
+msgid "Pick a letter to link"
+msgstr "Выберите письмо для привязки"
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:581
+#, elixir-autogen, elixir-format
+msgid "Select a conversation to read it."
+msgstr "Выберите переписку, чтобы прочитать её."
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:575
+#, elixir-autogen, elixir-format
+msgid "Show more"
+msgstr "Показать ещё"
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:730
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:731
+#, elixir-autogen, elixir-format
+msgid "Unlink"
+msgstr "Отвязать"
+
+#: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:795
+#, elixir-autogen, elixir-format
+msgctxt "mail explorer folder"
+msgid "Sent"
+msgstr "Отправленные"
+
+#: lib/phoenix_kit_inbox/web/components/mail_tree.ex:128
+#, elixir-autogen, elixir-format
+msgctxt "mail link source"
+msgid "host"
+msgstr "хост"
+
+#: lib/phoenix_kit_inbox/web/components/mail_tree.ex:129
+#, elixir-autogen, elixir-format
+msgctxt "mail link source"
+msgid "manual"
+msgstr "вручную"
+
+#: lib/phoenix_kit_inbox/web/components/mail_tree.ex:131
+#, elixir-autogen, elixir-format
+msgctxt "mail link source"
+msgid "subject"
+msgstr "по теме"
+
+#: lib/phoenix_kit_inbox/web/components/mail_tree.ex:130
+#, elixir-autogen, elixir-format
+msgctxt "mail link source"
+msgid "thread"
+msgstr "цепочка"
+
+#: lib/phoenix_kit_inbox/errors.ex:171
+#, elixir-autogen, elixir-format
+msgid "The form could not be opened. Try again."
+msgstr "Не удалось открыть форму. Попробуйте ещё раз."

@@ -11,6 +11,7 @@ defmodule PhoenixKitInbox.HtmlBodyReadsTest do
 
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
+  alias PhoenixKitInbox.ObjectMail
   alias PhoenixKitInbox.Schemas.Message
 
   @order %{kind: "order", ref: "o-1"}
@@ -97,6 +98,55 @@ defmodule PhoenixKitInbox.HtmlBodyReadsTest do
     refute carried?(queries)
 
     {_, queries} = traced(fn -> Messages.list_thread(ctx.message.thread_uuid) end)
+    refute carried?(queries)
+  end
+
+  test "the mail of an object does not read it, and takes the same queries", ctx do
+    {threads, queries} = traced(fn -> ObjectMail.list_threads(ctx.alice_scope, [@order]) end)
+
+    assert [%{messages: [entry]}] = threads
+    refute Map.has_key?(entry.message.metadata, "html_body")
+    refute carried?(queries)
+
+    # More letters, each with its own HTML: no more queries.
+    for n <- 1..3 do
+      {:ok, more} =
+        Messages.send_message(
+          ctx.bob_scope,
+          ctx.bob_mb,
+          %{"to" => "@" <> ctx.alice.username, "subject" => "More #{n}", "body" => "Body"},
+          links: [@order]
+        )
+
+      Repo.update_all(
+        from(m in Message, where: m.uuid == ^more.uuid),
+        set: [metadata: Map.put(more.metadata, "html_body", String.duplicate(@marker, 1000))]
+      )
+    end
+
+    {threads, more_queries} = traced(fn -> ObjectMail.list_threads(ctx.alice_scope, [@order]) end)
+    assert length(threads) == 4
+    refute carried?(more_queries)
+    assert length(more_queries) == length(queries)
+  end
+
+  test "the letters to pick from do not read it either", ctx do
+    {:ok, unlinked} =
+      Messages.send_message(ctx.bob_scope, ctx.bob_mb, %{
+        "to" => "@" <> ctx.alice.username,
+        "subject" => "Not linked",
+        "body" => "Body"
+      })
+
+    Repo.update_all(
+      from(m in Message, where: m.uuid == ^unlinked.uuid),
+      set: [metadata: Map.put(unlinked.metadata, "html_body", String.duplicate(@marker, 1000))]
+    )
+
+    {candidates, queries} = traced(fn -> ObjectMail.link_candidates(ctx.alice_scope) end)
+
+    assert [%{message: %{subject: "Not linked", metadata: metadata}}] = candidates
+    refute Map.has_key?(metadata, "html_body")
     refute carried?(queries)
   end
 

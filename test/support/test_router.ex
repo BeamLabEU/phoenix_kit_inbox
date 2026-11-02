@@ -50,6 +50,14 @@ defmodule PhoenixKitInbox.Test.Router do
       end
     end
 
+    # Hosts a LiveComponent under test; see `ComponentHostLive`.
+    scope "/" do
+      pipe_through(:browser)
+
+      live("/component-host", PhoenixKitInbox.Test.ComponentHostLive, :index)
+      live("/strict-host", PhoenixKitInbox.Test.StrictHostLive, :index)
+    end
+
     # The shared-mail settings live in core's Settings section, from
     # `settings_tabs/0`.
     for base <- [
