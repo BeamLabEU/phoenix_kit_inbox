@@ -225,8 +225,20 @@ defmodule PhoenixKitInbox.RecipientSource do
         skip(source, "ended without an answer")
     end)
   catch
-    # No supervisor to run them under: no suggestions.
-    :exit, _reason -> []
+    # No supervisor to run them under: no suggestions (said once per node).
+    :exit, _reason -> no_supervisor()
+  end
+
+  defp no_supervisor do
+    unless :persistent_term.get({__MODULE__, :no_supervisor_logged}, false) do
+      :persistent_term.put({__MODULE__, :no_supervisor_logged}, true)
+
+      Logger.warning(
+        "[Inbox] recipient sources not asked: PhoenixKitInbox.TaskSupervisor is not running"
+      )
+    end
+
+    []
   end
 
   # The setting is for tests; anything but a positive whole number of

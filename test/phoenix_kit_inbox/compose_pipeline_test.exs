@@ -342,6 +342,15 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
       assert message_count() == 0
     end
 
+    test "a refused address is repeated without those characters", ctx do
+      assert {:error, {:invalid_recipient, "ab@example.com, c"}} =
+               run(
+                 ctx,
+                 %{"to" => [%{"address" => "a\u0085\u202Eb@example.com, c", "route" => "email"}]},
+                 draft(ctx)
+               )
+    end
+
     test "route internal vs resolved email refused inside around_send", ctx do
       use_client_filter()
       client = %{address: "@#{ctx.client.username}", label: "Client", route: :internal}

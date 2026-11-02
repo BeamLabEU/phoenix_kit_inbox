@@ -232,7 +232,7 @@ defmodule PhoenixKitInbox.Errors do
   def message({:invalid_recipient, entry}),
     do:
       gettext("Not a valid recipient: %{entry}. Add one address at a time.",
-        entry: to_string(entry)
+        entry: entry |> to_string() |> refused_text()
       )
 
   def message(:invalid_recipients), do: gettext("The recipients could not be read.")

@@ -54,6 +54,14 @@ defmodule PhoenixKitInbox.ErrorsTest do
       assert text == "Fill in the name"
     end
 
+    test "an invalid recipient is shown without those characters too" do
+      text = Errors.message({:invalid_recipient, "a\u0085\u202Eb@x, c"})
+
+      assert text =~ "ab@x, c"
+      refute text =~ "\u202E"
+      refute text =~ "\u0085"
+    end
+
     test "a refusal that is not text, or has none, is the general message" do
       for bad <- [nil, "", "   \n", :atom, 12, %{a: 1}, ["x"], <<255, 254>>] do
         assert Errors.user_message({:refused, bad}) == @general

@@ -645,9 +645,18 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
       else: {:error, {:invalid_recipient, echo(address)}}
   end
 
-  # What an error repeats of the person's input: valid text, 200 characters at most.
+  # What an error repeats of the person's input: valid text, 200 characters at
+  # most, without the marks that turn the text around or hide in it (the ones
+  # `@bad_address` refuses, so a refused address is not shown with them).
   defp echo(text) do
-    text = String.replace_invalid(text, "")
+    text =
+      text
+      |> String.replace_invalid("")
+      |> String.replace(
+        ~r/[\x{80}-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u,
+        ""
+      )
+
     if String.length(text) > 200, do: String.slice(text, 0, 199) <> "…", else: text
   end
 
