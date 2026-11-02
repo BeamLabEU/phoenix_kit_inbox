@@ -1,0 +1,112 @@
+defmodule PhoenixKitInbox.Test.ComponentHostLive do
+  @moduledoc """
+  LiveView that hosts one LiveComponent under test.
+
+  The component module comes from `session["component"]`, its attributes
+  (including the required `:id`) from `session["assigns"]`. Messages a
+  component sends to its parent, `{:inbox_*, ...}`, are forwarded to
+  `session["test_pid"]`, so a test asserts on what the host would receive
+  with `assert_receive`.
+
+  Mounted at `/component-host`; tests put the three keys into the session
+  with `Plug.Test.init_test_session/2`.
+
+  A session cannot carry a function (it is signed as a non-executable term),
+  so an attribute that must be one is given as `{:capture, module, name,
+  arity}` and turned into the capture here. A value too big for a cookie is
+  given as `stash/1`'s `{:stash, ref}`.
+
+  With `session["attach"]` = `{id, filter}` (or a list of them) the host does what a real page
+  does in `mount/3`: it has the viewer's scope as core's
+  `:phoenix_kit_current_scope` (the component's `:scope` attribute) and calls
+  `MailExplorer.attach/3`.
+
+  `session["second_assigns"]` puts a second component of the same module on
+  the page (a page may hold several explorers) for the same viewer. Messages to the page's pid
+  drive what a page does later: `{:test_attach, id, filter}`,
+  `{:test_detach, id}` and `{:test_assigns, %{...}}` (new attributes of the
+  first component, as a re-render of the host would pass).
+  """
+
+  use Phoenix.LiveView
+
+  alias PhoenixKitInbox.Web.Components.MailExplorer
+
+  @doc """
+  Keeps `value` for the page and returns what a session can carry for it
+  (`{:stash, ref}`): a signed session is too small for a scope with its
+  user and roles. The caller erases it with `unstash/1`.
+  """
+  def stash(value) do
+    ref = System.unique_integer([:positive])
+    :persistent_term.put({__MODULE__, ref}, value)
+    {:stash, ref}
+  end
+
+  @doc "Forgets what `stash/1` kept."
+  def unstash({:stash, ref}), do: :persistent_term.erase({__MODULE__, ref})
+
+  @impl true
+  def mount(_params, session, socket) do
+    assigns = session |> Map.get("assigns", %{}) |> captures()
+
+    socket =
+      socket
+      |> assign(:component, Map.fetch!(session, "component"))
+      |> assign(:component_assigns, assigns)
+      |> assign(:test_pid, Map.fetch!(session, "test_pid"))
+      |> assign(:second_assigns, session |> Map.get("second_assigns") |> second_assigns(assigns))
+      |> assign(:phoenix_kit_current_scope, assigns[:scope])
+
+    session
+    |> Map.get("attach", [])
+    |> List.wrap()
+    |> Enum.reduce(socket, fn {id, filter}, acc -> MailExplorer.attach(acc, id, filter) end)
+    |> then(&{:ok, &1})
+  end
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <.live_component module={@component} {@component_assigns} />
+    <.live_component :if={@second_assigns} module={@component} {@second_assigns} />
+    """
+  end
+
+  @impl true
+  def handle_info({:test_attach, id, filter}, socket),
+    do: {:noreply, MailExplorer.attach(socket, id, filter)}
+
+  def handle_info({:test_detach, id}, socket),
+    do: {:noreply, MailExplorer.detach(socket, id)}
+
+  def handle_info({:test_assigns, assigns}, socket),
+    do: {:noreply, update(socket, :component_assigns, &Map.merge(&1, captures(assigns)))}
+
+  def handle_info(message, socket) when is_tuple(message) and tuple_size(message) > 0 do
+    if inbox_message?(message), do: send(socket.assigns.test_pid, message)
+
+    {:noreply, socket}
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
+
+  # The same viewer, unless said otherwise (a scope is big for a session).
+  defp second_assigns(nil, _first), do: nil
+  defp second_assigns(assigns, first), do: Map.merge(Map.take(first, [:scope]), captures(assigns))
+
+  defp captures(assigns) do
+    Map.new(assigns, fn
+      {key, {:capture, module, name, arity}} -> {key, Function.capture(module, name, arity)}
+      {key, {:stash, ref}} -> {key, :persistent_term.get({__MODULE__, ref})}
+      pair -> pair
+    end)
+  end
+
+  defp inbox_message?(message) do
+    case elem(message, 0) do
+      tag when is_atom(tag) -> tag |> Atom.to_string() |> String.starts_with?("inbox_")
+      _ -> false
+    end
+  end
+end
