@@ -64,6 +64,14 @@ defmodule PhoenixKitInbox.RecipientSourceTest do
     def suggest(_scope, _context, query), do: exit({:gone, query})
   end
 
+  defmodule Dies do
+    @moduledoc false
+    # An end no rescue or catch can see.
+    @behaviour PhoenixKitInbox.RecipientSource
+    @impl true
+    def suggest(_scope, _context, _query), do: Process.exit(self(), :kill)
+  end
+
   defmodule Remembers do
     @moduledoc false
     # Tells the test what it was asked to remember; fails as the test says.
@@ -266,6 +274,19 @@ defmodule PhoenixKitInbox.RecipientSourceTest do
       assert length(kept) == 50
       assert hd(kept).address == "p1@example.com"
       assert List.last(kept).address == "p50@example.com"
+    end
+
+    test "a source killed outright costs only its own suggestions, not the caller", ctx do
+      context = %{a: [%{address: "alive@example.com", route: :email}]}
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert [%{address: "alive@example.com"}] =
+                   RecipientSource.suggest_all([Dies, SourceA], ctx.scope, context, "x")
+        end)
+
+      assert Process.alive?(self())
+      assert log =~ "Dies"
     end
 
     test "a source that is too slow is skipped and the others answer", ctx do

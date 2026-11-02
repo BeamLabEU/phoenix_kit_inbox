@@ -306,6 +306,8 @@ defmodule PhoenixKitInbox.Mailboxes do
   # their handle (`user_handle/1`) for `:internal`, their login email for
   # `:email`. Says nothing about whether they may be addressed that way — the
   # send decides — and `{:error, :recipient_not_found}` only for no such user.
+  # An inactive account is not refused here either: the uuid is the host's
+  # word, and the host answers for whom it names.
   @spec recipient_address(term(), :internal | :email) ::
           {:ok, String.t()} | {:error, :recipient_not_found}
   def recipient_address(user_uuid, route)

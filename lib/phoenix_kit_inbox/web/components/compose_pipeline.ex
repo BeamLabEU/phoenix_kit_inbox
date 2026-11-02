@@ -27,7 +27,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
       `%{"address" => …, "route" => "internal" | "email", "label" => …}`,
       `%{"user" => uuid, "route" => …}` or just the text typed (route
       `:email`). Who an entry names is worked out on the server, see
-      "Recipients" below
+      "Recipients" below. A field the form sends **replaces the host's list
+      for that field**, the people the host named included, and the browser
+      may name a host-named person again on the `:email` route (their login
+      address); that only goes where the person may write outside
+      (`inbox.send_external`, checked by the send). A host that must keep
+      someone on the letter puts them in its `around_send`
     * `"subject"`, `"body"`
     * `"reply_to"` — one of the person's `Identities.reply_to_options/2` or
       the draft's `:reply_to_trusted`; `""` for none
@@ -86,7 +91,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
       and no identity named, the identity is the person's own personal one if
       they have exactly one for that mailbox, else the only one open to them
       from it, else none when they have none; with several and no clear
-      choice the send stops with `:identity_required`. It is never a guess
+      choice the send stops with `:identity_required`. It is never a guess.
+      An identity whose connection no longer checks is not among those
+      (`Identities.list_usable/2` leaves it out): with a broken personal
+      identity and a common sender, the common sender is the default, which
+      `effective_identity/3` shows before the send; picking the broken one by
+      name is `{:identity_unusable, :broken}`
     * Reply-To (`:reply_to_not_allowed`)
     * attachments of the host only from the draft (`:invalid_attachments` for
       a malformed list, entry or pick); picked ones, those not already held,
@@ -136,6 +146,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   attachments are the wrapper's own responsibility: files it adds go as
   vouched for); the recipients, sender, links, Reply-To, conversation and key
   are those checked here.
+
+  `send_fun` works **in the process that runs the pipeline only**: called
+  from another process (a task the wrapper started) it sends nothing and
+  answers `{:error, {:send_fun, :other_process}}`, and logs the bug.
 
   `send_fun` sends **at most once**: the first call sends, a second call in
   the same run answers what the first answered and sends nothing. The
@@ -190,7 +204,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   @address_max 320
   @label_max 200
   @picks_max 50
-  @bad_address ~r/[\x00-\x1f\x7f,;]/u
+  # The controls and direction marks `Errors` takes out of a host's words are
+  # not in an address either: the C1 controls and the left-to-right and
+  # right-to-left marks, embeddings and isolates.
+  @bad_address ~r/[\x00-\x1f\x7f\x{80}-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069},;]/u
 
   @type callbacks :: %{
           optional(:around_send) => (Scope.t(), ComposeDraft.t(), (ComposeDraft.t() -> term()) ->
@@ -301,8 +318,24 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   # as the wrapper's own refusal, else `:send_failed`.
   defp wrapped(scope, draft, around_send, verified) do
     key = {__MODULE__, make_ref()}
+    owner = self()
 
-    send_fun = fn given ->
+    send_fun = &run_send_fun(&1, owner, key, {scope, verified, draft})
+
+    case call_wrapper(around_send, scope, draft, send_fun) do
+      {:answered, answer} ->
+        settle(answer, Process.delete(key))
+
+      {:ended, kind, reason, stacktrace} ->
+        ended(kind, reason, stacktrace, Process.delete(key))
+    end
+  end
+
+  # The memo of "at most once" is the process dictionary of the process that
+  # runs the pipeline: from another process it would not see a send already
+  # made.
+  defp run_send_fun(given, owner, key, {scope, verified, draft}) do
+    if self() == owner do
       case Process.get(key) do
         {:sent, result} ->
           result
@@ -312,15 +345,18 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
           Process.put(key, {:sent, result})
           result
       end
+    else
+      refuse_other_process()
     end
+  end
 
-    case call_wrapper(around_send, scope, draft, send_fun) do
-      {:answered, answer} ->
-        settle(answer, Process.delete(key))
+  defp refuse_other_process do
+    Logger.error(
+      "[Inbox] the host's wrapper called send_fun from another process; " <>
+        "nothing was sent by that call"
+    )
 
-      {:ended, kind, reason, stacktrace} ->
-        ended(kind, reason, stacktrace, Process.delete(key))
-    end
+    {:error, {:send_fun, :other_process}}
   end
 
   defp call_wrapper(around_send, scope, draft, send_fun) do
@@ -750,8 +786,19 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
 
   defp usable_identity(scope, uuid) do
     case Enum.find(Identities.list_usable(scope), &(&1.identity_uuid == uuid)) do
-      nil -> {:error, {:identity_unusable, :not_found}}
+      nil -> {:error, {:identity_unusable, missing_reason(scope, uuid)}}
       identity -> {:ok, identity}
+    end
+  end
+
+  # `list_usable/1` leaves out an identity whose connection no longer checks.
+  # The person's own identity in that state is named so, which tells them what
+  # to mend; anything else (not theirs, not open to them, not there) stays
+  # "not found" and says nothing about whether it exists.
+  defp missing_reason(scope, uuid) do
+    case Identities.resolve(scope, uuid) do
+      {:error, :broken} -> :broken
+      _other -> :not_found
     end
   end
 
@@ -1070,7 +1117,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   defp refuse_differing(differing) do
     case for({%{route: :email} = chosen, %{route: :internal}} <- differing, do: chosen.address) do
       [] -> {:error, {:route_mismatch, mismatches(differing)}}
-      members -> {:error, {:member_as_email, members}}
+      members -> {:error, {:member_as_email, Enum.map(members, &echo/1)}}
     end
   end
 
@@ -1078,7 +1125,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
     do:
       for(
         {chosen, found} <- differing,
-        do: %{address: chosen.address, route: chosen.route, resolved: found.route}
+        do: %{address: echo(chosen.address), route: chosen.route, resolved: found.route}
       )
 
   defp attrs(verified, given, text) do

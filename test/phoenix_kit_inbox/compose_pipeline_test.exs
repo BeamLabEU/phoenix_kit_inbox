@@ -10,6 +10,7 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
 
   use PhoenixKitInbox.DataCase, async: false
 
+  alias PhoenixKit.Integrations
   alias PhoenixKitInbox.Errors
   alias PhoenixKitInbox.External
   alias PhoenixKitInbox.Identities
@@ -153,6 +154,38 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
       assert stored(chosen).metadata["identity"]["uuid"] == ctx.common.uuid
     end
 
+    test "an identity the person owns that went broken is named broken, not missing", ctx do
+      own = mail_integration_fixture({:user, ctx.alice.uuid}, username: "alice@mine.test")
+
+      {:ok, mine} =
+        Identities.create_personal(scope_for(ctx.alice), %{
+          "label" => "Mine",
+          "integration_uuid" => own
+        })
+
+      :ok =
+        Integrations.remove_connection(own, nil, owner: {:user, ctx.alice.uuid})
+
+      assert {:error, {:identity_unusable, :broken}} =
+               run(ctx, %{"from" => "identity:#{mine.uuid}"}, draft(ctx, to: [outside()]))
+
+      assert message_count() == 0
+
+      # Somebody else's identity, broken or not, stays "not found": nothing is said about it.
+      other = mail_integration_fixture({:user, ctx.bob.uuid}, username: "bob@mine.test")
+
+      {:ok, theirs} =
+        Identities.create_personal(scope_for(ctx.bob), %{
+          "label" => "Bob's",
+          "integration_uuid" => other
+        })
+
+      :ok = Integrations.remove_connection(other, nil, owner: {:user, ctx.bob.uuid})
+
+      assert {:error, {:identity_unusable, :not_found}} =
+               run(ctx, %{"from" => "identity:#{theirs.uuid}"}, draft(ctx, to: [outside()]))
+    end
+
     test "from_editable false ignores submitted from", ctx do
       params = %{"from" => "mailbox:#{ctx.desk.uuid}"}
 
@@ -288,6 +321,25 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
       # Chosen from the list (internal) it goes.
       chosen = %{"to" => [%{"address" => "@#{ctx.bob.username}", "route" => "internal"}]}
       assert {:ok, _} = run(ctx, chosen, draft(ctx))
+    end
+
+    test "a mismatch repeats an address cut to 200 characters", ctx do
+      long = "@" <> String.duplicate("a", 300)
+      draft = draft(ctx, to: [%{address: long, label: nil, route: :internal}])
+
+      assert {:error, {:route_mismatch, [mismatch]}} = run(ctx, %{}, draft)
+      assert String.length(mismatch.address) == 200
+      assert String.ends_with?(mismatch.address, "…")
+      assert message_count() == 0
+    end
+
+    test "an address with a C1 control or a direction-changing mark is not an address", ctx do
+      for bad <- ["a\u0085b@example.com", "a\u202Eb@example.com", "a\u2066b@example.com"] do
+        assert {:error, {:invalid_recipient, _}} =
+                 run(ctx, %{"to" => [%{"address" => bad, "route" => "email"}]}, draft(ctx))
+      end
+
+      assert message_count() == 0
     end
 
     test "route internal vs resolved email refused inside around_send", ctx do
@@ -780,6 +832,35 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
 
       assert {:ok, message} = run(ctx, %{}, draft(ctx), %{around_send: twice})
       assert_received {:answers, {:ok, ^message}, {:ok, ^message}}
+      assert message_count() == 1
+    end
+
+    test "send_fun called from another process is an error, not a send", ctx do
+      test = self()
+
+      elsewhere = fn _scope, draft, send_fun ->
+        answer = Task.async(fn -> send_fun.(draft) end) |> Task.await()
+        send(test, {:answer, answer})
+        answer
+      end
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:send_fun, :other_process}} =
+                   run(ctx, %{}, draft(ctx), %{around_send: elsewhere})
+        end)
+
+      assert_received {:answer, {:error, {:send_fun, :other_process}}}
+      assert message_count() == 0
+      assert log =~ "send_fun"
+
+      # The right process can still send afterwards, in the same wrapper.
+      both = fn _scope, draft, send_fun ->
+        {:error, _} = Task.async(fn -> send_fun.(draft) end) |> Task.await()
+        send_fun.(draft)
+      end
+
+      assert {:ok, _message} = run(ctx, %{}, draft(ctx), %{around_send: both})
       assert message_count() == 1
     end
 

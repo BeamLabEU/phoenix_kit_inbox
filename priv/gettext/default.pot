@@ -1101,7 +1101,7 @@ msgid_plural "A message can carry at most %{max} files."
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/phoenix_kit_inbox/mailboxes.ex:550
+#: lib/phoenix_kit_inbox/mailboxes.ex:552
 #, elixir-autogen, elixir-format
 msgid "User %{id}"
 msgstr ""

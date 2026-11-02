@@ -101,7 +101,8 @@ defmodule PhoenixKitInbox.RecipientSource do
   waits for the slowest, but for no longer than 1.5 seconds each: one that has
   not answered by then is skipped and logged, by its module only), and
   their answers are put together in the order of `sources`. A task is another
-  process: what a source reads from the caller's process dictionary is not
+  process, supervised and not linked to the caller (a source that is killed
+  outright costs its own suggestions only): what a source reads from the caller's process dictionary is not
   there (but for the language, see above) — it takes what it needs from
   `scope` and `context`. A source answers
   from an index or a small query, not from a remote service. Of one source,
@@ -191,8 +192,9 @@ defmodule PhoenixKitInbox.RecipientSource do
 
   # ── asking ──────────────────────────────────────────────────────────────────
 
-  # Every source in a task of its own, at most `@source_timeout` each, in the
-  # order they were given. A task that is over time is killed, not waited for.
+  # Every source in a task of its own (under the module's task supervisor, not
+  # linked to the caller), at most `@source_timeout` each, in the order they
+  # were given. A task that is over time is killed, not waited for.
   defp ask_all([], _scope, _context, _query), do: []
 
   defp ask_all(sources, scope, context, query) do
@@ -200,8 +202,12 @@ defmodule PhoenixKitInbox.RecipientSource do
 
     language = language()
 
-    sources
-    |> Task.async_stream(&ask_in(language, &1, scope, context, query),
+    # Not linked to the caller: a source that is killed outright (no rescue
+    # or catch sees that) must cost only its own suggestions, not the page.
+    PhoenixKitInbox.TaskSupervisor
+    |> Task.Supervisor.async_stream_nolink(
+      sources,
+      &ask_in(language, &1, scope, context, query),
       timeout: timeout,
       on_timeout: :kill_task,
       max_concurrency: min(length(sources), @max_concurrency),
@@ -218,6 +224,9 @@ defmodule PhoenixKitInbox.RecipientSource do
       {:exit, {source, _reason}} ->
         skip(source, "ended without an answer")
     end)
+  catch
+    # No supervisor to run them under: no suggestions.
+    :exit, _reason -> []
   end
 
   # The setting is for tests; anything but a positive whole number of

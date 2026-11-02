@@ -1102,7 +1102,7 @@ msgstr[0] "К сообщению можно прикрепить не более
 msgstr[1] "К сообщению можно прикрепить не более %{max} файлов."
 msgstr[2] "К сообщению можно прикрепить не более %{max} файлов."
 
-#: lib/phoenix_kit_inbox/mailboxes.ex:550
+#: lib/phoenix_kit_inbox/mailboxes.ex:552
 #, elixir-autogen, elixir-format
 msgid "User %{id}"
 msgstr "Пользователь %{id}"
