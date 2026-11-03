@@ -123,9 +123,12 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorer do
 
     stale? =
       not Map.has_key?(socket.assigns, :threads) or
-        Enum.any?(~w(scope filter folders link_to can_link? link_label)a, fn key ->
-          Map.has_key?(assigns, key) and Map.get(socket.assigns, key) != assigns[key]
-        end)
+        changed?(socket, assigns, ~w(scope filter folders link_to)a)
+
+    # A host's callback is often a closure made in its render (over its own
+    # assigns), so a re-render of the host hands a new one: the answers are
+    # asked again, but the list is not read again and stays as long as it was.
+    reask? = changed?(socket, assigns, ~w(can_link? link_label)a)
 
     socket =
       socket
@@ -145,7 +148,26 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorer do
       |> assign_new(:error, fn -> nil end)
       |> then(&assign(&1, :folder, offered_folder(&1.assigns.folder, &1.assigns.folders)))
 
-    {:ok, if(stale?, do: socket |> assign(:pages, 1) |> load(), else: socket)}
+    cond do
+      stale? -> {:ok, socket |> assign(:pages, 1) |> load()}
+      reask? -> {:ok, reask_host(socket)}
+      true -> {:ok, socket}
+    end
+  end
+
+  defp changed?(socket, assigns, keys) do
+    Enum.any?(keys, fn key ->
+      Map.has_key?(assigns, key) and Map.get(socket.assigns, key) != assigns[key]
+    end)
+  end
+
+  defp reask_host(%{assigns: %{allowed?: false}} = socket), do: socket
+
+  defp reask_host(socket) do
+    socket
+    |> assign(link_access: %{}, link_labels: %{})
+    |> assign_objects()
+    |> assign_pick()
   end
 
   # The objects, once each and in one order: another order of the same objects
@@ -221,15 +243,15 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorer do
     socket
     |> assign_objects()
     |> assign_letters()
-    |> then(fn socket ->
-      can_pick? = linkable?(socket.assigns)
+    |> assign_pick()
+    |> assign(:now, DateTime.utc_now())
+  end
 
-      assign(socket,
-        can_pick?: can_pick?,
-        picker: if(can_pick?, do: socket.assigns.picker),
-        now: DateTime.utc_now()
-      )
-    end)
+  # Whether the viewer may link to the target now; an open picker closes when
+  # they may not.
+  defp assign_pick(socket) do
+    can_pick? = linkable?(socket.assigns)
+    assign(socket, can_pick?: can_pick?, picker: if(can_pick?, do: socket.assigns.picker))
   end
 
   # The letters of the chosen conversation, each with its body as HTML and its

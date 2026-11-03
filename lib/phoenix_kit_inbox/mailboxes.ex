@@ -33,6 +33,7 @@ defmodule PhoenixKitInbox.Mailboxes do
   alias PhoenixKitInbox.Schemas.Delivery
   alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.MailboxGrant
+  alias PhoenixKitInbox.Text
 
   @type access :: String.t()
 
@@ -145,8 +146,10 @@ defmodule PhoenixKitInbox.Mailboxes do
   def fetch_mailbox_by_recipient(term, opts) when is_binary(term) do
     create? = Keyword.get(opts, :create, true)
 
-    case classify_recipient(term) do
-      :blank ->
+    # A NUL byte or bytes that are not UTF-8 name nobody — and the database
+    # would refuse them with an exception rather than an empty answer.
+    case Text.storable?(term) && classify_recipient(term) do
+      nobody when nobody in [false, :blank] ->
         {:error, :recipient_not_found}
 
       {:username, name} ->
@@ -395,7 +398,7 @@ defmodule PhoenixKitInbox.Mailboxes do
       )
     end)
     |> repo().all()
-    |> Enum.map(&%{handle: &1.slug, label: "#{&1.name} (shared mailbox)"})
+    |> Enum.map(&%{handle: &1.slug, label: gettext("%{name} (shared mailbox)", name: &1.name)})
   end
 
   # The sender is excluded — a To field offering you yourself is noise, and

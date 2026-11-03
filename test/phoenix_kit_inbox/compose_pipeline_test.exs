@@ -467,6 +467,40 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
                )
     end
 
+    test "an account no member is not delivered to a shared mailbox its handle names", ctx do
+      # A customer account whose username is a shared mailbox's slug: its
+      # handle "@desk" finds no member, and the lookup that comes next takes
+      # it for the shared mailbox — inside, like the route the host chose.
+      customer = user_fixture(%{username: "desk", inbox_member: false})
+      draft = draft(ctx, to: [%{user: customer.uuid, label: "Customer", route: :internal}])
+
+      assert {:error, {:route_mismatch, [mismatch]}} = run(ctx, %{}, draft)
+      assert %{address: "@desk", route: :internal, resolved: :internal} = mismatch
+      assert message_count() == 0
+      refute Repo.exists?(from(d in Delivery, where: d.mailbox_uuid == ^ctx.desk.uuid))
+
+      # The member it is meant for still goes, by uuid in any case.
+      upper = String.upcase(ctx.bob.uuid)
+      assert {:ok, _} = run(ctx, %{}, draft(ctx, to: [%{user: upper, route: :internal}]))
+    end
+
+    test "a label loses the controls and direction marks an address may not carry", ctx do
+      test = self()
+
+      wrapper = fn _scope, draft, send_fun ->
+        send(test, {:labels, Enum.map(draft.to, & &1.label)})
+        send_fun.(draft)
+      end
+
+      to = [
+        %{address: "@#{ctx.bob.username}", label: " B\u202Eo\u0000b\n ", route: :internal},
+        %{address: "client@example.com", label: "\u2066\u0085", route: :email}
+      ]
+
+      assert {:ok, _} = run(ctx, %{}, draft(ctx, to: to), %{around_send: wrapper})
+      assert_received {:labels, ["Bob", nil]}
+    end
+
     test "a user named by the browser who is in the circle goes by the inside route", ctx do
       form = %{"to" => [%{"user" => ctx.bob.uuid, "route" => "internal", "label" => "Bob"}]}
       assert {:ok, message} = run(ctx, form, draft(ctx, to: []))
@@ -882,6 +916,42 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
       end
 
       assert {:ok, _message} = run(ctx, %{}, draft(ctx), %{around_send: both})
+      assert message_count() == 1
+    end
+
+    test "send_fun kept past its run sends nothing", ctx do
+      test = self()
+
+      keeps = fn _scope, draft, send_fun ->
+        send(test, {:kept, send_fun, draft})
+        send_fun.(draft)
+      end
+
+      assert {:ok, message} = run(ctx, %{}, draft(ctx), %{around_send: keeps})
+      assert_received {:kept, send_fun, draft}
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:send_fun, :closed}} = send_fun.(draft)
+        end)
+
+      assert log =~ "after its run was over"
+      assert message_count() == 1
+      assert Repo.get!(Message, message.uuid)
+
+      # Kept unused by a wrapper that refused: it does not send later either.
+      refuses = fn _scope, draft, send_fun ->
+        send(test, {:kept, send_fun, draft})
+        {:error, :not_now}
+      end
+
+      assert {:error, :not_now} = run(ctx, %{}, draft(ctx), %{around_send: refuses})
+      assert_received {:kept, unused, draft}
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:send_fun, :closed}} = unused.(draft)
+      end)
+
       assert message_count() == 1
     end
 

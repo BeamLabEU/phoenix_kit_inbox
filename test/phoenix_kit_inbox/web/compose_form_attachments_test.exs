@@ -112,7 +112,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormAttachmentsTest do
   defp files(view), do: count(view, "#compose-demo-attachments li[data-file]")
 
   defp upload(view, entries) do
-    file_input(view, "#compose-demo-upload-form", :attachments, entries)
+    file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", entries)
   end
 
   describe "the host's attachments" do
@@ -239,6 +239,38 @@ defmodule PhoenixKitInbox.Web.ComposeFormAttachmentsTest do
 
       assert has_element?(view, "#compose-demo-files-error[role=alert]", "at most #{max}")
       assert count(view, "#compose-demo-attachments li[data-upload]") == 0
+    end
+  end
+
+  describe "two forms on one page" do
+    test "each has its own upload: a file in one does not end the page", %{conn: conn} = ctx do
+      scope = ComponentHostLive.stash(ctx.scope)
+      first = ComponentHostLive.stash(draft())
+      second = ComponentHostLive.stash(draft(subject: "Other"))
+
+      on_exit(fn -> Enum.each([scope, first, second], &ComponentHostLive.unstash/1) end)
+
+      conn =
+        Plug.Test.init_test_session(conn, %{
+          "component" => ComposeForm,
+          "assigns" => %{id: "demo", draft: first, scope: scope},
+          "second_assigns" => %{id: "other", draft: second},
+          "test_pid" => self()
+        })
+
+      {:ok, view, _html} = live(conn, "/component-host")
+
+      for {id, name} <- [{"demo", "one.txt"}, {"other", "two.txt"}] do
+        view
+        |> file_input("#compose-#{id}-upload-form", "inbox_compose_#{id}", [
+          %{name: name, content: "hi", type: "text/plain"}
+        ])
+        |> render_upload(name)
+      end
+
+      assert has_element?(view, "#compose-demo-attachments li[data-upload]", "one.txt")
+      assert has_element?(view, "#compose-other-attachments li[data-upload]", "two.txt")
+      refute has_element?(view, "#compose-demo-attachments li[data-upload]", "two.txt")
     end
   end
 

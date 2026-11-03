@@ -496,6 +496,16 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
       end
     end
 
+    test "an update with only the scope keeps the host's sources", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      assert has_element?(view, "button[phx-click=toggle_picker]")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm, id: "demo", scope: ctx.scope)
+      render(view)
+
+      assert has_element?(view, "button[phx-click=toggle_picker]")
+    end
+
     test "no sources at all is no sources", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft(), %{recipient_sources: nil})
 

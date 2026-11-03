@@ -178,6 +178,26 @@ defmodule PhoenixKitInbox.PreviewRoutesTest do
                Messages.resolve_recipient_routes(ctx.scope, ["nobody-here"])
     end
 
+    test "a NUL byte or bytes that are not UTF-8 name nobody, and raise nothing", ctx do
+      bad = ["bob" <> <<0>> <> "@company.test", <<0xFF>> <> "@example.com"]
+
+      assert Enum.map(Messages.resolve_recipient_routes(ctx.scope, bad), & &1.route) ==
+               [:email, :email]
+
+      # Nor are they someone outside, for a sender who may write there: the
+      # send refuses them as nobody, before the database sees them.
+      role = grant_role!(ctx.alice, ["inbox", "inbox.send_external"])
+      scope = scope_for(ctx.alice, ["inbox", "inbox.send_external"], [role])
+      {:ok, alice_mb} = Mailboxes.ensure_user_mailbox(ctx.alice)
+
+      for address <- bad do
+        assert {:error, {:unknown_recipients, [^address]}} =
+                 Messages.send_message(scope, alice_mb, %{"to" => address, "subject" => "x"})
+      end
+
+      assert Repo.aggregate(Message, :count) == 0
+    end
+
     test "no addresses, no routes; non-text entries are skipped", ctx do
       assert Messages.resolve_recipient_routes(ctx.scope, []) == []
       assert Messages.resolve_recipient_routes(ctx.scope, [nil, 5, :bob]) == []

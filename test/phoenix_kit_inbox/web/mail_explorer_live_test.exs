@@ -549,12 +549,14 @@ defmodule PhoenixKitInbox.Web.MailExplorerLiveTest do
       assert queries == 0
     end
 
-    test "a change of mailboxes is the explorer's alone", %{conn: conn} = ctx do
+    test "a change of mailboxes is read by the explorer and passed on to the page",
+         %{conn: conn} = ctx do
       view = open(ctx, conn)
       send(view.pid, {:inbox_access_changed, :mailboxes})
       settle(view)
 
-      refute_receive {:inbox_access_changed, _}, 100
+      # The page may keep a ComposeForm current with it.
+      assert_receive {:inbox_access_changed, :mailboxes}
     end
   end
 

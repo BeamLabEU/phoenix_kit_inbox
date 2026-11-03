@@ -724,8 +724,10 @@ defmodule PhoenixKitInbox.Identities do
   `inbox.manage_shared` (`{:error, :forbidden}`).
 
   `attrs`: `"label"`, `"from_name"`, `"integration_uuid"` and optionally
-  `"personalize_from_name"` (the sender's own name goes into the From name;
-  off by default) and `"mailbox_uuid"` — an existing shared mailbox (`{:error,
+  `"personalize_from_name"` (the sender's own name goes in front of the From
+  name of a sender bound to a mailbox; off by default — the common sender,
+  bound to none, always puts it in front and ignores the flag) and
+  `"mailbox_uuid"` — an existing shared mailbox (`{:error,
   :mailbox_not_found}` otherwise) — and `"role_uuids"`, the roles a sender
   bound to no mailbox is open to (see the moduledoc): Owner, `nil` and
   unknown uuids are dropped, `[]` opens it to nobody; without the key it is

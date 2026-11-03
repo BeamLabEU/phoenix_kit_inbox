@@ -112,6 +112,21 @@ defmodule PhoenixKitInbox.Web.AttachmentsLiveTest do
       assert inbox_files() == []
     end
 
+    test "cancelling an upload twice, or one that is not there, keeps the page", ctx do
+      {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
+      upload_scan(view)
+      [_, ref] = Regex.run(~r/id="upload-([^"]+)"/, render(view))
+
+      # The second click comes before (or after) the channel of the first is
+      # gone; a ref of no entry is a forged one.
+      render_click(view, "cancel_upload", %{"ref" => ref})
+      render_click(view, "cancel_upload", %{"ref" => ref})
+      render_click(view, "cancel_upload", %{"ref" => "nope"})
+
+      refute has_element?(view, "#compose-attachments [id^=upload-]")
+      assert inbox_files() == []
+    end
+
     test "leaving compose after an upload stores nothing", ctx do
       {:ok, view, _html} = live(ctx.conn, "/en/admin/inbox/compose")
       upload_scan(view)

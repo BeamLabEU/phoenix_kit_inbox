@@ -22,18 +22,22 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorerHooks do
   reads the list of an explorer whose filter names an object the letter is
   linked to now, or that has the letter on its page (it may just have lost
   its link); a status event only if that letter is on the page. The hook
-  **consumes** exactly these three events (`:halt`): a link event, a status
-  event and `{:inbox_access_changed, :mailboxes}` — a page that attaches an
-  explorer does not handle them itself, even if it subscribed to the same
-  topics. Every other message, `{:inbox_access_changed, :senders}` included,
-  goes on to the page untouched and makes the explorers read nothing.
+  **consumes** exactly two events (`:halt`): a link event and a status event —
+  a page that attaches an explorer does not handle them itself, whatever topic
+  brought them: the messages do not say which, so one from a subscription of
+  the page's own (to another object, say) is taken too.
+  `{:inbox_access_changed, :mailboxes}` makes the explorers read again and
+  goes on to the page as well. Every other message,
+  `{:inbox_access_changed, :senders}` included, goes on to the page untouched
+  and makes the explorers read nothing.
 
   **The page must have a catch-all `handle_info/2`.** The user's access topic
-  the hook subscribes to also brings `{:inbox_access_changed, :senders}` (when
-  one of their personal senders changes), which the explorers have no use for
-  but a page may: a host that keeps a `ComposeForm` current subscribes to the
-  senders itself (`PhoenixKitInbox.Web.ScopeRefresh.subscribe/2`) and the hook
-  can not tell its message from its own, so it passes them all on rather than
+  the hook subscribes to brings `{:inbox_access_changed, :mailboxes}` and
+  `{:inbox_access_changed, :senders}` (when one of their personal senders
+  changes), which a page may use: a host that keeps a `ComposeForm` current
+  subscribes to them itself (`PhoenixKitInbox.Web.ScopeRefresh.subscribe/2`,
+  then `send_update(ComposeForm, id: id, refresh: true)`), and the hook can
+  not tell its message from its own, so it passes them on rather than
   swallow what the host asked for. A page with no clause for the message
   crashes on it.
 
@@ -242,12 +246,14 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorerHooks do
   def handle_info({:inbox_external_updated, message_uuid}, socket),
     do: {:halt, record(socket, {:status, message_uuid})}
 
-  # Only a change of the viewer's mailboxes is the explorers' business; the
-  # page may have subscribed to the others itself (the senders, say).
+  # Only a change of the viewer's mailboxes is the explorers' business — and
+  # the page's too, which may keep a `ComposeForm` current (its senders come
+  # from those mailboxes) and can not be told apart from the hook's own
+  # subscription: the event goes on to it.
   def handle_info({:inbox_access_changed, :mailboxes}, socket) do
     state = state(socket)
     socket = assign(socket, @key, sync_mailboxes(state, socket))
-    {:halt, record(socket, :access)}
+    {:cont, record(socket, :access)}
   end
 
   # The explorer acted (it linked or unlinked a letter) and has read its list

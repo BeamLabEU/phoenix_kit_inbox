@@ -34,4 +34,14 @@ defmodule PhoenixKitInbox.Test.OutboundFilters do
   def garbage(_email, _context), do: :ok
   def not_an_email(_email, _context), do: {:ok, %{to: "x@test.example"}}
   def drops_everyone(email, _context), do: {:ok, %{email | to: [], cc: [], bcc: []}}
+
+  @doc "Leaves To and Cc unset (`nil`) and the rest in Bcc, as a host may."
+  def bcc_only(email, _context),
+    do: {:ok, %{email | to: nil, cc: nil, bcc: [{"", "hidden@test.example"}]}}
+
+  @doc "Bare addresses, without names."
+  def bare(email, _context), do: {:ok, %{email | to: ["plain@test.example"], cc: [], bcc: []}}
+
+  @doc "An entry that is no address at all."
+  def odd_entry(email, _context), do: {:ok, %{email | to: [{:name_only}], cc: [], bcc: []}}
 end

@@ -25,7 +25,9 @@ defmodule PhoenixKitInbox.Test.ComponentHostLive do
   the page (a page may hold several explorers) for the same viewer. Messages to the page's pid
   drive what a page does later: `{:test_attach, id, filter}`,
   `{:test_detach, id}` and `{:test_assigns, %{...}}` (new attributes of the
-  first component, as a re-render of the host would pass).
+  first component, as a re-render of the host would pass);
+  `{:test_on_sent, %{...}}` makes the page answer the next
+  `{:inbox_compose, _, {:sent, _}}` with those attributes, in the same message.
   """
 
   use Phoenix.LiveView
@@ -57,6 +59,7 @@ defmodule PhoenixKitInbox.Test.ComponentHostLive do
       |> assign(:test_pid, Map.fetch!(session, "test_pid"))
       |> assign(:second_assigns, session |> Map.get("second_assigns") |> second_assigns(assigns))
       |> assign(:phoenix_kit_current_scope, assigns[:scope])
+      |> assign(:on_sent, nil)
 
     session
     |> Map.get("attach", [])
@@ -83,13 +86,26 @@ defmodule PhoenixKitInbox.Test.ComponentHostLive do
   def handle_info({:test_assigns, assigns}, socket),
     do: {:noreply, update(socket, :component_assigns, &Map.merge(&1, captures(assigns)))}
 
+  def handle_info({:test_on_sent, assigns}, socket),
+    do: {:noreply, assign(socket, :on_sent, assigns)}
+
   def handle_info(message, socket) when is_tuple(message) and tuple_size(message) > 0 do
     if inbox_message?(message), do: send(socket.assigns.test_pid, message)
 
-    {:noreply, socket}
+    {:noreply, answer_sent(socket, message)}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  # A host that answers a sent letter with new attributes (the next draft) in
+  # the same message, as `{:test_on_sent, assigns}` asked.
+  defp answer_sent(
+         %{assigns: %{on_sent: %{} = assigns}} = socket,
+         {:inbox_compose, _, {:sent, _}}
+       ),
+       do: update(socket, :component_assigns, &Map.merge(&1, captures(assigns)))
+
+  defp answer_sent(socket, _message), do: socket
 
   # The same viewer, unless said otherwise (a scope is big for a session).
   defp second_assigns(nil, _first), do: nil

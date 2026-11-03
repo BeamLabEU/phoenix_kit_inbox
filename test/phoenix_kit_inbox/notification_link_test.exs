@@ -141,7 +141,7 @@ defmodule PhoenixKitInbox.NotificationLinkTest do
     assert links(message.uuid) == %{ctx.bob.uuid => "/portal/letters?x=1"}
   end
 
-  test "asked per reader: each reader of a shared mailbox gets his own answer", ctx do
+  test "asked per reader: each reader of a shared mailbox gets their own answer", ctx do
     carol = user_fixture()
     shared = shared_mailbox_fixture(carol, %{name: "Ops"})
     grant_fixture(shared, ctx.bob, "read")

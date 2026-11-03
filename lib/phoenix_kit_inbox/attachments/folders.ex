@@ -586,7 +586,7 @@ defmodule PhoenixKitInbox.Attachments.Folders do
   defp checked_name(name) do
     trimmed = name |> String.trim() |> drop_format_characters() |> String.trim()
 
-    if trimmed != "" and String.length(trimmed) <= @name_length and
+    if trimmed != "" and code_points(trimmed) <= @name_length and
          not String.contains?(trimmed, "/") and not String.match?(trimmed, ~r/[[:cntrl:]]/u),
        do: {:ok, trimmed},
        else: :error
@@ -594,24 +594,46 @@ defmodule PhoenixKitInbox.Attachments.Folders do
 
   defp mailbox_folder_name(%Mailbox{name: name, slug: slug}) do
     suffix = " (#{slug})"
-    room = max(@name_length - String.length(suffix), 1)
-    clean = name |> clean_text() |> String.slice(0, room) |> String.trim()
-    if(clean == "", do: "?", else: clean) <> suffix
+    room = max(@name_length - code_points(suffix), 1)
+    clean = name |> clean_text() |> fit(room) |> String.trim()
+    fit(if(clean == "", do: "?", else: clean) <> suffix, @name_length)
   end
 
   defp month(message), do: message |> local_time() |> Calendar.strftime("%Y-%m")
 
   defp message_folder_name(message) do
     stamp = message |> local_time() |> Calendar.strftime("%Y-%m-%d %H:%M")
+    # The name is stamp, dash, subject and room for the longest suffix
+    # `create_unique/5` may add, " (" + 12 characters + ")".
+    room = @name_length - code_points("#{stamp} — ") - 15
 
     subject =
       (message.subject || "")
       |> clean_text()
       |> String.slice(0, @subject_length)
+      |> fit(room)
       |> String.trim()
 
     "#{stamp} — #{if subject == "", do: text(:no_subject), else: subject}"
   end
+
+  # A folder name is a `varchar(255)`, which counts code points, while
+  # `String.length/1` and `String.slice/3` count graphemes — and a grapheme
+  # may hold many code points (combining marks). Whole graphemes, while the
+  # code points fit.
+  defp fit(text, max) do
+    text
+    |> String.graphemes()
+    |> Enum.reduce_while({[], 0}, fn grapheme, {kept, used} ->
+      used = used + code_points(grapheme)
+      if used <= max, do: {:cont, {[grapheme | kept], used}}, else: {:halt, {kept, used}}
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+    |> Enum.join()
+  end
+
+  defp code_points(text), do: text |> String.codepoints() |> length()
 
   # `/` and control characters are left out (a control character between words
   # is a space); runs of white space are one.

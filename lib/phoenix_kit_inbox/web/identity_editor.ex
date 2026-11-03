@@ -296,8 +296,10 @@ defmodule PhoenixKitInbox.Web.IdentityEditor do
           type="text"
           label={gettext("Name shown to recipients")}
         />
+        <%!-- Only a sender bound to a mailbox has the choice: the common
+              sender always puts the sender's name in front (`Identities`). --%>
         <.checkbox
-          :if={@kind == :shared}
+          :if={@kind == :shared and @bound_edit?}
           field={@form[:personalize_from_name]}
           variant="toggle"
           label={gettext("Put the sender's own name into the From name")}

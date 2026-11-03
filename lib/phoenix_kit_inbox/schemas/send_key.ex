@@ -9,7 +9,7 @@ defmodule PhoenixKitInbox.Schemas.SendKey do
   use Ecto.Schema
   use PhoenixKit.SchemaPrefix
 
-  @primary_key false
+  @primary_key {:uuid, UUIDv7, autogenerate: true}
   @foreign_key_type UUIDv7
 
   @type t :: %__MODULE__{}

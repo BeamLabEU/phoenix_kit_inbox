@@ -93,6 +93,7 @@ defmodule PhoenixKitInbox.External do
   alias PhoenixKitInbox.Schemas.ExternalRecipient
   alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.Message
+  alias PhoenixKitInbox.Text
 
   @unknown_after_seconds 15 * 60
   @send_external "inbox.send_external"
@@ -112,7 +113,9 @@ defmodule PhoenixKitInbox.External do
   @spec address?(term()) :: boolean()
   def address?(term) when is_binary(term) do
     address = String.trim(term)
-    byte_size(address) <= @max_address_bytes and Regex.match?(@email, address)
+
+    byte_size(address) <= @max_address_bytes and Text.storable?(address) and
+      Regex.match?(@email, address)
   end
 
   def address?(_), do: false

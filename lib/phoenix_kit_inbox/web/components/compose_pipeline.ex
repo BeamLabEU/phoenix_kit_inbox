@@ -109,8 +109,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
       at the pick)
     * **route against resolve**, inside the `send_fun` handed to `around_send`
       (see below): a recipient chosen as `:internal` that resolves to an
-      outside address is `{:error, {:route_mismatch, [%{address, route,
-      resolved}]}}`; one typed as `:email` that resolves to a person or mailbox
+      outside address — or, chosen as an account (`:user`), to anyone inside
+      but that account (a shared mailbox its handle also names, when the
+      account is no member there) — is `{:error, {:route_mismatch,
+      [%{address, route, resolved}]}}`; one typed as `:email` that resolves to a person or mailbox
       inside is `{:error, {:member_as_email, addresses}}` — "choose them from
       the list"; a check that cannot be made is `:route_check_failed`
     * then whatever `Messages.send_message/4` answers (for instance
@@ -149,7 +151,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
 
   `send_fun` works **in the process that runs the pipeline only**: called
   from another process (a task the wrapper started) it sends nothing and
-  answers `{:error, {:send_fun, :other_process}}`, and logs the bug.
+  answers `{:error, {:send_fun, :other_process}}`, and logs the bug. It also
+  works **during the run only**: kept and called after the wrapper answered
+  (or ended), it sends nothing and answers `{:error, {:send_fun, :closed}}`.
 
   `send_fun` sends **at most once**: the first call sends, a second call in
   the same run answers what the first answered and sends nothing. The
@@ -208,6 +212,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   # not in an address either: the C1 controls and the left-to-right and
   # right-to-left marks, embeddings and isolates.
   @bad_address ~r/[\x00-\x1f\x7f\x{80}-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069},;]/u
+
+  # The controls and direction marks of `@bad_address`, without its separators:
+  # what an echo or a label is shown without.
+  @hidden_marks ~r/[\x00-\x1f\x7f-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u
 
   @type callbacks :: %{
           optional(:around_send) => (Scope.t(), ComposeDraft.t(), (ComposeDraft.t() -> term()) ->
@@ -319,14 +327,19 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   defp wrapped(scope, draft, around_send, verified) do
     key = {__MODULE__, make_ref()}
     owner = self()
+    # Set when the run is over: the memo below goes with it, so a `send_fun`
+    # the wrapper kept and calls later would otherwise send again.
+    closed = :atomics.new(1, [])
 
-    send_fun = &run_send_fun(&1, owner, key, {scope, verified, draft})
+    send_fun = &run_send_fun(&1, owner, key, closed, {scope, verified, draft})
 
     case call_wrapper(around_send, scope, draft, send_fun) do
       {:answered, answer} ->
+        :atomics.put(closed, 1, 1)
         settle(answer, Process.delete(key))
 
       {:ended, kind, reason, stacktrace} ->
+        :atomics.put(closed, 1, 1)
         ended(kind, reason, stacktrace, Process.delete(key))
     end
   end
@@ -334,20 +347,34 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   # The memo of "at most once" is the process dictionary of the process that
   # runs the pipeline: from another process it would not see a send already
   # made.
-  defp run_send_fun(given, owner, key, {scope, verified, draft}) do
-    if self() == owner do
-      case Process.get(key) do
-        {:sent, result} ->
-          result
+  defp run_send_fun(given, owner, key, closed, {scope, verified, draft}) do
+    cond do
+      self() != owner ->
+        refuse_other_process()
 
-        nil ->
-          result = deliver(scope, verified, draft, given)
-          Process.put(key, {:sent, result})
-          result
-      end
-    else
-      refuse_other_process()
+      :atomics.get(closed, 1) == 1 ->
+        refuse_closed()
+
+      true ->
+        case Process.get(key) do
+          {:sent, result} ->
+            result
+
+          nil ->
+            result = deliver(scope, verified, draft, given)
+            Process.put(key, {:sent, result})
+            result
+        end
     end
+  end
+
+  defp refuse_closed do
+    Logger.error(
+      "[Inbox] the host's wrapper called send_fun after its run was over; " <>
+        "nothing was sent by that call"
+    )
+
+    {:error, {:send_fun, :closed}}
   end
 
   defp refuse_other_process do
@@ -652,10 +679,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
     text =
       text
       |> String.replace_invalid("")
-      |> String.replace(
-        ~r/[\x00-\x1f\x7f-\x{9F}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u,
-        ""
-      )
+      |> String.replace(@hidden_marks, "")
 
     if String.length(text) > 200, do: String.slice(text, 0, 199) <> "…", else: text
   end
@@ -665,9 +689,14 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
       not Regex.match?(@bad_address, address)
   end
 
+  # A label goes on to the host's wrapper and to `RecipientSource.remember/4`,
+  # and is shown beside the address: the marks an address may not carry are
+  # taken out of it too.
   defp label(label) when is_binary(label) do
-    label = String.trim(label)
-    if label != "" and String.valid?(label), do: String.slice(label, 0, @label_max), else: nil
+    label =
+      if String.valid?(label), do: label |> String.replace(@hidden_marks, "") |> String.trim()
+
+    if label in [nil, ""], do: nil, else: String.slice(label, 0, @label_max)
   end
 
   defp label(_), do: nil
@@ -1106,17 +1135,28 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   defp html_body(_), do: {:error, :invalid_html_body}
 
   defp check_routes(scope, recipients) do
-    resolved = Messages.resolve_recipient_routes(scope, Enum.map(recipients, & &1.address))
+    resolved = Messages.resolve_recipient_targets(scope, Enum.map(recipients, & &1.address))
 
     if length(resolved) == length(recipients) do
       recipients
       |> Enum.zip(resolved)
-      |> Enum.filter(fn {chosen, found} -> chosen.route != found.route end)
+      |> Enum.filter(fn {chosen, found} -> differs?(chosen, found) end)
       |> refuse_differing()
     else
       {:error, :route_check_failed}
     end
   end
+
+  # Another route, or — for an account chosen by the inside route — someone
+  # else inside: the account's handle names a shared mailbox too, and the
+  # account is no member here (inactive, or outside the circle of this
+  # process), so the lookup that comes next takes the handle.
+  defp differs?(%{route: route}, %{route: found}) when route != found, do: true
+
+  defp differs?(%{route: :internal, user: user}, %{user_uuid: found}) when is_binary(user),
+    do: cast_uuid(user) != found
+
+  defp differs?(_chosen, _found), do: false
 
   # A person's typed e-mail that is someone inside is theirs to fix (pick them
   # from the list); any other disagreement is the host's route against the

@@ -625,8 +625,12 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
      )}
   end
 
+  # Only an entry still on the page: a second click on its ✕ (or a ref of no
+  # entry) would cancel a channel that is gone, and that exit ends the page.
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
-    {:noreply, cancel_upload(socket, :attachments, ref)}
+    if Enum.any?(live_uploads(socket.assigns.uploads.attachments), &(&1.ref == ref)),
+      do: {:noreply, cancel_upload(socket, :attachments, ref)},
+      else: {:noreply, socket}
   end
 
   @impl true
@@ -788,7 +792,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   # refused send keeps the uploads for the next try. The files are gone
   # with the LiveView after a send.
   defp pending_uploads(socket) do
-    case uploaded_entries(socket, :attachments) do
+    case socket.assigns.uploads.attachments |> live_uploads() |> Enum.split_with(& &1.done?) do
       {_done, [_ | _]} ->
         {:error, :uploads_in_progress}
 
@@ -796,27 +800,32 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         {:ok, [], []}
 
       {done, []} ->
-        uploads =
-          consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
-            {:postpone,
-             %{path: path, filename: entry.client_name, content_type: entry.client_type}}
-          end)
-
-        {:ok, uploads, Enum.map(done, & &1.ref)}
+        {:ok, Enum.map(done, &postpone_upload(socket, &1)), Enum.map(done, & &1.ref)}
     end
+  end
+
+  defp postpone_upload(socket, entry) do
+    consume_uploaded_entry(socket, entry, fn %{path: path} ->
+      {:postpone, %{path: path, filename: entry.client_name, content_type: entry.client_type}}
+    end)
   end
 
   # After a draft save the uploads it stored are the draft's snapshots: drop
   # those entries here. One added while the save ran stays.
   defp clear_uploads(socket, refs) do
-    {done, _in_progress} = uploaded_entries(socket, :attachments)
-
-    for entry <- done, entry.ref in refs do
+    for entry <- live_uploads(socket.assigns.uploads.attachments),
+        entry.done?,
+        entry.ref in refs do
       consume_uploaded_entry(socket, entry, fn _meta -> {:ok, nil} end)
     end
 
     socket
   end
+
+  # The uploads still on the page. A cancelled entry stays in `entries`, as
+  # `cancelled?`, until the `:DOWN` of its channel reaches the page; consuming
+  # or cancelling it again calls a channel that is gone.
+  defp live_uploads(%{entries: entries}), do: Enum.reject(entries, & &1.cancelled?)
 
   defp add_attachment(socket, %{file_uuid: uuid} = chip) do
     attachments = socket.assigns.attachments
@@ -1160,7 +1169,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         </span>
 
         <span
-          :for={entry <- @upload.entries}
+          :for={entry <- live_uploads(@upload)}
           id={"upload-#{entry.ref}"}
           class={[
             "badge badge-ghost badge-lg gap-2 max-w-full",

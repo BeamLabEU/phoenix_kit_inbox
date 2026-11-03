@@ -17,8 +17,10 @@ defmodule PhoenixKitInbox.Migrations.V07 do
   that deleting a user does not scan the table.
 
   `phoenix_kit_inbox_send_keys` — a key the host gave a send so that repeating
-  it answers with the same message instead of sending twice. Unique on `key`;
-  the row goes with its message. Indexed by `inserted_at` for the purge of old
+  it answers with the same message instead of sending twice. A UUIDv7 `uuid`
+  primary key like the module's other tables (a table without one can't be
+  deleted from under a `FOR ALL TABLES` publication); unique on `key`; the row
+  goes with its message. Indexed by `inserted_at` for the purge of old
   keys and by `message_uuid` for the cascade.
 
   `phoenix_kit_inbox_identities.personalize_from_name` — whether a shared
@@ -94,7 +96,16 @@ defmodule PhoenixKitInbox.Migrations.V07 do
       "source IN ('host', 'thread', 'subject', 'manual')"
     )
 
+    # A primary key like every other table of the module's: without one, a
+    # host publishing its tables for logical replication (`FOR ALL TABLES`)
+    # could not DELETE here — and every keyed send purges expired keys.
     create_if_not_exists table(:phoenix_kit_inbox_send_keys, primary_key: false, prefix: prefix) do
+      add(:uuid, :uuid,
+        primary_key: true,
+        null: false,
+        default: fragment(Helpers.uuid_v7_call(prefix))
+      )
+
       add(:key, :string, null: false)
 
       add(

@@ -121,6 +121,12 @@ defmodule PhoenixKitInbox.Web.SettingsLiveTest do
       |> render_click()
 
       refute has_element?(view, "#shared-identities-form [name='identity[mailbox_uuid]']")
+
+      refute has_element?(
+               view,
+               "#shared-identities-form [name='identity[personalize_from_name]']"
+             )
+
       owner = Repo.get_by!(Role, name: "Owner")
       refute has_element?(view, "#shared-identities-form input[value='#{owner.uuid}']")
       assert has_element?(view, "#shared-identities-form #ident-roles-owner")
@@ -202,6 +208,11 @@ defmodule PhoenixKitInbox.Web.SettingsLiveTest do
              )
 
       assert has_element?(view, "#ident-role-#{ctx.sales.uuid}[checked]")
+      # The common sender always puts the sender's name in front: no switch.
+      refute has_element?(
+               view,
+               "#shared-identities-form [name='identity[personalize_from_name]']"
+             )
 
       view
       |> form("#shared-identities-form", %{
@@ -282,12 +293,19 @@ defmodule PhoenixKitInbox.Web.SettingsLiveTest do
       |> render_click()
 
       refute has_element?(view, "#ident-role-#{ctx.sales.uuid}")
+      # A bound one has the choice.
+      assert has_element?(
+               view,
+               "#shared-identities-form [name='identity[personalize_from_name]']"
+             )
 
       view
-      |> form("#shared-identities-form", %{"identity" => %{"label" => "Desk 2"}})
+      |> form("#shared-identities-form", %{
+        "identity" => %{"label" => "Desk 2", "personalize_from_name" => "true"}
+      })
       |> render_submit()
 
-      assert %Identity{label: "Desk 2", mailbox_uuid: mailbox_uuid} =
+      assert %Identity{label: "Desk 2", mailbox_uuid: mailbox_uuid, personalize_from_name: true} =
                Repo.get(Identity, bound.uuid)
 
       assert mailbox_uuid == ctx.desk.uuid

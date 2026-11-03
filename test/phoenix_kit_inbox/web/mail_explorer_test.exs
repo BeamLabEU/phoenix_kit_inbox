@@ -410,6 +410,20 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
       refute has_element?(view, "button[phx-click=more]")
     end
 
+    test "a host re-render with new callbacks keeps the pages shown", %{conn: conn} = ctx do
+      [oldest | _] = many(ctx, [@order])
+      view = mount_explorer(ctx, conn, %{can_link?: allowing()})
+      view |> element("button[phx-click=more]") |> render_click()
+      assert rows(view) == 52
+
+      # A closure the host makes in its render is a new one on each.
+      send(view.pid, {:test_assigns, %{can_link?: fn _scope, _kind, _ref -> true end}})
+      send(view.pid, {:test_assigns, %{link_label: fn _object -> nil end}})
+
+      assert rows(view) == 52
+      assert has_element?(view, "#mail-row-demo-#{oldest.uuid}")
+    end
+
     test "a folder starts from the first page again", %{conn: conn} = ctx do
       many(ctx, [@order])
       view = mount_explorer(ctx, conn)
@@ -503,8 +517,9 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
         external: []
       }
 
-      # `threads`, `selected` and the body's format are not among the
-      # assigns: a render that read them would raise.
+      # `selected` and the body's format are not among the assigns, and
+      # `threads` is empty: a render that read them would raise or show
+      # nothing, so what shows is what was prepared.
       assigns = %{
         __changed__: nil,
         allowed?: true,
@@ -868,7 +883,9 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
 
       view |> element("#mail-row-demo-#{root.uuid}") |> render_click()
       render(view)
-      render(view)
+      # A re-render of the host that hands the same callbacks asks nothing.
+      send(view.pid, {:test_assigns, %{title: "Order mail, again"}})
+      assert render(view) =~ "Order mail, again"
       assert asked() == []
 
       assert has_element?(view, "button[phx-click=unlink]")

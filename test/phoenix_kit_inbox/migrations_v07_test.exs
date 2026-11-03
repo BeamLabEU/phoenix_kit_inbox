@@ -53,6 +53,8 @@ defmodule PhoenixKitInbox.MigrationsV07Test do
 
       assert index_exists?("public", "phoenix_kit_inbox_message_links_kind_ref_index")
       assert index_exists?("public", "phoenix_kit_inbox_send_keys_key_index")
+      assert primary_key_columns("public", @keys) == ["uuid"]
+      assert primary_key_columns("public", @links) == ["uuid"]
 
       refute column_nullable?("public", @identities, "personalize_from_name")
       assert column_default("public", @identities, "personalize_from_name") == "false"
@@ -154,6 +156,7 @@ defmodule PhoenixKitInbox.MigrationsV07Test do
       refute index_exists?(@probe, "phoenix_kit_inbox_message_links_message_uuid_index")
       assert index_exists?(@probe, "phoenix_kit_inbox_send_keys_inserted_at_index")
       assert index_exists?(@probe, "phoenix_kit_inbox_send_keys_message_uuid_index")
+      assert primary_key_columns(@probe, @keys) == ["uuid"]
       assert column_default(@probe, @identities, "personalize_from_name") == "false"
     end
 
@@ -312,6 +315,24 @@ defmodule PhoenixKitInbox.MigrationsV07Test do
       )
 
     exists
+  end
+
+  defp primary_key_columns(schema, table) do
+    %{rows: rows} =
+      TestRepo.query!(
+        """
+        SELECT a.attname
+        FROM pg_index i
+        JOIN pg_class t ON t.oid = i.indrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+        WHERE i.indisprimary AND n.nspname = $1 AND t.relname = $2
+        ORDER BY a.attname
+        """,
+        [schema, table]
+      )
+
+    List.flatten(rows)
   end
 
   defp dump(uuid), do: Ecto.UUID.dump!(uuid)

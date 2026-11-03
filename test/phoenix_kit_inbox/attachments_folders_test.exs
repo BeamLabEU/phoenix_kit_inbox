@@ -98,6 +98,10 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   defmodule Hook do
     @moduledoc false
 
+    import Ecto.Query, only: [from: 2]
+
+    alias PhoenixKitInbox.Test.Repo
+
     def names(message, mailbox) do
       send(Application.get_env(:phoenix_kit_inbox, :folder_test_pid), {:hook, message, mailbox})
 
@@ -105,8 +109,24 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
         :raise -> raise "host bug"
         :exit -> exit(:gone)
         :throw -> throw(:oops)
+        :report_notified -> report_notified(message)
         answer -> answer
       end
+    end
+
+    # Whether the recipients were told before the filing asked the host.
+    defp report_notified(message) do
+      notified =
+        Repo.exists?(
+          from(a in "phoenix_kit_activities",
+            where:
+              a.action == "inbox.message_received" and
+                a.resource_uuid == type(^message.uuid, :binary_id)
+          )
+        )
+
+      send(Application.get_env(:phoenix_kit_inbox, :folder_test_pid), {:notified, notified})
+      nil
     end
   end
 
@@ -320,6 +340,21 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
       refute name =~ ~r/[[:cntrl:]]/u
     end
 
+    test "a subject of combining marks is cut to what the column holds, in whole letters",
+         ctx do
+      # 80 letters of five code points each: within the 80, past the 255 code
+      # points a folder name may have.
+      letter = "e\u0301\u0302\u0303\u0304"
+      message = send_data(ctx, %{"subject" => String.duplicate(letter, 80)})
+
+      name = List.last(chain(snapshot(message)))
+      [_, subject] = String.split(name, " — ", parts: 2)
+
+      # "YYYY-MM-DD HH:MM — " is 19, the longest suffix 15: 221 left, 44 letters.
+      assert subject == String.duplicate(letter, 44)
+      assert length(String.codepoints(name)) == 255 - 15 - 1
+    end
+
     test "two sends of one minute and subject get two folders; filing again reuses one", ctx do
       first = send_data(ctx, %{"subject" => "Same"})
       second = send_data(ctx, %{"subject" => "Same"})
@@ -385,6 +420,12 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
       refute_received {:hook, _, _}
     end
 
+    test "it is asked after the recipients were told", ctx do
+      hook!(:report_notified)
+      send_data(ctx)
+      assert_received {:notified, true}
+    end
+
     test "nil is the default path, quietly", ctx do
       hook!(nil)
 
@@ -420,6 +461,7 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
           {"a slash", ["a/b"]},
           {"a control character", ["a\nb"]},
           {"a name over 255", [String.duplicate("a", 256)]},
+          {"a name over 255 code points", [String.duplicate("e\u0301", 200)]},
           {"a name that is no string", ["ok", 5]}
         ] do
       test "an answer with #{label} keeps the default path, with a warning", ctx do

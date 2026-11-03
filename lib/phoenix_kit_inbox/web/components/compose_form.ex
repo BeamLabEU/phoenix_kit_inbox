@@ -34,6 +34,14 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       members; the pipeline has no such option
     * `attachment_picker` — an optional slot for the host's file picker
 
+  An attribute left out of a later update keeps its value, so a host may
+  `send_update/3` the form with only what changed. Inbox's own access events
+  (a grant given or taken, a mailbox archived, a sender added or changed)
+  change no scope: a host that hears `{:inbox_access_changed, _}`
+  (`PhoenixKitInbox.Web.ScopeRefresh.subscribe/2`) sends
+  `send_update(ComposeForm, id: id, refresh: true)`, and the form reads its
+  senders and signatures again.
+
   ## Recipients
 
   Each line (To, Cc, Bcc) holds chips — server-side structures with the label,
@@ -154,21 +162,40 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   # ── the component ───────────────────────────────────────────────────────────
 
+  # The upload is allowed on the first update, when the form knows its id.
   @impl true
-  def mount(socket) do
-    {:ok,
-     allow_upload(socket, :attachments,
-       accept: :any,
-       max_entries: Attachments.max_files(),
-       max_file_size: Attachments.max_upload_bytes(),
-       auto_upload: true,
-       progress: &upload_progress/3
-     )}
+  def mount(socket), do: {:ok, socket}
+
+  # One upload per form, named after its id: LiveView takes an upload name
+  # once per page, across all its components, so a second form — or a host
+  # page with an upload of its own called `:attachments` — would share one,
+  # and a file chosen in the second would end the page. A string, so that no
+  # atom is made per id.
+  defp ensure_upload(%{assigns: %{upload_name: _}} = socket), do: socket
+
+  defp ensure_upload(socket) do
+    name = upload_name(socket.assigns.id)
+
+    socket
+    |> assign(:upload_name, name)
+    |> allow_upload(name,
+      accept: :any,
+      max_entries: Attachments.max_files(),
+      max_file_size: Attachments.max_upload_bytes(),
+      auto_upload: true,
+      progress: &upload_progress/3
+    )
   end
+
+  @doc false
+  # The name of the upload of the form `id` (its file input's name too).
+  @spec upload_name(term()) :: String.t()
+  def upload_name(id) when is_binary(id), do: "inbox_compose_" <> id
+  def upload_name(id), do: "inbox_compose_" <> inspect(id)
 
   # The browser's change event is the early check; this one holds too, wherever
   # an upload came from.
-  defp upload_progress(:attachments, _entry, socket), do: {:noreply, limit_uploads(socket)}
+  defp upload_progress(_name, _entry, socket), do: {:noreply, limit_uploads(socket)}
 
   @impl true
   # The send task answers the component that started it, by send_update. An
@@ -187,12 +214,20 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   def update(%{send_result: _}, socket), do: {:ok, socket}
   def update(%{send_lost: _}, socket), do: {:ok, socket}
 
+  # The host heard of an access change that changes no scope: the senders the
+  # form offers are read again, as for a new scope.
+  def update(%{refresh: true}, %{assigns: %{allowed?: true, from: from}} = socket),
+    do: {:ok, socket |> assign_sender(from) |> refresh_summary()}
+
+  def update(%{refresh: true}, socket), do: {:ok, socket}
+
   def update(assigns, socket) do
     socket =
       socket
       |> assign(Map.take(assigns, ~w(id scope around_send authorize_attachments)a))
-      |> assign(:recipient_sources, list_of(Map.get(assigns, :recipient_sources)))
-      |> assign(:attachment_picker, list_of(Map.get(assigns, :attachment_picker)))
+      |> ensure_upload()
+      |> assign_list(assigns, :recipient_sources)
+      |> assign_list(assigns, :attachment_picker)
       |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
 
     draft = normalize_draft(assigns[:draft] || socket.assigns[:source_draft])
@@ -239,7 +274,14 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     end
   end
 
-  # An attribute a host leaves out or sets to nil is an empty list.
+  # An attribute a host sets to nil is an empty list; one it leaves out of an
+  # update (a `send_update/3` with only the scope) keeps what it was.
+  defp assign_list(socket, assigns, key) do
+    if Map.has_key?(assigns, key),
+      do: assign(socket, key, list_of(assigns[key])),
+      else: assign_new(socket, key, fn -> [] end)
+  end
+
   defp list_of(list) when is_list(list), do: list
   defp list_of(_other), do: []
 
@@ -655,9 +697,14 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   def handle_event("validate_upload", _params, socket),
     do: {:noreply, limit_uploads(socket)}
 
+  # A running send may read the upload's own file (where no hard link of its
+  # own could be made): it stays until the send is over.
+  def handle_event("cancel_upload", _params, %{assigns: %{sending: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("cancel_upload", %{"ref" => ref}, socket) when is_binary(ref) do
-    if Enum.any?(socket.assigns.uploads.attachments.entries, &(&1.ref == ref)),
-      do: {:noreply, cancel_upload(socket, :attachments, ref)},
+    if Enum.any?(live_uploads(socket.assigns), &(&1.ref == ref)),
+      do: {:noreply, cancel_upload(socket, socket.assigns.upload_name, ref)},
       else: {:noreply, socket}
   end
 
@@ -681,7 +728,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       socket
       |> keep(:subject, params["subject"])
       |> keep(:body, params["body"])
-      |> assign(error: nil)
+      # A refusal of an earlier add (one picked into a full line) is not the
+      # letter's: it would stop every Send with nothing new to say. What is
+      # still typed in a field is added again just below, and refused again.
+      |> assign(error: nil, recipient_error: nil)
       |> add_pending_input()
 
     if socket.assigns.recipient_error || blocked?(socket.assigns),
@@ -740,7 +790,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   defp collect_uploads(socket) do
-    case uploaded_entries(socket, :attachments) do
+    case socket.assigns |> live_uploads() |> Enum.split_with(& &1.done?) do
       {_done, [_ | _] = busy} ->
         if Enum.any?(busy, &(&1.valid? == false)),
           do: {:error, gettext("Remove the files that failed, then send again.")},
@@ -749,15 +799,16 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       {[], []} ->
         {:ok, [], []}
 
-      {_done, []} ->
-        consumed =
-          consume_uploaded_entries(socket, :attachments, fn %{path: path}, entry ->
-            {:postpone, {entry.ref, path, entry.client_name, entry.client_type}}
-          end)
-
-        {entries, links} = own_uploads(consumed)
+      {done, []} ->
+        {entries, links} = done |> Enum.map(&postpone_upload(socket, &1)) |> own_uploads()
         {:ok, Enum.map(entries, &upload_attachment/1), links}
     end
+  end
+
+  defp postpone_upload(socket, entry) do
+    consume_uploaded_entry(socket, entry, fn %{path: path} ->
+      {:postpone, {entry.ref, path, entry.client_name, entry.client_type}}
+    end)
   end
 
   # The send gets a hard link of its own to each upload, so it survives the page.
@@ -1012,13 +1063,22 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # carry them into the next one. `consume_uploaded_entries` with `:postpone`
   # leaves them on the page so that a failed try can be made again.
   defp drop_uploads(socket, :all),
-    do: drop_uploads(socket, Enum.map(socket.assigns.uploads.attachments.entries, & &1.ref))
+    do: drop_uploads(socket, Enum.map(live_uploads(socket.assigns), & &1.ref))
 
   defp drop_uploads(socket, refs) do
-    for %{ref: ref} <- socket.assigns.uploads.attachments.entries, ref in refs, reduce: socket do
-      acc -> cancel_upload(acc, :attachments, ref)
+    for %{ref: ref} <- live_uploads(socket.assigns), ref in refs, reduce: socket do
+      acc -> cancel_upload(acc, acc.assigns.upload_name, ref)
     end
   end
+
+  # The uploads still on the form. A cancelled entry stays in `entries`, as
+  # `cancelled?`, until the `:DOWN` of its channel reaches the page — after a
+  # message already on its way, like the `{:sent, _}` a host may answer with a
+  # new draft. Cancelling or consuming it again calls a channel that is gone,
+  # and that exit takes the host's page down.
+  defp live_uploads(%{uploads: uploads, upload_name: name}), do: live_uploads(uploads, name)
+
+  defp live_uploads(uploads, name), do: Enum.reject(uploads[name].entries, & &1.cancelled?)
 
   # ── the line above the button ───────────────────────────────────────────────
 
@@ -1097,7 +1157,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
       _ ->
         case Outbound.preview(preview_email(typed), preview_context(socket, identity)) do
-          {:ok, email} -> {rewritten(email, typed), nil}
+          {:ok, email} -> rewritten(email, typed)
           {:error, :external_disabled} -> {nil, :closed}
           {:error, :no_recipients} -> {nil, :dropped}
           {:error, {:filter_refused, _reason}} -> {nil, :refused}
@@ -1106,15 +1166,30 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     end
   end
 
+  # The filter's addressing, in the shapes the send takes too (a list left
+  # `nil`, a bare address): anything else could not be shown, and says so.
   defp rewritten(email, typed) do
-    shown = Enum.map(email.to ++ email.cc ++ email.bcc, fn {_name, address} -> address end)
+    shown =
+      Enum.flat_map([email.to, email.cc, email.bcc], &List.wrap/1) |> Enum.map(&address_of/1)
+
     asked = Enum.map(typed, fn {_role, c} -> c.address end)
 
-    if Enum.sort(Enum.map(shown, &String.downcase/1)) ==
-         Enum.sort(Enum.map(asked, &String.downcase/1)),
-       do: nil,
-       else: Enum.uniq(shown)
+    cond do
+      Enum.any?(shown, &is_nil/1) ->
+        {nil, :unchecked}
+
+      Enum.sort(Enum.map(shown, &String.downcase/1)) ==
+          Enum.sort(Enum.map(asked, &String.downcase/1)) ->
+        {nil, nil}
+
+      true ->
+        {Enum.uniq(shown), nil}
+    end
   end
+
+  defp address_of({_name, address}) when is_binary(address), do: address
+  defp address_of(address) when is_binary(address), do: address
+  defp address_of(_other), do: nil
 
   defp preview_email(typed) do
     Enum.reduce(typed, Swoosh.Email.new(), fn {role, chip}, email ->
@@ -1226,8 +1301,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   defp file_count(socket) do
-    %{host_files: host, picked: picked, uploads: uploads} = socket.assigns
-    length(host) + length(picked) + length(uploads.attachments.entries)
+    %{host_files: host, picked: picked} = socket.assigns
+    length(host) + length(picked) + length(live_uploads(socket.assigns))
   end
 
   defp pick(socket, raw) do
@@ -1300,16 +1375,21 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # An upload that would take the message over its count is taken off again.
   defp limit_uploads(socket) do
     max = Attachments.max_files()
-    entries = socket.assigns.uploads.attachments.entries
+    entries = live_uploads(socket.assigns)
     over = file_count(socket) - max
 
     if over > 0 do
       entries
       |> Enum.take(-over)
-      |> Enum.reduce(socket, &cancel_upload(&2, :attachments, &1.ref))
+      |> Enum.reduce(socket, &cancel_upload(&2, &2.assigns.upload_name, &1.ref))
       |> assign(files_error: Errors.message({:too_many_attachments, max}))
     else
-      assign(socket, files_error: nil)
+      # Only its own word goes: a refused pick's stays until the next pick.
+      too_many = Errors.message({:too_many_attachments, max})
+
+      if socket.assigns.files_error == too_many,
+        do: assign(socket, files_error: nil),
+        else: socket
     end
   end
 
@@ -1720,7 +1800,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             target={@myself}
           />
           <li
-            :for={entry <- @uploads.attachments.entries}
+            :for={entry <- live_uploads(@uploads, @upload_name)}
             id={"compose-#{@id}-upload-#{entry.ref}"}
             data-upload
             class={["badge badge-outline gap-1", entry.valid? == false && "badge-error"]}
@@ -1728,13 +1808,14 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             <.icon name="hero-arrow-up-tray" class="w-3 h-3" />
             {Attachments.clean_filename(entry.client_name)}
             <span :if={entry.valid? and not entry.done?} class="text-xs">{entry.progress}%</span>
-            <span :for={error <- upload_errors(@uploads.attachments, entry)} class="text-xs">
+            <span :for={error <- upload_errors(@uploads[@upload_name], entry)} class="text-xs">
               {upload_error_text(error)}
             </span>
             <button
               type="button"
               class="btn btn-ghost btn-circle btn-xs size-4 min-h-0"
               aria-label={gettext("Cancel upload")}
+              disabled={@sending}
               phx-click="cancel_upload"
               phx-value-ref={entry.ref}
               phx-target={@myself}
@@ -1744,7 +1825,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           </li>
         </ul>
         <p
-          :for={error <- upload_errors(@uploads.attachments)}
+          :for={error <- upload_errors(@uploads[@upload_name])}
           class="text-xs text-error"
           role="alert"
         >
@@ -1776,7 +1857,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
               <.icon name="hero-arrow-up-tray" class="w-3 h-3" />
               {gettext("Upload files")}
               <%!-- sr-only, not hidden: a hidden input is out of the keyboard's reach --%>
-              <.live_file_input upload={@uploads.attachments} class="sr-only" />
+              <.live_file_input upload={@uploads[@upload_name]} class="sr-only" />
             </label>
           </form>
           {render_slot(@attachment_picker, %{target: @myself, event: "pick_attachments"})}

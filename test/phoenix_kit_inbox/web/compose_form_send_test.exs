@@ -586,7 +586,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       |> render_click("pick_attachments", %{"uuids" => [picked]})
 
       file =
-        file_input(view, "#compose-demo-upload-form", :attachments, [
+        file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
           %{name: "dir/my notes.txt", content: "hi", type: "text/plain"}
         ])
 
@@ -609,7 +609,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       view = mount_form(ctx, conn, draft(ctx))
 
       file =
-        file_input(view, "#compose-demo-upload-form", :attachments, [
+        file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
           %{name: "slow.bin", content: String.duplicate("x", 100)}
         ])
 
@@ -645,7 +645,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       view = mount_form(ctx, conn, draft(ctx))
 
       file =
-        file_input(view, "#compose-demo-upload-form", :attachments, [
+        file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
           %{name: "kept.txt", content: "hi", type: "text/plain"}
         ])
 
@@ -682,7 +682,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       view = mount_form(ctx, conn, draft(ctx))
 
       file =
-        file_input(view, "#compose-demo-upload-form", :attachments, [
+        file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
           %{name: "first.txt", content: "hi", type: "text/plain"}
         ])
 
@@ -707,7 +707,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       view = mount_form(ctx, conn, draft(ctx))
 
       file =
-        file_input(view, "#compose-demo-upload-form", :attachments, [
+        file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
           %{name: "sent.txt", content: "hi", type: "text/plain"}
         ])
 
@@ -723,7 +723,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       view = mount_form(ctx, conn, draft(ctx))
 
       file =
-        file_input(view, "#compose-demo-upload-form", :attachments, [
+        file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
           %{name: "first.txt", content: "hi", type: "text/plain"}
         ])
 
@@ -745,12 +745,41 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "Second letter"}}}, 2000
     end
 
+    test "a host that answers the sent letter with the next draft keeps its page",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(ctx))
+      next = ComponentHostLive.stash(draft(ctx, subject: "Second letter"))
+      on_exit(fn -> ComponentHostLive.unstash(next) end)
+      send(view.pid, {:test_on_sent, %{draft: next}})
+
+      file =
+        file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
+          %{name: "first.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(file, "first.txt")
+      submit(view)
+
+      # The sent letter's upload is cancelled, then the next draft cancels
+      # whatever is left — before the channel's :DOWN has reached the page.
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "Offer"}}}, 2000
+      assert render(view) =~ "Second letter"
+      refute has_element?(view, "#compose-demo-attachments li[data-upload]")
+
+      view
+      |> form("#compose-demo-form", %{"subject" => "Second letter", "body" => "Hello again"})
+      |> render_submit()
+
+      assert_receive {:around, _, %{attachments: []}}, 2000
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "Second letter"}}}, 2000
+    end
+
     test "a letter that failed keeps its uploads for the next try", %{conn: conn} = ctx do
       mode(:error)
       view = mount_form(ctx, conn, draft(ctx))
 
       file =
-        file_input(view, "#compose-demo-upload-form", :attachments, [
+        file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
           %{name: "again.txt", content: "hi", type: "text/plain"}
         ])
 
@@ -760,6 +789,28 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       assert_receive {:around, _, _}, 2000
       eventually(fn -> text(view, "[role=alert]") =~ "could not be sent" end)
       assert has_element?(view, "#compose-demo-attachments li[data-upload]", "again.txt")
+    end
+
+    test "an upload can not be taken off while its letter is being sent", %{conn: conn} = ctx do
+      mode(:hold)
+      view = mount_form(ctx, conn, draft(ctx))
+
+      view
+      |> file_input("#compose-demo-upload-form", "inbox_compose_demo", [
+        %{name: "kept.txt", content: "hi", type: "text/plain"}
+      ])
+      |> render_upload("kept.txt")
+
+      [_, ref] = Regex.run(~r/id="compose-demo-upload-(?!form")([^"]+)"/, render(view))
+      submit(view)
+      assert_receive {:around, task, %{attachments: [%{filename: "kept.txt"}]}}, 2000
+
+      assert has_element?(view, "#compose-demo-upload-#{ref} button[disabled]")
+      view |> with_target("#compose-form-demo") |> render_click("cancel_upload", %{"ref" => ref})
+      assert has_element?(view, "#compose-demo-upload-#{ref}")
+
+      send(task, :go)
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{}}}, 2000
     end
 
     test "a new draft from the parent while a send runs is ignored", %{conn: conn} = ctx do
@@ -1059,6 +1110,19 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       assert line =~ "bcc-redirect@test.example"
     end
 
+    test "a filter's nil lists and bare addresses are shown; an odd entry is unchecked",
+         %{conn: conn} = ctx do
+      for {filter, shown} <- [bcc_only: "hidden@test.example", bare: "plain@test.example"] do
+        PhoenixKitInbox.DataCase.outbound_filter({OutboundFilters, filter})
+        view = mount_form(ctx, conn, outside_draft(ctx))
+        assert text(view, "#compose-demo-summary") =~ shown
+      end
+
+      PhoenixKitInbox.DataCase.outbound_filter({OutboundFilters, :odd_entry})
+      view = mount_form(ctx, conn, outside_draft(ctx))
+      assert text(view, "#compose-demo-summary") =~ "could not be checked"
+    end
+
     test "without a rewrite there is nothing to add", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, outside_draft(ctx))
       refute text(view, "#compose-demo-summary") =~ "goes to"
@@ -1189,6 +1253,20 @@ defmodule PhoenixKitInbox.Web.ComposeFormSendTest do
       assert_receive {:inbox_compose, "demo", {:sent, %Message{}}}, 2000
       assert_receive {:remembered, "typed@example.com", "typed@example.com"}, 2000
       refute_receive {:remembered, _, _}, 200
+    end
+
+    test "a pick refused by a full line does not stop the letter", %{conn: conn} = ctx do
+      full = for n <- 1..19, do: %{address: "c#{n}@example.com", route: :email}
+      to = [%{address: "@#{ctx.bob.username}", route: :internal} | full]
+      view = with_spy(ctx, conn, %{ctx.spy_draft | to: to})
+
+      forge_to(view, "toggle_picker", %{"role" => "to"})
+      forge_to(view, "pick", %{"id" => "s-1"})
+      assert has_element?(view, "#compose-demo-to-error", "At most 20 addresses in To.")
+
+      submit(view)
+
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{}}}, 2000
     end
 
     test "a send the same key answered with an earlier letter remembers nothing",

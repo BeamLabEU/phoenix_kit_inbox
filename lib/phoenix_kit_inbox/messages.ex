@@ -704,8 +704,8 @@ defmodule PhoenixKitInbox.Messages do
 
     * `reply_to_trusted: address` — a Reply-To the host vouches for, recorded
       in `metadata["reply_to"]` whatever `Identities.reply_to_options/2` says
-      (`{:error, :invalid_reply_to}` when it is not an email address; `nil` or
-      `""` is no Reply-To). A
+      (`{:error, :invalid_reply_to}` when it is not an email address; `nil`,
+      `""` or blanks is no Reply-To). A
       `"reply_to"` in `attrs` still has to be one of those options.
     * `html_body: html` — the host's ready-made HTML for the email to external
       recipients, instead of the one built from the body. At most 256 KiB
@@ -834,8 +834,6 @@ defmodule PhoenixKitInbox.Messages do
       # read of our own table.
       Links.announce(message)
 
-      if items != [], do: Folders.lay_out_sent(message, mailbox)
-
       # Post-commit, deliberately: see the moduledoc.
       Notify.message_sent(message, mailbox, recipients, %{
         external: length(externals),
@@ -843,6 +841,12 @@ defmodule PhoenixKitInbox.Messages do
       })
 
       sent = start_external(message, external_rows, scope, mailbox)
+
+      # After the recipients have been told and the email handed off: filing
+      # takes locks, several queries a file and the host's `attachment_folder`
+      # hook, none of which they should wait for. Still in the sending
+      # process, for the hook's sake; the email task writes only its own rows.
+      if items != [], do: Folders.lay_out_sent(message, mailbox)
 
       # Last, after the commit and after the email and nudges have been handed
       # off (the email goes in a task; it may still be on its way): the
@@ -897,14 +901,22 @@ defmodule PhoenixKitInbox.Messages do
   end
 
   # An address the host vouches for: taken as it is, once it is an address.
-  defp trusted_reply_to(blank) when blank in [nil, ""], do: {:ok, %{}}
+  defp trusted_reply_to(nil), do: {:ok, %{}}
 
+  # Blank once trimmed, like an empty one: no Reply-To.
   defp trusted_reply_to(address) when is_binary(address) do
     address = String.trim(address)
 
-    if Text.fits?(address, @reply_to_max_chars) and External.address?(address),
-      do: {:ok, %{"reply_to" => address}},
-      else: {:error, :invalid_reply_to}
+    cond do
+      address == "" ->
+        {:ok, %{}}
+
+      Text.fits?(address, @reply_to_max_chars) and External.address?(address) ->
+        {:ok, %{"reply_to" => address}}
+
+      true ->
+        {:error, :invalid_reply_to}
+    end
   end
 
   defp trusted_reply_to(_), do: {:error, :invalid_reply_to}
@@ -914,7 +926,8 @@ defmodule PhoenixKitInbox.Messages do
   defp html_body_option(html) when is_binary(html) do
     cond do
       byte_size(html) > @html_body_max_bytes -> {:error, :html_body_too_large}
-      not Text.fits?(html, @html_body_max_bytes) -> {:error, :invalid_html_body}
+      # The byte limit bounds the length already: no count of code points.
+      not Text.storable?(html) -> {:error, :invalid_html_body}
       true -> {:ok, %{"html_body" => html}}
     end
   end
@@ -1403,30 +1416,56 @@ defmodule PhoenixKitInbox.Messages do
   @spec resolve_recipient_routes(Scope.t() | nil, [String.t()]) :: [
           %{address: String.t(), route: :internal | :email, mailbox_uuid: binary() | nil}
         ]
-  def resolve_recipient_routes(%Scope{} = scope, addresses) when is_list(addresses) do
+  def resolve_recipient_routes(scope, addresses) do
+    scope
+    |> resolve_recipient_targets(addresses)
+    |> Enum.map(&Map.delete(&1, :user_uuid))
+  end
+
+  @doc false
+  # `resolve_recipient_routes/2` plus whom each entry reaches: `:user_uuid` is
+  # the member an inside entry lands with (the owner of the personal mailbox,
+  # or the member who has none yet), `nil` for a shared mailbox or the
+  # outside. For `ComposePipeline`, which must see that an account it chose is
+  # reached as that account — and not, its handle falling through to the next
+  # lookup when the account is no member, as a shared mailbox of that name.
+  @spec resolve_recipient_targets(Scope.t() | nil, [String.t()]) :: [
+          %{
+            address: String.t(),
+            route: :internal | :email,
+            mailbox_uuid: binary() | nil,
+            user_uuid: binary() | nil
+          }
+        ]
+  def resolve_recipient_targets(%Scope{} = scope, addresses) when is_list(addresses) do
     if Scope.can?(scope, "inbox"),
       do: for(address <- addresses, is_binary(address), do: recipient_route(address)),
       else: []
   end
 
-  def resolve_recipient_routes(_scope, _addresses), do: []
+  def resolve_recipient_targets(_scope, _addresses), do: []
 
   defp recipient_route(address) do
     case parse_recipient_list(address) do
       [entry] ->
         case Mailboxes.fetch_mailbox_by_recipient(entry, create: false) do
           {:ok, %Mailbox{} = mailbox} ->
-            %{address: address, route: :internal, mailbox_uuid: mailbox.uuid}
+            %{
+              address: address,
+              route: :internal,
+              mailbox_uuid: mailbox.uuid,
+              user_uuid: if(mailbox.kind == "user", do: mailbox.owner_uuid)
+            }
 
-          {:ok, {:member, _user}} ->
-            %{address: address, route: :internal, mailbox_uuid: nil}
+          {:ok, {:member, user}} ->
+            %{address: address, route: :internal, mailbox_uuid: nil, user_uuid: user.uuid}
 
           {:error, _} ->
-            %{address: address, route: :email, mailbox_uuid: nil}
+            %{address: address, route: :email, mailbox_uuid: nil, user_uuid: nil}
         end
 
       _none_or_several ->
-        %{address: address, route: :email, mailbox_uuid: nil}
+        %{address: address, route: :email, mailbox_uuid: nil, user_uuid: nil}
     end
   end
 

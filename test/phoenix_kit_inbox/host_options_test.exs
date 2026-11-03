@@ -150,8 +150,13 @@ defmodule PhoenixKitInbox.HostOptionsTest do
       assert message_count() == 0
     end
 
-    test "nil, an empty string and no option mean none", ctx do
-      for opts <- [[reply_to_trusted: nil], [reply_to_trusted: ""], []] do
+    test "nil, an empty or blank string and no option mean none", ctx do
+      for opts <- [
+            [reply_to_trusted: nil],
+            [reply_to_trusted: ""],
+            [reply_to_trusted: " \t "],
+            []
+          ] do
         assert {:ok, message} = send_external(ctx, %{}, opts)
         refute Map.has_key?(stored(message).metadata, "reply_to")
       end

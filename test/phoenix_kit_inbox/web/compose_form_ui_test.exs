@@ -225,6 +225,21 @@ defmodule PhoenixKitInbox.Web.ComposeFormUiTest do
       assert has_element?(view, "[role=alert]", "no longer available")
     end
 
+    test "the host's refresh reads the senders again under the same scope",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(from_editable: true))
+      forge(view, "select_from", %{"from" => "mailbox:#{ctx.desk.uuid}"})
+      assert render(element(view, "#compose-demo-from-select")) =~ ctx.desk.uuid
+
+      # A grant taken changes no scope: the host passes the access event on.
+      :ok = Mailboxes.revoke_access(ctx.manager, ctx.desk, ctx.alice.uuid)
+      Phoenix.LiveView.send_update(view.pid, ComposeForm, id: "demo", refresh: true)
+      render(view)
+
+      refute render(element(view, "#compose-demo-from-select")) =~ ctx.desk.uuid
+      assert has_element?(view, "[role=alert]", "no longer available")
+    end
+
     test "a signature the writer edited stays as text when the sender changes, with no note",
          %{conn: conn} = ctx do
       {:ok, sig} =

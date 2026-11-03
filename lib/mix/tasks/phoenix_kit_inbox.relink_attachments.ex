@@ -4,7 +4,9 @@ defmodule Mix.Tasks.PhoenixKitInbox.RelinkAttachments do
   Storage file they were copied from, and files every sent message's
   attachments in folders. See `PhoenixKitInbox.Attachments.Maintenance`.
 
-  Dry-run by default: prints what would be done and writes nothing.
+  Dry-run by default: without `--apply` or `--purge-old` it prints what would
+  be done and writes nothing. `--purge-old` deletes unless `--dry-run` is
+  given with it.
 
   ## Usage
 
