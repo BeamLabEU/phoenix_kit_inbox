@@ -29,6 +29,11 @@ defmodule PhoenixKitInbox.Migrations.V07 do
 
   `down` drops both tables and the column.
 
+  Changed once before it was released (2026-11-03): the `uuid` primary key of
+  `phoenix_kit_inbox_send_keys` was added. A database that ran the earlier
+  V07 from `main` is at version 7 without it, is not migrated again, and fails
+  every keyed send — see AGENTS.md ("Database & Migrations") for the repair.
+
   Immutable once shipped, like V01–V06. Prefix-safe: bare index names on
   `CREATE`, `Helpers.uuid_v7_call/1` for the key, every FK in the same prefix,
   the CHECK looked up by name and schema.

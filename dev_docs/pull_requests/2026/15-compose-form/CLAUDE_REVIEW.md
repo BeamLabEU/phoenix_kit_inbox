@@ -201,6 +201,12 @@ Run on 2026-11-03 against a private PostgreSQL 18 on loopback, because
 `postgres-test` was rejecting connections in recovery. The test database was
 recreated for the edited V07.
 
+**V07 was changed in this batch, before release.** `phoenix_kit_inbox_send_keys`
+got a `uuid` primary key. A test or development database migrated with the
+earlier V07 is not migrated again and fails every keyed send. Run
+`mix test.reset` before running the suite on one; for other databases see the
+PR #12 review and AGENTS.md.
+
 - Baseline before any change, published core 3.0.0: 1,294 tests, 0 failures,
   1 skipped.
 - After the fixes, published core 3.0.0: **1,310 tests, 0 failures, 1 skipped**

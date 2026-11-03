@@ -91,9 +91,43 @@ column.
 
 V07 has **not shipped**: the latest tag is `0.4.0`, cut before this PR, and
 `mix.exs` is still at 0.4.0. So this is an edit to an unreleased migration, not
-to an immutable one. A development database that already ran the old V07 from
-`main` has to roll back to 6 and migrate again (I recreated the test database
-for this).
+to an immutable one.
+
+#### For whoever runs a database that saw the earlier V07
+
+The earlier V07 was on `main` from the merge `d7115d0` until the fix
+`ba6466c`. A database migrated in that window has three problems:
+
+- Its version comment says 7, so the coordinator never runs V07 again there.
+- `SendKey` now has `@primary_key {:uuid, UUIDv7, autogenerate: true}`, so Ecto
+  inserts a `uuid` the old table does not have.
+- So **every send with an `idempotency_key` fails** on it.
+
+This covers test databases too, such as `phoenix_kit_inbox_test` on
+`postgres-test` or the one from Codex's review run.
+
+How to fix it:
+
+- **A test database:** `mix test.reset`. The suite builds it again from the
+  real coordinator.
+- **Any other database, if losing V07's data is fine:** roll the module back
+  to 6 and migrate again. This drops the links and the send keys.
+- **Any other database, keeping the rows:**
+
+  ```sql
+  ALTER TABLE <prefix>.phoenix_kit_inbox_send_keys
+    ADD COLUMN uuid uuid NOT NULL DEFAULT <prefix>.uuid_generate_v7();
+  ALTER TABLE <prefix>.phoenix_kit_inbox_send_keys ADD PRIMARY KEY (uuid);
+  ```
+
+  Use `public` when there is no prefix. I ran it on a table in the earlier
+  shape with two rows: each row got its own UUID, and the constraint is
+  `phoenix_kit_inbox_send_keys_pkey`, the same name a fresh V07 creates.
+
+No host can have the earlier shape: no release contains it, and dependencies
+are Hex-only. From the first release that ships V07 it is immutable like
+V01–V06, and a further change is a V08. AGENTS.md ("Database & Migrations") and
+the V07 moduledoc carry the same note.
 
 ### NITPICK — Small edges in the host options — fixed
 
