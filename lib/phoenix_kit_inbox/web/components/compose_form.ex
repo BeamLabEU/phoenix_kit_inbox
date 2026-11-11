@@ -32,6 +32,13 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     * `recipient_sources` — the host's modules implementing
       `PhoenixKitInbox.RecipientSource`, asked next to the module's own
       members; the pipeline has no such option
+    * `member_suggestions` — `false` leaves the module's own members out of
+      the typed suggestions, so the form offers only the host's
+      `recipient_sources` (a host that embeds the form for one object does not
+      want every account with inbox access offered there); anything else,
+      or leaving it out, is today's behaviour. It governs what the form
+      *offers* and nothing else: the send's own checks of who may be written
+      to are the pipeline's and do not change
     * `attachment_picker` — an optional slot for the host's file picker
 
   An attribute left out of a later update keeps its value, so a host may
@@ -51,7 +58,13 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   `:context`) or by hand. A suggestion is named by its id in the list the
   server made; a typed address is an outside one (`:email`), and one that
   names a person or mailbox inside is refused with "choose them from the
-  list". Doubles within a line are dropped; a line stops at the pipeline's
+  list". With `member_suggestions={false}` only the host's sources are asked;
+  the typed address of someone inside stays refused (it is never added as an
+  outside one — the pipeline would refuse the send), with "choose them from the
+  list" when one of the host's sources offers that address for the query, and
+  otherwise with a plain "that address is inside this application and cannot
+  be added here" — the module's members are not in the list to choose from.
+  Doubles within a line are dropped; a line stops at the pipeline's
   limit (20 To, 5 Cc, 5 Bcc). With host sources, a button lists their people
   without a query. After a send that went, the host's sources that export
   `c:PhoenixKitInbox.RecipientSource.remember/4` are told the addresses typed
@@ -227,6 +240,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       |> assign(Map.take(assigns, ~w(id scope around_send authorize_attachments)a))
       |> ensure_upload()
       |> assign_list(assigns, :recipient_sources)
+      |> assign_member_suggestions(assigns)
       |> assign_list(assigns, :attachment_picker)
       |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
 
@@ -280,6 +294,14 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     if Map.has_key?(assigns, key),
       do: assign(socket, key, list_of(assigns[key])),
       else: assign_new(socket, key, fn -> [] end)
+  end
+
+  # Only `false` turns the module's members off; a missing key keeps the
+  # value the form had (true at first), as the other attributes do.
+  defp assign_member_suggestions(socket, assigns) do
+    if Map.has_key?(assigns, :member_suggestions),
+      do: assign(socket, :member_suggestions, assigns.member_suggestions != false),
+      else: assign_new(socket, :member_suggestions, fn -> true end)
   end
 
   defp list_of(list) when is_list(list), do: list
@@ -1400,7 +1422,11 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp has_chip?(chips, key), do: Enum.any?(chips, &(&1.key == key))
 
-  # What the module knows of its own people, then whatever the host brought.
+  # What the module knows of its own people, then whatever the host brought —
+  # or only the host's, when it asked for no members.
+  defp all_sources(%{assigns: %{member_suggestions: false}} = socket),
+    do: socket.assigns.recipient_sources
+
   defp all_sources(socket), do: Enum.uniq([Members | socket.assigns.recipient_sources])
 
   defp context(socket) do
@@ -1453,7 +1479,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     if text == "" do
       socket
     else
-      case typed_entry(socket.assigns.scope, text) do
+      case typed_entry(socket, text) do
         {:ok, entry} -> add_entry(socket, role, entry, manual: true)
         {:error, message} -> assign(socket, recipient_error: {role, message})
       end
@@ -1463,13 +1489,18 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # Typed by hand, a recipient is an outside address. One that names a person
   # or mailbox inside is not taken (the send would refuse it): it is to be
   # chosen from the list.
-  defp typed_entry(scope, text) do
+  #
+  # With the members hidden the list to choose from holds only the host's
+  # people: the old advice stands only when one of them is that address.
+  defp typed_entry(socket, text) do
+    scope = socket.assigns.scope
+
     cond do
       not ComposePipeline.valid_address?(text) ->
         {:error, gettext("That is not an email address.")}
 
       internal?(scope, text) ->
-        {:error, Errors.message({:member_as_email, [text]})}
+        {:error, inside_message(socket, text)}
 
       not Regex.match?(@email_shape, text) ->
         {:error, gettext("That is not an email address.")}
@@ -1477,6 +1508,27 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       true ->
         {:ok, %{address: text, label: nil, route: :email}}
     end
+  end
+
+  defp inside_message(%{assigns: %{member_suggestions: false}} = socket, text) do
+    if offered?(socket, text),
+      do: Errors.message({:member_as_email, [text]}),
+      else: gettext("That address is inside this application and cannot be added here.")
+  end
+
+  defp inside_message(_socket, text), do: Errors.message({:member_as_email, [text]})
+
+  defp offered?(socket, text) do
+    socket
+    |> all_sources()
+    |> RecipientSource.suggest_all(socket.assigns.scope, context(socket), text)
+    |> Enum.any?(fn
+      %{address: address} when is_binary(address) ->
+        String.downcase(address) == String.downcase(text)
+
+      _ ->
+        false
+    end)
   end
 
   defp internal?(scope, text) do
