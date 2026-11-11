@@ -64,10 +64,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   list" when one of the host's sources offers that address for the query, and
   otherwise with a plain "that address is inside this application and cannot
   be added here" — the module's members are not in the list to choose from.
-  The offer is looked for by the typed address as the query and by its address
-  only, so a source that searches by name alone, or names a person by account
-  without an address, gets the plain message: best effort, the refusal is the
-  same.
+  The offer is looked for with the typed address as the query, by the address
+  an entry carries or the account it names, so a source that searches by name
+  alone gets the plain message: best effort, the refusal is the same.
   Doubles within a line are dropped; a line stops at the pipeline's
   limit (20 To, 5 Cc, 5 Bcc). With host sources, a button lists their people
   without a query. After a send that went, the host's sources that export
@@ -147,6 +146,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   use PhoenixKitWeb, :live_component
   use Gettext, backend: PhoenixKitInbox.Gettext
 
+  alias PhoenixKit.Users.Auth
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Errors
@@ -1530,17 +1530,29 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp inside_message(_socket, text), do: Errors.message({:member_as_email, [text]})
 
+  # Best effort, and synchronous like the suggestions themselves: the sources
+  # are asked once more, with the address as the query (a slow or failing
+  # source costs what it costs when typing and answers "no"). An entry is the
+  # address when it carries it, or names the account that owns it.
   defp offered?(socket, text) do
+    address = String.downcase(text)
+    account = account_uuid(address)
+
     socket
     |> all_sources()
     |> RecipientSource.suggest_all(socket.assigns.scope, context(socket), text)
     |> Enum.any?(fn
-      %{address: address} when is_binary(address) ->
-        String.downcase(address) == String.downcase(text)
-
-      _ ->
-        false
+      %{address: found} when is_binary(found) -> String.downcase(found) == address
+      %{user: user} when is_binary(user) -> user == account
+      _ -> false
     end)
+  end
+
+  defp account_uuid(address) do
+    case Auth.get_user_by_email(address) do
+      %{uuid: uuid} -> uuid
+      _ -> nil
+    end
   end
 
   defp internal?(scope, text) do

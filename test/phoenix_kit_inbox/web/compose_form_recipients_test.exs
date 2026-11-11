@@ -40,6 +40,26 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
     end
   end
 
+  defmodule OffersAccountSource do
+    @moduledoc false
+    # A host list that names an account by its uuid, with no address.
+    @behaviour PhoenixKitInbox.RecipientSource
+
+    @impl true
+    def suggest(_scope, context, _query) do
+      for %{label: label, user: user} <- Map.get(context, :offered, []),
+          do: %{label: label, user: user, route: :internal, group: "Client"}
+    end
+  end
+
+  defmodule RaisingSource do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+
+    @impl true
+    def suggest(_scope, _context, _query), do: raise("lookup failed")
+  end
+
   @external ["inbox", "inbox.send_external"]
   @anna %{address: "anna@client.test", label: "Anna Client", route: :email}
 
@@ -274,6 +294,42 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
 
       assert count(view, "#compose-demo-to li[data-route]") == 1
       assert text_of(view, "#compose-demo-to-error") =~ "Choose them from the list"
+    end
+
+    test "with the members hidden, an account the host names without an address is offered too",
+         %{conn: conn} = ctx do
+      view =
+        mount_form(
+          ctx,
+          conn,
+          draft(context: %{offered: [%{label: "Bobby", user: ctx.bob.uuid}]}),
+          %{
+            recipient_sources: [OffersAccountSource],
+            member_suggestions: false
+          }
+        )
+
+      add_by_hand(view, "to", ctx.bob.email)
+
+      assert text_of(view, "#compose-demo-to-error") =~ "Choose them from the list"
+    end
+
+    test "with the members hidden, a source that raises still leaves the plain refusal",
+         %{conn: conn} = ctx do
+      view =
+        mount_form(ctx, conn, draft(), %{
+          recipient_sources: [RaisingSource, ClientSource],
+          member_suggestions: false
+        })
+
+      add_by_hand(view, "to", ctx.bob.email)
+
+      assert count(view, "#compose-demo-to li[data-route]") == 1
+      assert text_of(view, "#compose-demo-to-error") =~ "inside this application"
+
+      # The typed suggestions survive the failing source too.
+      type_into(view, "to", "ann")
+      assert has_element?(view, "#compose-demo-to-suggestions", "Anna Client")
     end
 
     test "an empty entry does nothing", %{conn: conn} = ctx do

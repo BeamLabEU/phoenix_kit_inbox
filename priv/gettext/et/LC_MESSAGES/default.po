@@ -760,7 +760,7 @@ msgstr "Teema: %{subject}"
 msgid "Support"
 msgstr "Tugi"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1516
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1528
 #, elixir-autogen, elixir-format
 msgid "That address is inside this application and cannot be added here."
 msgstr "See aadress on selle rakenduse sees ja seda ei saa siia lisada."
