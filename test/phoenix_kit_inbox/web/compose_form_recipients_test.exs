@@ -353,6 +353,21 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
       refute has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
     end
 
+    test "turning member_suggestions off drops a list that showed members", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      type_into(view, "to", "bobby")
+      assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm,
+        id: "demo",
+        scope: ctx.scope,
+        member_suggestions: false
+      )
+
+      render(view)
+      refute has_element?(view, "#compose-demo-to-suggestions")
+    end
+
     test "picking a suggestion adds a chip with the source's route and label",
          %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft(context: %{clients: [%{@anna | label: "Bobby Client"}]}))

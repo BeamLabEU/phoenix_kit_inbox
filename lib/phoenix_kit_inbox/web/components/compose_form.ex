@@ -64,6 +64,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   list" when one of the host's sources offers that address for the query, and
   otherwise with a plain "that address is inside this application and cannot
   be added here" — the module's members are not in the list to choose from.
+  The offer is looked for by the typed address as the query and by its address
+  only, so a source that searches by name alone, or names a person by account
+  without an address, gets the plain message: best effort, the refusal is the
+  same.
   Doubles within a line are dropped; a line stops at the pipeline's
   limit (20 To, 5 Cc, 5 Bcc). With host sources, a button lists their people
   without a query. After a send that went, the host's sources that export
@@ -298,10 +302,18 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   # Only `false` turns the module's members off; a missing key keeps the
   # value the form had (true at first), as the other attributes do.
+  # A change of the value drops the typed list on screen: it was made under
+  # the other setting and its ids must not outlive it.
   defp assign_member_suggestions(socket, assigns) do
-    if Map.has_key?(assigns, :member_suggestions),
-      do: assign(socket, :member_suggestions, assigns.member_suggestions != false),
-      else: assign_new(socket, :member_suggestions, fn -> true end)
+    if Map.has_key?(assigns, :member_suggestions) do
+      value = assigns.member_suggestions != false
+
+      if Map.get(socket.assigns, :member_suggestions, true) == value,
+        do: assign(socket, :member_suggestions, value),
+        else: assign(socket, member_suggestions: value, list: nil)
+    else
+      assign_new(socket, :member_suggestions, fn -> true end)
+    end
   end
 
   defp list_of(list) when is_list(list), do: list
