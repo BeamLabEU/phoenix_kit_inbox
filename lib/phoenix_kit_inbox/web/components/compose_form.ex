@@ -32,6 +32,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     * `recipient_sources` — the host's modules implementing
       `PhoenixKitInbox.RecipientSource`, asked next to the module's own
       members; the pipeline has no such option
+    * `own_upload` — `false` takes the form's own «Upload files» control
+      away, for a host whose `attachment_picker` already uploads (one button
+      to add files, not two); anything else, or leaving it out, is today's
+      behaviour. It governs what the form *shows*: the slot is rendered
+      either way, the files the host's picker names are checked as ever, and
+      the limits of the send are the pipeline's
     * `attachment_picker` — an optional slot for the host's file picker
 
   An attribute left out of a later update keeps its value, so a host may
@@ -227,6 +233,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       |> assign(Map.take(assigns, ~w(id scope around_send authorize_attachments)a))
       |> ensure_upload()
       |> assign_list(assigns, :recipient_sources)
+      |> assign_own_upload(assigns)
       |> assign_list(assigns, :attachment_picker)
       |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
 
@@ -280,6 +287,14 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     if Map.has_key?(assigns, key),
       do: assign(socket, key, list_of(assigns[key])),
       else: assign_new(socket, key, fn -> [] end)
+  end
+
+  # Only `false` takes the form's own upload control away; a missing key keeps
+  # the value the form had (true at first), as the other attributes do.
+  defp assign_own_upload(socket, assigns) do
+    if Map.has_key?(assigns, :own_upload),
+      do: assign(socket, :own_upload, assigns.own_upload != false),
+      else: assign_new(socket, :own_upload, fn -> true end)
   end
 
   defp list_of(list) when is_list(list), do: list
@@ -1849,6 +1864,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         </p>
         <div class="flex flex-wrap items-center gap-1">
           <form
+            :if={@own_upload}
             id={"compose-#{@id}-upload-form"}
             phx-change="validate_upload"
             phx-target={@myself}
