@@ -40,3 +40,19 @@ account for that contract.
 
 Final suite and gate results for this review batch are recorded in PR #15's
 CODEX_REVIEW.md.
+
+## Follow-up on 2026-11-11
+
+### BUG - MEDIUM — An open picker could link to a newly selected object
+
+Changing the host's effective link target while the picker was open preserved
+the picker and its candidate buttons. A click from that picker could then
+link the message to the new object. The component now closes the picker when
+its effective target changes. The regression checks that a click from the
+old picker is ignored and a fresh choice links to the new object.
+
+### IMPROVEMENT - MEDIUM — Keep the explorer fixtures within the cookie limit
+
+Five tests hit the signed session's 4 KiB limit with PhoenixKit 3.5.0 before
+the explorer could mount. The shared mount helper now uses the test host's
+server-side stash for the scope, including in the two-explorer case.

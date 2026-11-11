@@ -33,3 +33,34 @@ own tenant/process context from scope and context.
 
 Final suite and gate results for this review batch are recorded in PR #15's
 CODEX_REVIEW.md.
+
+## Follow-up on 2026-11-11
+
+### BUG - HIGH — A second recipient lookup could change the route
+
+The pipeline checked the recipient circle and account inside the host wrapper.
+The send then looked up the same address again. A change in membership between
+lookups could turn a checked internal recipient into an external address or a
+different mailbox. The send now checks and uses the same lookup results.
+It creates a recipient's personal mailbox after the route check passes.
+The regression changes the host filter's answer after the first lookup and
+verifies that the message is delivered only to the chosen account.
+
+### BUG - MEDIUM — A wrapper could retry an interrupted send callback
+
+The callback recorded its result after delivery returned. A wrapper that caught
+an interruption could invoke it again, even if the first call had committed
+before the interruption. The callback now records the attempt before delivery
+and replaces that record with the result when delivery returns. The regression
+catches an interruption inside the wrapper and verifies that a second call
+does not deliver a message.
+
+### Follow-up validation
+
+All three new regressions failed before their fixes. The full suite passed
+against PhoenixKit 3.0.0 from Hex and the local PhoenixKit 3.5.0 checkout
+(`ebffa12c2`), with 1,313 tests, zero failures and one expected skip in each
+run. Each core used a fresh PostgreSQL test database.
+
+`mix precommit` passed compilation with warnings as errors, the Hex audit,
+formatting, strict Credo and Dialyzer with its five existing suppressions.

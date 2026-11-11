@@ -802,7 +802,8 @@ defmodule PhoenixKitInbox.Messages do
          :ok <- ensure_active(mailbox),
          {:ok, sender_record} <- sender_options(scope, mailbox, attrs),
          sender_record = Map.merge(sender_record, host_record),
-         {:ok, recipients, externals} <- resolve_recipients(attrs),
+         {:ok, recipients, externals} <-
+           resolve_recipients(attrs, Keyword.get(opts, :check_recipient_routes)),
          {:ok, externals} <- admit_externals(scope, mailbox, sender_record, externals),
          # Only an email to outsiders can be sent again, and so needs its HTML.
          sender_record = keep_html_for_externals(sender_record, externals),
@@ -1391,8 +1392,7 @@ defmodule PhoenixKitInbox.Messages do
 
   @doc """
   The way each of `addresses` would travel if sent now, by the send path's own
-  lookup (`Mailboxes.fetch_mailbox_by_recipient/2`, the one `send_message/4`
-  resolves recipients with, so the two cannot disagree): `:internal` when the
+  lookup (`Mailboxes.fetch_mailbox_by_recipient/2`): `:internal` when the
   text names a member or a shared mailbox (`@username`, an email, a mailbox
   name) — with the `mailbox_uuid` it lands in, or `nil` for a member who has no
   personal mailbox yet (the send makes it; this does not) — else `:email`.
@@ -1416,67 +1416,66 @@ defmodule PhoenixKitInbox.Messages do
   @spec resolve_recipient_routes(Scope.t() | nil, [String.t()]) :: [
           %{address: String.t(), route: :internal | :email, mailbox_uuid: binary() | nil}
         ]
-  def resolve_recipient_routes(scope, addresses) do
-    scope
-    |> resolve_recipient_targets(addresses)
-    |> Enum.map(&Map.delete(&1, :user_uuid))
-  end
-
-  @doc false
-  # `resolve_recipient_routes/2` plus whom each entry reaches: `:user_uuid` is
-  # the member an inside entry lands with (the owner of the personal mailbox,
-  # or the member who has none yet), `nil` for a shared mailbox or the
-  # outside. For `ComposePipeline`, which must see that an account it chose is
-  # reached as that account — and not, its handle falling through to the next
-  # lookup when the account is no member, as a shared mailbox of that name.
-  @spec resolve_recipient_targets(Scope.t() | nil, [String.t()]) :: [
-          %{
-            address: String.t(),
-            route: :internal | :email,
-            mailbox_uuid: binary() | nil,
-            user_uuid: binary() | nil
-          }
-        ]
-  def resolve_recipient_targets(%Scope{} = scope, addresses) when is_list(addresses) do
+  def resolve_recipient_routes(%Scope{} = scope, addresses) when is_list(addresses) do
     if Scope.can?(scope, "inbox"),
       do: for(address <- addresses, is_binary(address), do: recipient_route(address)),
       else: []
   end
 
-  def resolve_recipient_targets(_scope, _addresses), do: []
+  def resolve_recipient_routes(_scope, _addresses), do: []
 
   defp recipient_route(address) do
-    case parse_recipient_list(address) do
-      [entry] ->
-        case Mailboxes.fetch_mailbox_by_recipient(entry, create: false) do
-          {:ok, %Mailbox{} = mailbox} ->
-            %{
-              address: address,
-              route: :internal,
-              mailbox_uuid: mailbox.uuid,
-              user_uuid: if(mailbox.kind == "user", do: mailbox.owner_uuid)
-            }
+    lookup =
+      case parse_recipient_list(address) do
+        [entry] -> Mailboxes.fetch_mailbox_by_recipient(entry, create: false)
+        _ -> {:error, :recipient_not_found}
+      end
 
-          {:ok, {:member, user}} ->
-            %{address: address, route: :internal, mailbox_uuid: nil, user_uuid: user.uuid}
+    address |> recipient_target(lookup) |> Map.delete(:user_uuid)
+  end
 
-          {:error, _} ->
-            %{address: address, route: :email, mailbox_uuid: nil, user_uuid: nil}
-        end
+  defp recipient_target(address, {:ok, %Mailbox{} = mailbox}) do
+    %{
+      address: address,
+      route: :internal,
+      mailbox_uuid: mailbox.uuid,
+      user_uuid: if(mailbox.kind == "user", do: mailbox.owner_uuid)
+    }
+  end
 
-      _none_or_several ->
-        %{address: address, route: :email, mailbox_uuid: nil, user_uuid: nil}
+  defp recipient_target(address, {:ok, {:member, user}}),
+    do: %{address: address, route: :internal, mailbox_uuid: nil, user_uuid: user.uuid}
+
+  defp recipient_target(address, {:error, _}),
+    do: %{address: address, route: :email, mailbox_uuid: nil, user_uuid: nil}
+
+  # ComposePipeline checks the actual targets. Use the same lookups for
+  # delivery so a changed recipient circle cannot redirect the message.
+  # A member's missing mailbox is created only after the check passes.
+  defp resolve_recipients(attrs, check_routes) do
+    create? = is_nil(check_routes)
+
+    lookups =
+      for role <- @recipient_roles, entry <- parse_recipient_list(Map.get(attrs, role)) do
+        {role, entry, Mailboxes.fetch_mailbox_by_recipient(entry, create: create?)}
+      end
+
+    with :ok <- check_recipient_routes(lookups, check_routes) do
+      classify_recipients(lookups)
     end
   end
 
-  defp resolve_recipients(attrs) do
-    parsed =
-      for role <- ~w(to cc bcc),
-          entry <- parse_recipient_list(Map.get(attrs, role)),
-          do: {role, entry}
+  defp check_recipient_routes(_lookups, nil), do: :ok
 
+  defp check_recipient_routes(lookups, check) when is_function(check, 1) do
+    check.(Enum.map(lookups, fn {_role, entry, lookup} -> recipient_target(entry, lookup) end))
+  end
+
+  defp check_recipient_routes(_lookups, _check), do: {:error, :route_check_failed}
+
+  defp classify_recipients(lookups) do
     {resolved, external, unknown, ambiguous} =
-      Enum.reduce(parsed, {[], [], [], []}, &resolve_recipient/2)
+      Enum.reduce(lookups, {[], [], [], []}, &classify_recipient/2)
 
     case {unknown, ambiguous} do
       {[], []} ->
@@ -1491,8 +1490,15 @@ defmodule PhoenixKitInbox.Messages do
     end
   end
 
-  defp resolve_recipient({role, entry}, {ok, external, unknown, ambiguous}) do
-    case Mailboxes.fetch_mailbox_by_recipient(entry) do
+  defp classify_recipient({role, entry, {:ok, {:member, user}}}, acc) do
+    case Mailboxes.ensure_user_mailbox(user) do
+      {:ok, mailbox} -> classify_recipient({role, entry, {:ok, mailbox}}, acc)
+      {:error, _} -> add_unknown_recipient(acc, entry)
+    end
+  end
+
+  defp classify_recipient({role, entry, lookup}, {ok, external, unknown, ambiguous}) do
+    case lookup do
       {:ok, mailbox} ->
         {[%{role: role, mailbox: mailbox} | ok], external, unknown, ambiguous}
 
@@ -1508,6 +1514,9 @@ defmodule PhoenixKitInbox.Messages do
           else: {ok, external, [entry | unknown], ambiguous}
     end
   end
+
+  defp add_unknown_recipient({ok, external, unknown, ambiguous}, entry),
+    do: {ok, external, [entry | unknown], ambiguous}
 
   # One row per address (case-insensitive), with the stronger role, in the
   # order they were typed.

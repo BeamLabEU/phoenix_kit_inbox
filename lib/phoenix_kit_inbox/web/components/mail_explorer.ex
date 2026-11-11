@@ -120,6 +120,7 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorer do
 
   def update(assigns, socket) do
     assigns = assigns |> normalize_filter() |> normalize_link_to()
+    previous_target = link_target(socket.assigns)
 
     stale? =
       not Map.has_key?(socket.assigns, :threads) or
@@ -149,9 +150,15 @@ defmodule PhoenixKitInbox.Web.Components.MailExplorer do
       |> then(&assign(&1, :folder, offered_folder(&1.assigns.folder, &1.assigns.folders)))
 
     cond do
-      stale? -> {:ok, socket |> assign(:pages, 1) |> load()}
-      reask? -> {:ok, reask_host(socket)}
-      true -> {:ok, socket}
+      stale? ->
+        picker = if link_target(socket.assigns) == previous_target, do: socket.assigns.picker
+        {:ok, socket |> assign(pages: 1, picker: picker) |> load()}
+
+      reask? ->
+        {:ok, reask_host(socket)}
+
+      true ->
+        {:ok, socket}
     end
   end
 

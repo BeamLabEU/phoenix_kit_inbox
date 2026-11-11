@@ -7,6 +7,7 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Schemas.Delivery
   alias PhoenixKitInbox.Schemas.MailboxGrant
+  alias PhoenixKitInbox.Test.ComponentHostLive
   alias PhoenixKitInbox.Test.Repo
   alias PhoenixKitInbox.Web.Components.MailExplorer
 
@@ -90,20 +91,27 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
 
   defp handle(user), do: "@" <> user.username
 
-  defp mount_explorer(ctx, conn, extra \\ %{}) do
+  defp mount_explorer(ctx, conn, extra \\ %{}, session \\ %{}) do
     assigns =
       Map.merge(
         %{id: "demo", scope: ctx.alice_scope, filter: [@order], title: "Order mail"},
         extra
       )
 
-    conn =
-      Plug.Test.init_test_session(conn, %{
-        "component" => MailExplorer,
-        "assigns" => assigns,
-        "test_pid" => self()
-      })
+    scope = ComponentHostLive.stash(assigns.scope)
+    on_exit(fn -> ComponentHostLive.unstash(scope) end)
 
+    session =
+      Map.merge(
+        %{
+          "component" => MailExplorer,
+          "assigns" => %{assigns | scope: scope},
+          "test_pid" => self()
+        },
+        session
+      )
+
+    conn = Plug.Test.init_test_session(conn, session)
     {:ok, view, _html} = live(conn, "/component-host")
     view
   end
@@ -723,19 +731,12 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
           links: [@order, %{kind: "order", ref: "o-2"}]
         )
 
-      assigns = %{id: "demo", scope: ctx.alice_scope, filter: [@order]}
-
-      conn =
-        Plug.Test.init_test_session(conn, %{
-          "component" => MailExplorer,
-          "assigns" => assigns,
-          "second_assigns" => %{id: "again", filter: [%{kind: "order", ref: "o-2"}]},
-          "test_pid" => self()
-        })
-
       # Two explorers showing the same letter: LiveViewTest raises on a
       # duplicate id.
-      {:ok, view, _html} = live(conn, "/component-host")
+      view =
+        mount_explorer(ctx, conn, %{}, %{
+          "second_assigns" => %{id: "again", filter: [%{kind: "order", ref: "o-2"}]}
+        })
 
       for id <- ["demo", "again"] do
         assert has_element?(view, "#mail-explorer-#{id}")
@@ -1028,6 +1029,31 @@ defmodule PhoenixKitInbox.Web.MailExplorerTest do
       view |> element("#mail-picker-demo button[phx-value-uuid='#{free.uuid}']") |> render_click()
 
       assert [%{kind: "order", ref: "o-2", source: "manual"}] = Links.for_message(free.uuid)
+    end
+
+    test "changing the link target closes the picker and discards its choices",
+         %{conn: conn} = ctx do
+      free = mail(ctx, :bob, handle(ctx.alice), %{"subject" => "Free"})
+
+      view =
+        mount_explorer(ctx, conn, %{
+          filter: [@order, @other_order],
+          link_to: @order,
+          can_link?: {:capture, __MODULE__, :allow_all, 3}
+        })
+
+      candidate = "#mail-picker-demo button[phx-value-uuid='#{free.uuid}']"
+      view |> element("button[phx-click=open_picker]") |> render_click()
+      assert has_element?(view, candidate)
+
+      send(view.pid, {:test_assigns, %{link_to: @other_order}})
+      refute has_element?(view, "#mail-picker-demo")
+      forge(view, "link", %{"uuid" => free.uuid})
+      assert Links.for_message(free.uuid) == []
+
+      view |> element("button[phx-click=open_picker]") |> render_click()
+      view |> element(candidate) |> render_click()
+      assert [%{ref: "o-2"}] = Links.for_message(free.uuid)
     end
 
     test "one object in the filter is the target without link_to, whatever its keys",

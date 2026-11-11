@@ -18,6 +18,7 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Schemas.Delivery
+  alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Web.Components.ComposeDraft
   alias PhoenixKitInbox.Web.Components.ComposePipeline
@@ -31,6 +32,14 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
     # has put them in the process (as a host's wrapper does).
     def addressable?(user),
       do: String.starts_with?(user.username, "staff_") or user.uuid in Process.get(:clients, [])
+
+    def addressable_once?(user), do: Process.delete({:addressable, user.uuid}) == true
+
+    def interrupted_lookup?(user) do
+      if Process.delete({:interrupt_lookup, user.uuid}),
+        do: throw(:lookup_interrupted),
+        else: true
+    end
   end
 
   setup :outbound_setup
@@ -416,6 +425,34 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
                )
 
       assert mailbox == ctx.bob_mb.uuid
+    end
+
+    test "the checked recipient is the recipient used for delivery", ctx do
+      Application.put_env(
+        :phoenix_kit_inbox,
+        :recipient_filter,
+        {ClientFilter, :addressable_once?}
+      )
+
+      on_exit(fn -> Application.delete_env(:phoenix_kit_inbox, :recipient_filter) end)
+
+      # The client has no personal mailbox yet. If the send repeats the
+      # lookup after checking its route, the email would be treated as external.
+      Process.put({:addressable, ctx.client.uuid}, true)
+
+      draft =
+        draft(ctx,
+          from: {:identity, ctx.common.uuid},
+          to: [%{address: ctx.client.email, route: :internal}]
+        )
+
+      assert {:ok, %Message{external_status: :none} = message} = run(ctx, %{}, draft)
+      client_mailbox = Repo.get_by!(Mailbox, kind: "user", owner_uuid: ctx.client.uuid)
+
+      assert Repo.get_by(Delivery, message_uuid: message.uuid, role: "to").mailbox_uuid ==
+               client_mailbox.uuid
+
+      refute_received {:outbound, _, _, _}
     end
 
     test "a user is addressed by uuid, by the way of its route", ctx do
@@ -888,6 +925,25 @@ defmodule PhoenixKitInbox.ComposePipelineTest do
       assert {:ok, message} = run(ctx, %{}, draft(ctx), %{around_send: twice})
       assert_received {:answers, {:ok, ^message}, {:ok, ^message}}
       assert message_count() == 1
+    end
+
+    test "a wrapper that catches an interrupted send cannot run it again", ctx do
+      Application.put_env(
+        :phoenix_kit_inbox,
+        :recipient_filter,
+        {ClientFilter, :interrupted_lookup?}
+      )
+
+      on_exit(fn -> Application.delete_env(:phoenix_kit_inbox, :recipient_filter) end)
+
+      wrapper = fn _scope, draft, send_fun ->
+        Process.put({:interrupt_lookup, ctx.bob.uuid}, true)
+        assert catch_throw(send_fun.(draft)) == :lookup_interrupted
+        send_fun.(draft)
+      end
+
+      assert {:error, :send_failed} = run(ctx, %{}, draft(ctx), %{around_send: wrapper})
+      assert message_count() == 0
     end
 
     test "send_fun called from another process is an error, not a send", ctx do

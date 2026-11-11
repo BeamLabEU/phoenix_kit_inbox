@@ -361,6 +361,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
             result
 
           nil ->
+            # If the wrapper catches an exception from delivery, a second
+            # call still cannot send. The first may have committed already.
+            Process.put(key, {:sent, {:error, :send_failed}})
             result = deliver(scope, verified, draft, given)
             Process.put(key, {:sent, result})
             result
@@ -1100,11 +1103,13 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
     with {:ok, final} <- final_draft(final, given),
          {:ok, text} <- text(final, %{}),
          {:ok, html} <- html_body(final.html_body),
-         {:ok, items} <- normalize_attachments(final.attachments),
-         :ok <- check_routes(scope, all(verified.recipients)) do
-      attrs = attrs(verified, given, text)
-      opts = opts(verified, given, html, items)
-      Messages.send_message(scope, verified.sender.mailbox, attrs, opts)
+         {:ok, items} <- normalize_attachments(final.attachments) do
+      Messages.send_message(
+        scope,
+        verified.sender.mailbox,
+        attrs(verified, given, text),
+        opts(verified, given, html, items)
+      )
     end
   end
 
@@ -1134,10 +1139,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
 
   defp html_body(_), do: {:error, :invalid_html_body}
 
-  defp check_routes(scope, recipients) do
-    resolved = Messages.resolve_recipient_targets(scope, Enum.map(recipients, & &1.address))
-
-    if length(resolved) == length(recipients) do
+  defp check_routes(recipients, resolved) do
+    if Enum.map(recipients, & &1.address) == Enum.map(resolved, & &1.address) do
       recipients
       |> Enum.zip(resolved)
       |> Enum.filter(fn {chosen, found} -> differs?(chosen, found) end)
@@ -1150,7 +1153,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   # Another route, or — for an account chosen by the inside route — someone
   # else inside: the account's handle names a shared mailbox too, and the
   # account is no member here (inactive, or outside the circle of this
-  # process), so the lookup that comes next takes the handle.
+  # process), so the lookup takes the handle.
   defp differs?(%{route: route}, %{route: found}) when route != found, do: true
 
   defp differs?(%{route: :internal, user: user}, %{user_uuid: found}) when is_binary(user),
@@ -1194,7 +1197,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   end
 
   defp opts(verified, given, html, items) do
+    chosen = all(verified.recipients)
+
     [
+      check_recipient_routes: &check_routes(chosen, &1),
       links: if(is_list(given.links), do: given.links, else: []),
       html_body: html,
       reply_to_trusted: trusted_reply_to(verified.reply_to),
