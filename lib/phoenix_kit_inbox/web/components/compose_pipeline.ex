@@ -179,7 +179,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   reach the person: any other string, and a reason nobody wrote a message for,
   show as "could not be sent". See `PhoenixKitInbox.Errors.user_message/1`.
 
-  The pipeline does not call `PhoenixKitInbox.RecipientSource.remember/4`:
+  The pipeline does not call `c:PhoenixKitInbox.RecipientSource.remember/4`:
   the form does, after `run/4` answered `{:ok, message}`, outside the
   wrapper and the pipeline's answer. A host that sends without the form
   calls `PhoenixKitInbox.RecipientSource.remember_all/4` itself, if it wants
