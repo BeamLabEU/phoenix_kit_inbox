@@ -5,6 +5,60 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.5.0 - 2026-11-11
+
+PRs #12–#15 and their Claude and Codex review fixes.
+
+### Upgrade notes
+
+- **One new migration, V07.** Run `mix phoenix_kit.update`, then
+  `mix ecto.migrate`. It adds `phoenix_kit_inbox_message_links`,
+  `phoenix_kit_inbox_send_keys` and the `personalize_from_name` column of
+  `phoenix_kit_inbox_identities` (off for every existing row).
+- A database migrated from `main` with V07 before 2026-11-03 must be repaired
+  first. No release ever shipped that earlier V07. The repair is in
+  `AGENTS.md`, under "Database & Migrations".
+
+### Added
+
+- **Links from messages to objects of the host** (#12):
+  `send_message/4` takes `links: [%{kind:, ref:}]`. A reply inherits the links
+  of its conversation. Host resolvers (`LinkResolver`) can find objects named
+  in the subject.
+- **Idempotent sends** (#12): `idempotency_key:` makes a repeated send
+  return the first message and do nothing else.
+- **More server-side send options** (#12): `reply_to_trusted:` and
+  `html_body:` (the HTML of the email to external recipients, never shown to
+  readers). A bound shared identity can put the sender's name in its From
+  name (`personalize_from_name`).
+- `Messages.resolve_recipient_routes/2` and `Outbound.preview/2` tell a host
+  what a send would do before it runs.
+- **The mail of an object** (#13): `ObjectMail` lists an object's mail as one
+  viewer may read it. The embeddable `Web.Components.MailExplorer` shows that
+  list, has a picker for linking a message to the object, and updates live.
+- **Embedded compose** (#14, #15): `ComposeDraft`, `ComposePipeline.run/4`
+  (re-checks on the server a send made from a host's own form) and the
+  `RecipientSource` behaviour (suggestions for To/Cc/Bcc). The
+  `Web.Components.ComposeForm` LiveComponent handles recipient chips, the
+  sender, uploads and a supervised send task. See "Embedding" in the README.
+
+### Fixed
+
+- A change to the recipient circle between `ComposePipeline`'s route check and
+  the send could send a checked internal recipient to the wrong route or
+  mailbox. The check and the send now use the same lookup.
+- A host wrapper that caught an interrupted `send_fun` could call it again and
+  send twice.
+- An open MailExplorer picker could link a message to an object the host had
+  just changed to. The picker now closes when its target changes.
+- Review fixes for PRs #10–#15 (ComposeForm upload handling with several
+  forms on one page, the route of accounts named by handle, recipient input
+  with a NUL byte or invalid UTF-8, folder-name limits).
+
+### Changed
+
+- Ecto 3.14.3 in the lock file (CVE-2026-118391).
+
 ## 0.4.0 - 2026-10-27
 
 ### Changed
