@@ -760,6 +760,11 @@ msgstr ""
 msgid "Support"
 msgstr ""
 
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1528
+#, elixir-autogen, elixir-format
+msgid "That address is inside this application and cannot be added here."
+msgstr ""
+
 #: lib/phoenix_kit_inbox/errors.ex:135
 #, elixir-autogen, elixir-format
 msgid "That connection can't send email."

@@ -357,8 +357,11 @@ Pages of the host can carry the module's parts. Everything below checks the view
   around_send={&MyHost.around_send/3}
   authorize_attachments={&MyHost.authorize_attachments/3}
   recipient_sources={[MyHost.ClientSource]}
+  member_suggestions={false}
 />
 ```
+
+`member_suggestions={false}` (optional, default `true`) leaves the module's own members out of the typed suggestions, so the form offers only your `recipient_sources`; only the literal `false` counts. The send's own recipient checks do not change.
 
 `ComposeForm` is a view over `PhoenixKitInbox.Web.Components.ComposePipeline`; its moduledoc lists what the host must do (handle `{:inbox_compose, id, _}`, close the form after `{:sent, message}`, build the draft outside `render`, and after `{:inbox_access_changed, _}` send it `send_update(ComposeForm, id: id, refresh: true)` so it reads its senders again). Each form has an upload of its own (`"inbox_compose_<id>"`), so several can share a page. `PhoenixKitInbox.TaskSupervisor` is started by PhoenixKit itself: do not add it to your tree.
 

@@ -28,6 +28,38 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
     end
   end
 
+  defmodule OffersMemberSource do
+    @moduledoc false
+    # A host list that names an account of the application by its address.
+    @behaviour PhoenixKitInbox.RecipientSource
+
+    @impl true
+    def suggest(_scope, context, _query) do
+      for %{label: label, address: address} <- Map.get(context, :offered, []),
+          do: %{label: label, address: address, route: :internal, group: "Client"}
+    end
+  end
+
+  defmodule OffersAccountSource do
+    @moduledoc false
+    # A host list that names an account by its uuid, with no address.
+    @behaviour PhoenixKitInbox.RecipientSource
+
+    @impl true
+    def suggest(_scope, context, _query) do
+      for %{label: label, user: user} <- Map.get(context, :offered, []),
+          do: %{label: label, user: user, route: :internal, group: "Client"}
+    end
+  end
+
+  defmodule RaisingSource do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+
+    @impl true
+    def suggest(_scope, _context, _query), do: raise("lookup failed")
+  end
+
   @external ["inbox", "inbox.send_external"]
   @anna %{address: "anna@client.test", label: "Anna Client", route: :email}
 
@@ -223,6 +255,83 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
       assert text_of(view, "#compose-demo-to-error") =~ "Choose them from the list"
     end
 
+    test "with the members hidden, a member's address the host does not offer is refused plainly",
+         %{conn: conn} = ctx do
+      view =
+        mount_form(ctx, conn, draft(), %{
+          recipient_sources: [ClientSource],
+          member_suggestions: false
+        })
+
+      add_by_hand(view, "to", ctx.bob.email)
+
+      assert count(view, "#compose-demo-to li[data-route]") == 1
+      error = text_of(view, "#compose-demo-to-error")
+      assert error =~ "inside this application"
+      refute error =~ "Choose them from the list"
+
+      # An outside address still goes through.
+      add_by_hand(view, "to", "new.person@example.com")
+
+      assert has_element?(
+               view,
+               ~s(#compose-demo-to li[data-route=email]),
+               "new.person@example.com"
+             )
+    end
+
+    test "with the members hidden, a member's address the host offers says to choose them from the list",
+         %{conn: conn} = ctx do
+      offered = [%{label: "Bobby at the client", address: String.upcase(ctx.bob.email)}]
+
+      view =
+        mount_form(ctx, conn, draft(context: %{offered: offered}), %{
+          recipient_sources: [OffersMemberSource],
+          member_suggestions: false
+        })
+
+      add_by_hand(view, "to", ctx.bob.email)
+
+      assert count(view, "#compose-demo-to li[data-route]") == 1
+      assert text_of(view, "#compose-demo-to-error") =~ "Choose them from the list"
+    end
+
+    test "with the members hidden, an account the host names without an address is offered too",
+         %{conn: conn} = ctx do
+      view =
+        mount_form(
+          ctx,
+          conn,
+          draft(context: %{offered: [%{label: "Bobby", user: ctx.bob.uuid}]}),
+          %{
+            recipient_sources: [OffersAccountSource],
+            member_suggestions: false
+          }
+        )
+
+      add_by_hand(view, "to", ctx.bob.email)
+
+      assert text_of(view, "#compose-demo-to-error") =~ "Choose them from the list"
+    end
+
+    test "with the members hidden, a source that raises still leaves the plain refusal",
+         %{conn: conn} = ctx do
+      view =
+        mount_form(ctx, conn, draft(), %{
+          recipient_sources: [RaisingSource, ClientSource],
+          member_suggestions: false
+        })
+
+      add_by_hand(view, "to", ctx.bob.email)
+
+      assert count(view, "#compose-demo-to li[data-route]") == 1
+      assert text_of(view, "#compose-demo-to-error") =~ "inside this application"
+
+      # The typed suggestions survive the failing source too.
+      type_into(view, "to", "ann")
+      assert has_element?(view, "#compose-demo-to-suggestions", "Anna Client")
+    end
+
     test "an empty entry does nothing", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft())
       add_by_hand(view, "to", "   ")
@@ -250,6 +359,69 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
       # Grouped under the headings the sources gave.
       assert has_element?(view, "#compose-demo-to-suggestions", "Client")
       assert has_element?(view, "#compose-demo-to-suggestions", "People and shared mailboxes")
+    end
+
+    test "with member_suggestions off only the host's sources are asked", %{conn: conn} = ctx do
+      view =
+        mount_form(ctx, conn, draft(context: %{clients: [%{@anna | label: "Bobby Client"}]}), %{
+          recipient_sources: [ClientSource],
+          member_suggestions: false
+        })
+
+      type_into(view, "to", "bobby")
+
+      assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Client")
+      refute has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
+      refute has_element?(view, "#compose-demo-to-suggestions", "People and shared mailboxes")
+    end
+
+    test "member_suggestions on, or left out, asks the members too", %{conn: conn} = ctx do
+      for extra <- [
+            %{recipient_sources: [ClientSource], member_suggestions: true},
+            %{recipient_sources: [ClientSource], member_suggestions: nil}
+          ] do
+        view = mount_form(ctx, conn, draft(), extra)
+        type_into(view, "to", "bobby")
+        assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
+      end
+    end
+
+    test "member_suggestions off without host sources suggests nobody", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(), %{member_suggestions: false})
+
+      type_into(view, "to", "bobby")
+
+      refute has_element?(view, "#compose-demo-to-suggestions")
+    end
+
+    test "member_suggestions keeps its value over an update that leaves it out",
+         %{conn: conn} = ctx do
+      view =
+        mount_form(ctx, conn, draft(), %{
+          recipient_sources: [ClientSource],
+          member_suggestions: false
+        })
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm, id: "demo", scope: ctx.scope)
+      _ = render(view)
+
+      type_into(view, "to", "bobby")
+      refute has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
+    end
+
+    test "turning member_suggestions off drops a list that showed members", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      type_into(view, "to", "bobby")
+      assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm,
+        id: "demo",
+        scope: ctx.scope,
+        member_suggestions: false
+      )
+
+      render(view)
+      refute has_element?(view, "#compose-demo-to-suggestions")
     end
 
     test "picking a suggestion adds a chip with the source's route and label",
