@@ -46,6 +46,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       either way, the files the host's picker names are checked as ever, and
       the limits of the send are the pipeline's
     * `attachment_picker` — an optional slot for the host's file picker
+    * `footer_start` — an optional slot rendered at the start of the form's
+      last row, on the other side from Cancel and Send: a host that opens the
+      form as the second step of its own window puts its «Back» there. It is
+      rendered with `%{sending: sending?}`, so the host can disable its
+      control while a send runs; what the control does is the host's (the
+      form only shows it)
 
   An attribute left out of a later update keeps its value, so a host may
   `send_update/3` the form with only what changed. Inbox's own access events
@@ -253,6 +259,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       |> assign_member_suggestions(assigns)
       |> assign_own_upload(assigns)
       |> assign_list(assigns, :attachment_picker)
+      |> assign_list(assigns, :footer_start)
       |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
 
     draft = normalize_draft(assigns[:draft] || socket.assigns[:source_draft])
@@ -1971,7 +1978,11 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         </p>
       </div>
 
-      <div class="flex justify-end gap-2">
+      <div class="flex items-center gap-2">
+        <div :if={@footer_start != []} id={"compose-#{@id}-footer-start"}>
+          {render_slot(@footer_start, %{sending: @sending})}
+        </div>
+        <span class="flex-1"></span>
         <.button
           type="button"
           variant="ghost"
