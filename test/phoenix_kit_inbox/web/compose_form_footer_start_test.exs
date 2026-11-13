@@ -20,12 +20,25 @@ defmodule PhoenixKitInbox.Web.ComposeFormFooterStartTest do
 
     @impl true
     def mount(_params, session, socket) do
+      test_pid = session["test_pid"]
+
       {:ok,
        assign(socket,
          scope: fetch(session["scope"]),
          draft: fetch(session["draft"]),
          back?: session["back?"],
-         test_pid: session["test_pid"]
+         test_pid: test_pid,
+         # Holds every send until the test says :go, so a test can look at
+         # the form while a send runs.
+         around_send: fn _scope, draft, send_fun ->
+           send(test_pid, {:around, self()})
+
+           receive do
+             :go -> send_fun.(draft)
+           after
+             5_000 -> {:error, :never_released}
+           end
+         end
        )}
     end
 
@@ -33,7 +46,13 @@ defmodule PhoenixKitInbox.Web.ComposeFormFooterStartTest do
     def render(assigns) do
       ~H"""
       <%= if @back? do %>
-        <.live_component module={ComposeForm} id="demo" scope={@scope} draft={@draft}>
+        <.live_component
+          module={ComposeForm}
+          id="demo"
+          scope={@scope}
+          draft={@draft}
+          around_send={@around_send}
+        >
           <:footer_start :let={state}>
             <button
               type="button"
@@ -98,6 +117,14 @@ defmodule PhoenixKitInbox.Web.ComposeFormFooterStartTest do
     view
   end
 
+  defp eventually(check, tries \\ 40) do
+    cond do
+      check.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(50) && eventually(check, tries - 1)
+    end
+  end
+
   test "without the slot the last row holds Cancel and Send alone", %{conn: conn} = ctx do
     view = mount_page(ctx, conn, false)
 
@@ -109,14 +136,40 @@ defmodule PhoenixKitInbox.Web.ComposeFormFooterStartTest do
        %{conn: conn} = ctx do
     view = mount_page(ctx, conn, true)
 
-    assert has_element?(view, "#compose-demo-footer-start #host-back")
+    # The form's last row: the slot first, then Cancel and Send after it.
+    row = "#compose-form-demo > div:last-child"
+    assert has_element?(view, "#{row} > #compose-demo-footer-start #host-back")
+    assert has_element?(view, "#{row} > #compose-demo-footer-start ~ button[phx-click=cancel]")
+    assert has_element?(view, "#{row} > #compose-demo-footer-start ~ button[type=submit]")
     # Not sending: the slot is told so.
     assert has_element?(view, "#host-back[data-sending=false]")
+  end
 
-    html = render(view)
-    {back_at, _} = :binary.match(html, "host-back")
-    {cancel_at, _} = :binary.match(html, ~s(phx-click="cancel"))
-    assert back_at < cancel_at
+  test "while a send runs the slot is told so, and again when it is over",
+       %{conn: conn} = ctx do
+    view = mount_page(ctx, conn, true)
+
+    view
+    |> form("#compose-demo-form", %{"subject" => "Offer", "body" => "Hello"})
+    |> render_submit()
+
+    assert_receive {:around, task}, 2000
+    assert has_element?(view, "#host-back[data-sending=true]")
+
+    send(task, :go)
+    assert eventually(fn -> has_element?(view, "#host-back[data-sending=false]") end)
+  end
+
+  test "an update that leaves footer_start out keeps the host's control",
+       %{conn: conn} = ctx do
+    view = mount_page(ctx, conn, true)
+
+    # Only the form gets the update; the page does not render again, so the
+    # slot is not passed this time.
+    Phoenix.LiveView.send_update(view.pid, ComposeForm, id: "demo", around_send: nil)
+    render(view)
+
+    assert has_element?(view, "#compose-demo-footer-start #host-back")
   end
 
   test "the control is the host's: its event goes to the page, the form stays",
