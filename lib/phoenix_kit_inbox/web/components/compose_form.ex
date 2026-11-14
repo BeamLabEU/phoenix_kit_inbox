@@ -51,7 +51,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       form as the second step of its own window puts its «Back» there. It is
       rendered with `%{sending: sending?}`, so the host can disable its
       control while a send runs; what the control does is the host's (the
-      form only shows it)
+      form only shows it). It is rendered for a viewer without access too
+      (`sending: false`), alone in the otherwise empty form
 
   An attribute left out of a later update keeps its value, so a host may
   `send_update/3` the form with only what changed. Inbox's own access events
@@ -1705,9 +1706,17 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # ── rendering ───────────────────────────────────────────────────────────────
 
   @impl true
+  # Nothing of the module's for someone without access, but the host's own
+  # control stays: a «Back» in `footer_start` is the host's way out of a
+  # window whose step this form is, and an access lost mid-session must not
+  # take it away with the form.
   def render(%{allowed?: false} = assigns) do
     ~H"""
-    <div id={"compose-form-#{@id}"}></div>
+    <div id={"compose-form-#{@id}"}>
+      <div :if={@footer_start != []} id={"compose-#{@id}-footer-start"}>
+        {render_slot(@footer_start, %{sending: false})}
+      </div>
+    </div>
     """
   end
 

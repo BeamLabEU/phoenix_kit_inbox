@@ -172,6 +172,20 @@ defmodule PhoenixKitInbox.Web.ComposeFormFooterStartTest do
     assert has_element?(view, "#compose-demo-footer-start #host-back")
   end
 
+  test "a viewer without access keeps the host's control, and nothing of the form",
+       %{conn: conn, scope: scope} = ctx do
+    denied = scope_for(scope.user, [])
+    view = mount_page(%{ctx | scope: denied}, conn, true)
+
+    assert has_element?(view, "#compose-form-demo > #compose-demo-footer-start #host-back")
+    assert has_element?(view, "#host-back[data-sending=false]")
+    refute has_element?(view, "#compose-demo-form")
+    refute has_element?(view, "#compose-form-demo button[phx-click=cancel]")
+
+    view |> element("#host-back") |> render_click()
+    assert_receive :host_back
+  end
+
   test "the control is the host's: its event goes to the page, the form stays",
        %{conn: conn} = ctx do
     view = mount_page(ctx, conn, true)

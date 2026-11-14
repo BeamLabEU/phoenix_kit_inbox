@@ -366,6 +366,16 @@ Pages of the host can carry the module's parts. Everything below checks the view
 
 `own_upload={false}` (optional, default `true`) takes the form's own «Upload files» control away, for a host whose picker already uploads and would otherwise show two buttons; only the literal `false` counts. The `attachment_picker` slot and the send-side checks do not change: picks the picker names still go through `authorize_attachments`. With `own_upload={false}` and no `attachment_picker` slot the form has no way to add files.
 
+The optional `footer_start` slot puts a control of the host's at the start of the form's last row, on the other side from Cancel and Send — a «Back» for a host window whose second step is the form. It is rendered with `%{sending: sending?}` so the control can be disabled while a send runs; what it does is the host's. It stays for a viewer without access, alone in the otherwise empty form, so the window keeps its way back.
+
+```heex
+<.live_component module={PhoenixKitInbox.Web.Components.ComposeForm} id="order-letter" scope={@scope} draft={@draft}>
+  <:footer_start :let={state}>
+    <button type="button" class="btn btn-ghost" disabled={state.sending} phx-click="back">Back</button>
+  </:footer_start>
+</.live_component>
+```
+
 `ComposeForm` is a view over `PhoenixKitInbox.Web.Components.ComposePipeline`; its moduledoc lists what the host must do (handle `{:inbox_compose, id, _}`, close the form after `{:sent, message}`, build the draft outside `render`, and after `{:inbox_access_changed, _}` send it `send_update(ComposeForm, id: id, refresh: true)` so it reads its senders again). Each form has an upload of its own (`"inbox_compose_<id>"`), so several can share a page. `PhoenixKitInbox.TaskSupervisor` is started by PhoenixKit itself: do not add it to your tree.
 
 - `ComposeDraft` is the host's side: recipients, subject, text, files, `links`, `html_body`, `reply_to_trusted`, `context`. What it sets is the host's word; what the browser sends is checked against it.
