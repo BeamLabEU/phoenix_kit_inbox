@@ -3,8 +3,7 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   Snapshots that name the stored objects of a file Storage already holds
   (`Storage.link_copy/3`) instead of writing the bytes again, and the full
   copy they fall back to when the core has no `link_copy/3`, refuses the
-  donor or finds none. The tests that need `link_copy/3` are skipped on a
-  core without it.
+  donor or finds none.
   """
 
   use PhoenixKitInbox.LiveCase, async: false
@@ -17,14 +16,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Test.Repo
-
-  Code.ensure_loaded(Storage)
-
-  # `false` where the core has `link_copy/3`, else the reason to skip.
-  @no_link_copy if(function_exported?(Storage, :link_copy, 3),
-                  do: false,
-                  else: "needs a PhoenixKit core with Storage.link_copy/3"
-                )
 
   # A core that has `store_file_in_buckets/7` only.
   defmodule NoLinkStorage do
@@ -208,8 +199,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   end
 
   describe "ways 3 and 4: a Storage file" do
-    @describetag skip: @no_link_copy
-
     test "the snapshot names the original's objects, and outlives the original", ctx do
       original = media_file(ctx.alice, "quarterly numbers", filename: "q3.txt")
 
@@ -257,8 +246,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   end
 
   describe "the download route" do
-    @describetag skip: @no_link_copy
-
     test "serves the bytes of a linked snapshot after the original is gone",
          %{conn: conn} = ctx do
       original =
@@ -278,8 +265,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   end
 
   describe "ways 1 and 5: bytes" do
-    @describetag skip: @no_link_copy
-
     test "another user's file is a donor, and the snapshot is the sender's", ctx do
       theirs = media_file(ctx.bob, "bob's bytes", filename: "b.txt")
       objects_before = bucket_objects()
@@ -442,7 +427,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
     end
 
     for reason <- [:incompatible, :donor_unavailable, :donor_changed] do
-      @tag skip: @no_link_copy
       test "an answer of #{reason} falls back to a full copy", ctx do
         Application.put_env(:phoenix_kit_inbox, :storage_module, RefusingStorage)
         Application.put_env(:phoenix_kit_inbox, :linked_test_pid, self())
@@ -464,8 +448,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   end
 
   describe "a core that misbehaves" do
-    @describetag skip: @no_link_copy
-
     for mode <- [:raise, :exit, :throw, :donor_itself, {:answer, :weird}, {:answer, {:ok, nil}}] do
       test "#{inspect(mode)} is a full copy, for a file and for bytes", ctx do
         script(unquote(mode))
@@ -488,8 +470,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   end
 
   describe "a send inside the caller's transaction" do
-    @describetag skip: @no_link_copy
-
     test "the real core's refusals leave the full copies and a transaction that commits", ctx do
       script(:real)
       # Still "processing": the core answers :donor_unavailable.
@@ -519,8 +499,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   end
 
   describe "a send that fails" do
-    @describetag skip: @no_link_copy
-
     test "removes the linked snapshot's row and leaves the donor's objects", ctx do
       original = media_file(ctx.alice, "keep me", filename: "k.txt")
       media = media_file(ctx.alice, "keep me too", filename: "k2.txt")
@@ -548,8 +526,6 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   end
 
   describe "the host's contract" do
-    @describetag skip: @no_link_copy
-
     test "a linked snapshot is read without a scope, stays in the module's library, not system-managed",
          ctx do
       original = media_file(ctx.alice, "contract", filename: "c.txt")

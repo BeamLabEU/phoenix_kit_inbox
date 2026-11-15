@@ -2,7 +2,7 @@ defmodule PhoenixKitInbox.AttachmentsMaintenanceTest do
   @moduledoc """
   `mix phoenix_kit_inbox.relink_attachments` behind it: moving full-copy
   snapshots onto Media's stored objects in two phases, and filing the sent
-  messages. Needs a core with `Storage.relink_file/3` (skipped without).
+  messages.
   """
 
   use PhoenixKitInbox.LiveCase, async: false
@@ -19,16 +19,6 @@ defmodule PhoenixKitInbox.AttachmentsMaintenanceTest do
   alias PhoenixKitInbox.Schemas.Attachment
   alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Test.Repo
-
-  Code.ensure_loaded(Storage)
-
-  @moduletag skip:
-               if(
-                 function_exported?(Storage, :relink_file, 3) and
-                   function_exported?(Storage, :delete_unreferenced_keys, 1),
-                 do: false,
-                 else: "needs a PhoenixKit core with Storage.relink_file/3"
-               )
 
   # A core that stores bytes but has no `link_copy/3`: every snapshot is a
   # full copy, as the ones to be moved are.

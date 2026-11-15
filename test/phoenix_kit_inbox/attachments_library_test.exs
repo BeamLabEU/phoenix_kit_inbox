@@ -2,8 +2,7 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
   @moduledoc """
   The module's Storage library: shown in Media and managed (read-only) where
   the core can do it, hidden as before where it cannot, its name, and the
-  module's own deletes in a managed library. The tests that need the core's
-  managed libraries are skipped on a core without them.
+  module's own deletes in a managed library.
   """
 
   use PhoenixKitInbox.DataCase, async: false
@@ -16,13 +15,6 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Test.Repo
-
-  Code.ensure_loaded(Libraries)
-
-  @no_managed if(function_exported?(Libraries, :update_system_library_listing, 2),
-                do: false,
-                else: "needs a PhoenixKit core with managed hidden libraries"
-              )
 
   # A core that has hidden libraries but no `media_listing:`/`managed:`.
   defmodule NoManagedLibraries do
@@ -103,8 +95,6 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
   end
 
   describe "ensure_library/0 on a core with managed libraries" do
-    @describetag skip: @no_managed
-
     test "makes a hidden library shown to uploaders and managed, named Mail attachments" do
       assert {:ok, library} = Attachments.ensure_library()
 
@@ -334,8 +324,6 @@ defmodule PhoenixKitInbox.AttachmentsLibraryTest do
   end
 
   describe "deleting snapshots in a managed library" do
-    @describetag skip: @no_managed
-
     setup do
       alice = user_fixture()
       {:ok, library} = Attachments.ensure_library()

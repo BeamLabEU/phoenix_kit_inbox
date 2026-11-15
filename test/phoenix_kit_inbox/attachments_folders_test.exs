@@ -2,8 +2,7 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   @moduledoc """
   The folders of the attachments library (`PhoenixKitInbox.Attachments.Folders`):
   the path of a message, the host's hook, the folder recorded on the message,
-  the all-or-nothing filing, drafts and links. Skipped on a core without
-  managed hidden libraries, where nothing is filed.
+  the all-or-nothing filing, drafts and links.
   """
 
   use PhoenixKitInbox.DataCase, async: false
@@ -22,13 +21,6 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Schemas.Attachment
   alias PhoenixKitInbox.Schemas.Message
-
-  Code.ensure_loaded(Libraries)
-
-  @no_managed if(function_exported?(Libraries, :update_system_library_listing, 2),
-                do: false,
-                else: "needs a PhoenixKit core with managed hidden libraries"
-              )
 
   @key "attachments_folder_uuid"
 
@@ -252,8 +244,6 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   end
 
   describe "the default path" do
-    @describetag skip: @no_managed
-
     test "mailbox / month / date time — subject, without an owner, recorded on the message",
          ctx do
       message = send_data(ctx, %{"subject" => "Quarterly"})
@@ -398,8 +388,6 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   end
 
   describe "the host's hook" do
-    @describetag skip: @no_managed
-
     test "a list of names replaces mailbox/month, and gets the message and mailbox", ctx do
       hook!(["Orders", "  order-123 "])
 
@@ -480,8 +468,6 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   end
 
   describe "the folder on the message" do
-    @describetag skip: @no_managed
-
     test "a caller's attachments_folder_uuid is dropped, on a send and on a draft", ctx do
       {:ok, library} = Attachments.ensure_library()
 
@@ -524,8 +510,6 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   end
 
   describe "all or nothing" do
-    @describetag skip: @no_managed
-
     for {label, failure} <- [
           {"the first folder", {:create_folder, 1}},
           {"the folder of the message", {:create_folder, 3}},
@@ -737,8 +721,6 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   end
 
   describe "drafts" do
-    @describetag skip: @no_managed
-
     test "a delayed draft filing leaves a snapshot already named by sent mail alone", ctx do
       storage!(:move)
       {message, _log} = with_log(fn -> send_data(ctx) end)
@@ -850,8 +832,6 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   end
 
   describe "inside a caller's transaction" do
-    @describetag skip: @no_managed
-
     test "a send commits with the caller's work, and files nothing", ctx do
       storage!(:move)
 
@@ -887,8 +867,6 @@ defmodule PhoenixKitInbox.AttachmentsFoldersTest do
   end
 
   describe "links" do
-    @describetag skip: @no_managed
-
     test "a sent message's file attached to a draft (way 2) is linked, not moved", ctx do
       original = send_data(ctx, %{"subject" => "Original"})
       file = snapshot(original)

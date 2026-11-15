@@ -8,12 +8,6 @@ defmodule PhoenixKitInbox.RelinkAttachmentsTaskTest do
   use PhoenixKitInbox.LiveCase, async: false
 
   alias Mix.Tasks.PhoenixKitInbox.RelinkAttachments, as: Task
-  alias PhoenixKit.Modules.Storage
-
-  Code.ensure_loaded(Storage)
-
-  @supported function_exported?(Storage, :relink_file, 3) and
-               function_exported?(Storage, :delete_unreferenced_keys, 1)
 
   setup :storage_setup
 
@@ -43,8 +37,6 @@ defmodule PhoenixKitInbox.RelinkAttachmentsTaskTest do
   end
 
   describe "on a core with relink_file" do
-    @describetag skip: if(@supported, do: false, else: "needs Storage.relink_file/3")
-
     test "a dry run is the default and prints the report", %{manifest: manifest} do
       assert :ok = Task.run([])
 
@@ -93,16 +85,6 @@ defmodule PhoenixKitInbox.RelinkAttachmentsTaskTest do
 
       assert refused(["--purge-old", "--manifest", manifest]) =~ "The manifest cannot be read"
       assert File.read!(manifest) == "nope"
-    end
-  end
-
-  describe "on a core without relink_file" do
-    @describetag skip: if(@supported, do: "the core has relink_file/3", else: false)
-
-    test "the task says so and writes nothing", %{manifest: manifest} do
-      assert refused([]) =~ "cannot do it"
-      assert refused(["--apply", "--manifest", manifest]) =~ "nothing was done"
-      refute File.exists?(manifest)
     end
   end
 end

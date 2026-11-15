@@ -56,9 +56,6 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
   A run changes nothing it has already changed: a second run finds no
   candidates and nothing to file. A failure on one record is reported and the
   others go on. A dry run only reads — it does not even make the library.
-  Needs a core with `Storage.relink_file/3` and
-  `Storage.delete_unreferenced_keys/1`; without them `{:error,
-  :core_unsupported}` and nothing is done.
   """
 
   import Ecto.Query
@@ -91,13 +88,6 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
 
   defp repo, do: PhoenixKit.RepoHelper.repo()
 
-  @doc "Whether the core has what the maintenance needs."
-  @spec supported?() :: boolean()
-  def supported? do
-    Code.ensure_loaded?(Storage) and function_exported?(Storage, :relink_file, 3) and
-      function_exported?(Storage, :delete_unreferenced_keys, 1)
-  end
-
   # ── phase 1 ─────────────────────────────────────────────────────────────────
 
   @doc """
@@ -111,8 +101,7 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
     apply? = Keyword.get(opts, :apply, false)
     manifest = Keyword.get(opts, :manifest)
 
-    with :ok <- check_supported(),
-         :ok <- check_manifest_given(apply?, manifest),
+    with :ok <- check_manifest_given(apply?, manifest),
          :ok <- check_transaction(apply?) do
       relink_library(Attachments.existing_library(), apply?, manifest)
     end
@@ -171,8 +160,6 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
       errors: []
     }
   end
-
-  defp check_supported, do: if(supported?(), do: :ok, else: {:error, :core_unsupported})
 
   defp check_transaction(true) do
     if repo().in_transaction?(), do: {:error, :in_transaction}, else: :ok
@@ -734,8 +721,7 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
   def purge_old(path, opts \\ []) do
     apply? = Keyword.get(opts, :apply, true)
 
-    with :ok <- check_supported(),
-         :ok <- check_transaction(apply?),
+    with :ok <- check_transaction(apply?),
          {:ok, library} <- existing_library(),
          {:ok, prefix} <- library_prefix(library),
          {:ok, manifest} <- read_manifest(path, to_string(library.uuid)) do
@@ -782,8 +768,7 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
   end
 
   defp delete(report, free) do
-    # credo:disable-for-next-line Credo.Check.Refactor.Apply
-    answer = apply(Storage, :delete_unreferenced_keys, [free])
+    answer = Storage.delete_unreferenced_keys(free)
     {still, removed} = Enum.split_with(free, &Manager.file_exists?/1)
     report = %{report | deleted: length(removed), left: length(still)}
 

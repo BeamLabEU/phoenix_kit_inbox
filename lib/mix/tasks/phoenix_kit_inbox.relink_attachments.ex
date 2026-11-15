@@ -35,8 +35,8 @@ defmodule Mix.Tasks.PhoenixKitInbox.RelinkAttachments do
   the library's directory in the bucket: until then the old objects are all
   still there. Run it again as often as needed: a second run changes nothing.
 
-  Exits `1` on invalid arguments, on a core without `Storage.relink_file/3`,
-  and when a record could not be relinked, checked or filed.
+  Exits `1` on invalid arguments and when a record could not be relinked,
+  checked or filed.
   """
 
   use Mix.Task
@@ -172,10 +172,6 @@ defmodule Mix.Tasks.PhoenixKitInbox.RelinkAttachments do
 
   @doc false
   @spec error_message(term()) :: String.t()
-  def error_message(:core_unsupported),
-    do:
-      "This PhoenixKit core cannot do it (Storage.relink_file/3 and delete_unreferenced_keys/1 are missing); nothing was done."
-
   def error_message(:manifest_other_library),
     do: "The manifest is not of this installation's attachments library; nothing was done."
 

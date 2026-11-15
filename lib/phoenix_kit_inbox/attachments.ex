@@ -125,11 +125,11 @@ defmodule PhoenixKitInbox.Attachments do
   Needs a PhoenixKit core with hidden system libraries
   (`Libraries.create_system_library/2` `hidden: true`,
   `get_hidden_library_by_slug/1`) and `Storage.store_file_in_buckets/7`
-  `dedup: false` — 2.64.0, which `mix.exs` requires. On an older core every
-  attachment is refused with `{:error, :storage_unsupported}` (and a log
-  line); messages without attachments are unaffected. Optional, each looked
-  up at run time (a literal call would not compile without warnings on a core
-  that lacks it), and each doing without:
+  `dedup: false`. The core `mix.exs` requires (3.5.0) has all of it, and the
+  three below. Without the hidden-library API every attachment is refused
+  with `{:error, :storage_unsupported}` (and a log line); messages without
+  attachments are unaffected. Still looked up at run time, through the test
+  seams (`:storage_libraries`, `:storage_module`), and each doing without:
 
     * `Storage.link_copy/3` — snapshots share the donor's stored objects;
       without it they are full copies;
@@ -139,7 +139,7 @@ defmodule PhoenixKitInbox.Attachments do
       them it stays hidden and unfiled;
     * `Storage.relink_file/3` and `Storage.delete_unreferenced_keys/1` — only
       the maintenance task (`PhoenixKitInbox.Attachments.Maintenance`) needs
-      them, and says so when they are missing.
+      them, with no check that they are there.
 
   Snapshots are stored *before* the message transaction (Storage takes a
   directory lock for each, which must not be held across the send) and are
