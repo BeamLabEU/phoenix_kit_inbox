@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.6.0 - 2026-11-15
+
+PRs #16–#18 and their Claude, Codex and Grok review fixes.
+
+### Upgrade notes
+
+- **Requires PhoenixKit core 3.5.0 or later** (was 2.64.0). The pin is
+  `>= 3.5.0 and < 4.0.0`. 3.5.0 is the minimum core across the ecosystem.
+- No new migration.
+
+### Added
+
+- **`member_suggestions` on `ComposeForm`** (#16). `member_suggestions={false}`
+  takes the module's own members out of the typed suggestions, so the form
+  offers only the host's `recipient_sources`. The send's recipient checks do
+  not change. An address typed for someone inside is still refused, with
+  "choose them from the list" when one of the host's sources offers that
+  person (by address, account, `@username` or shared-mailbox slug).
+- **`own_upload` on `ComposeForm`** (#17). `own_upload={false}` removes the
+  form's own «Upload files» control, for a host whose `attachment_picker`
+  already uploads. Picks still go through `authorize_attachments`.
+- **The `footer_start` slot on `ComposeForm`** (#18) shows a control of the
+  host's (a «Back», say) at the start of the last row. It gets
+  `%{sending: sending?}`. A viewer without access still sees the control,
+  so the host's window keeps its way back.
+
+### Fixed
+
+- An open suggestion list on `ComposeForm` outlived a change of
+  `recipient_sources`, `scope` or `member_suggestions`, or an access refresh.
+  A removed source or a revoked permission could still supply a recipient
+  that could be picked. The list is now rebuilt with new ids, after the
+  access check.
+- Hiding the upload control while a file was still uploading removed the
+  input that LiveView routes the progress through, so the upload could hang
+  and block the send. The input stays mounted, hidden, until the upload
+  finishes or is cancelled.
+
+### Removed
+
+- `Attachments.Maintenance.supported?/0` and the relink task's "this core
+  cannot do it" exit. Every core this version admits has
+  `Storage.relink_file/3` and `delete_unreferenced_keys/1`.
+
 ## 0.5.0 - 2026-11-11
 
 PRs #12–#15 and their Claude and Codex review fixes.
