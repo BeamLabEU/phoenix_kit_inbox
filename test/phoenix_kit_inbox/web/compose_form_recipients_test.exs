@@ -296,6 +296,45 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
       assert text_of(view, "#compose-demo-to-error") =~ "Choose them from the list"
     end
 
+    test "with the members hidden, a host entry that names the account by its handle is offered",
+         %{conn: conn} = ctx do
+      handle = "@" <> ctx.bob.username
+
+      view =
+        mount_form(
+          ctx,
+          conn,
+          draft(context: %{offered: [%{label: "Bobby", address: String.upcase(handle)}]}),
+          %{recipient_sources: [OffersMemberSource], member_suggestions: false}
+        )
+
+      add_by_hand(view, "to", ctx.bob.email)
+
+      assert text_of(view, "#compose-demo-to-error") =~ "Choose them from the list"
+    end
+
+    test "with the members hidden, a shared mailbox the host names by its slug is offered",
+         %{conn: conn} = ctx do
+      desk =
+        shared_mailbox_fixture(ctx.alice, %{
+          name: "Desk",
+          slug: "desk",
+          address: "desk@company.test"
+        })
+
+      view =
+        mount_form(
+          ctx,
+          conn,
+          draft(context: %{offered: [%{label: "Desk", address: desk.slug}]}),
+          %{recipient_sources: [OffersMemberSource], member_suggestions: false}
+        )
+
+      add_by_hand(view, "to", "Desk@Company.test")
+
+      assert text_of(view, "#compose-demo-to-error") =~ "Choose them from the list"
+    end
+
     test "with the members hidden, an account the host names without an address is offered too",
          %{conn: conn} = ctx do
       view =
@@ -422,6 +461,56 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
 
       render(view)
       refute has_element?(view, "#compose-demo-to-suggestions")
+    end
+
+    test "turning member_suggestions off keeps the host's matches for the same query",
+         %{conn: conn} = ctx do
+      bobby = %{@anna | label: "Bobby Client", address: "bobby@client.test"}
+
+      view =
+        mount_form(ctx, conn, draft(context: %{clients: [bobby]}), %{
+          recipient_sources: [ClientSource]
+        })
+
+      type_into(view, "to", "bobby")
+      assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Client")
+      assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm,
+        id: "demo",
+        scope: ctx.scope,
+        member_suggestions: false
+      )
+
+      render(view)
+      assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Client")
+      refute has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm,
+        id: "demo",
+        scope: ctx.scope,
+        member_suggestions: true
+      )
+
+      render(view)
+      assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
+      assert has_element?(view, "#compose-demo-to-suggestions", "Bobby Client")
+    end
+
+    test "turning member_suggestions off leaves the host's picker open", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      view |> element("button[phx-click=toggle_picker][phx-value-role=to]") |> render_click()
+      assert has_element?(view, "#compose-demo-to-suggestions", "Anna Client")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm,
+        id: "demo",
+        scope: ctx.scope,
+        member_suggestions: false
+      )
+
+      render(view)
+      assert has_element?(view, "#compose-demo-to-suggestions", "Anna Client")
+      refute has_element?(view, "#compose-demo-to-suggestions", "Bobby Member")
     end
 
     test "picking a suggestion adds a chip with the source's route and label",

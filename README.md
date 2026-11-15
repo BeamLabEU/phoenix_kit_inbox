@@ -321,7 +321,7 @@ config :phoenix_kit_inbox, attachment_folder: {MyApp.Inbox, :attachment_folder}
 
 ##### Moving existing snapshots
 
-Snapshots stored before this (full copies) can be moved onto the objects of an active file that holds the same bytes (a Media file, or a snapshot already on Media's objects), and the messages sent before filed in folders — in two phases, so nothing is deleted before it has been checked. Needs a core with `Storage.relink_file/3` (otherwise the task says so and does nothing):
+Snapshots stored before this (full copies) can be moved onto the objects of an active file that holds the same bytes (a Media file, or a snapshot already on Media's objects), and the messages sent before filed in folders — in two phases, so nothing is deleted before it has been checked. The core this module requires has `Storage.relink_file/3` and `Storage.delete_unreferenced_keys/1`, which the task uses (it no longer refuses up front when they are missing):
 
 ```bash
 mix phoenix_kit_inbox.relink_attachments                                   # dry run: what would be done, writes nothing
@@ -362,7 +362,7 @@ Pages of the host can carry the module's parts. Everything below checks the view
 />
 ```
 
-`member_suggestions={false}` (optional, default `true`) leaves the module's own members out of the typed suggestions, so the form offers only your `recipient_sources`; only the literal `false` counts. The send's own recipient checks do not change.
+`member_suggestions={false}` (optional, default `true`) leaves the module's own members out of the typed suggestions, so the form offers only your `recipient_sources`; only the literal `false` counts. The send's own recipient checks do not change. A typed address of someone inside is still refused. The form says to choose them from the list when one of your sources offers that address, the account, or the handle the list would show (`@username`, or a shared mailbox's address or slug); otherwise it says the address is inside the application and cannot be added here. Changing the option rebuilds an open suggestion list for the same query.
 
 `own_upload={false}` (optional, default `true`) takes the form's own «Upload files» control away, for a host whose picker already uploads and would otherwise show two buttons; only the literal `false` counts. The `attachment_picker` slot and the send-side checks do not change: picks the picker names still go through `authorize_attachments`. With `own_upload={false}` and no `attachment_picker` slot the form has no way to add files.
 

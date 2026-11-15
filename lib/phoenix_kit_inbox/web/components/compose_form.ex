@@ -74,12 +74,17 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   list". With `member_suggestions={false}` only the host's sources are asked;
   the typed address of someone inside stays refused (it is never added as an
   outside one — the pipeline would refuse the send), with "choose them from the
-  list" when one of the host's sources offers that address for the query, and
+  list" when one of the host's sources offers that recipient for the query, and
   otherwise with a plain "that address is inside this application and cannot
   be added here" — the module's members are not in the list to choose from.
-  The offer is looked for with the typed address as the query, by the address
-  an entry carries or the account it names, so a source that searches by name
-  alone gets the plain message: best effort, the refusal is the same.
+  The offer is looked for with the typed address as the query. An entry counts
+  when its address is that address, or the handle the inside recipient is
+  addressed by (`@username`, or a shared mailbox's address or slug), or when
+  it names that account. A source that searches by name alone gets the plain
+  message: best effort, the refusal is the same. A change of
+  `member_suggestions` asks again for the query of an open typed list, so the
+  ids on screen belong to the sources now in force; the host's own picker
+  lists only those sources and stays.
   Doubles within a line are dropped; a line stops at the pipeline's
   limit (20 To, 5 Cc, 5 Bcc). With host sources, a button lists their people
   without a query. After a send that went, the host's sources that export
@@ -159,7 +164,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   use PhoenixKitWeb, :live_component
   use Gettext, backend: PhoenixKitInbox.Gettext
 
-  alias PhoenixKit.Users.Auth
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Errors
@@ -169,6 +173,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   alias PhoenixKitInbox.Outbound
   alias PhoenixKitInbox.RecipientSource
   alias PhoenixKitInbox.RecipientSources.Members
+  alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Signatures
   alias PhoenixKitInbox.Web.Components.ComposeDraft
@@ -317,19 +322,29 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   # Only `false` turns the module's members off; a missing key keeps the
   # value the form had (true at first), as the other attributes do.
-  # A change of the value drops the typed list on screen: it was made under
-  # the other setting and its ids must not outlive it.
+  # A change of the value rebuilds an open typed list: it was made under the
+  # other setting and its ids must not outlive it. A picker lists only the
+  # host's sources, so it stays.
   defp assign_member_suggestions(socket, assigns) do
     if Map.has_key?(assigns, :member_suggestions) do
       value = assigns.member_suggestions != false
 
-      if Map.get(socket.assigns, :member_suggestions, true) == value,
-        do: assign(socket, :member_suggestions, value),
-        else: assign(socket, member_suggestions: value, list: nil)
+      if Map.get(socket.assigns, :member_suggestions, true) == value do
+        assign(socket, :member_suggestions, value)
+      else
+        socket |> assign(:member_suggestions, value) |> resuggest()
+      end
     else
       assign_new(socket, :member_suggestions, fn -> true end)
     end
   end
+
+  defp resuggest(%{assigns: %{list: %{kind: :typed, role: role}, inputs: inputs}} = socket)
+       when is_map(inputs) do
+    suggest(socket, role, inputs[role] || "")
+  end
+
+  defp resuggest(socket), do: socket
 
   # Only `false` takes the form's own upload control away; a missing key keeps
   # the value the form had (true at first), as the other attributes do.
@@ -1555,28 +1570,68 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   # Best effort, and synchronous like the suggestions themselves: the sources
   # are asked once more, with the address as the query (a slow or failing
-  # source costs what it costs when typing and answers "no"). An entry is the
-  # address when it carries it, or names the account that owns it.
+  # source costs what it costs when typing and answers "no"). An entry counts
+  # when it carries the typed address, the handle that same lookup would put
+  # in the list (`@username`, or a shared mailbox's address or slug), or the
+  # account `fetch_mailbox_by_recipient/2` resolved for it (`create: false`,
+  # the send's own lookup).
   defp offered?(socket, text) do
-    address = String.downcase(text)
-    account = account_uuid(address)
+    keys = offer_keys(text)
 
     socket
     |> all_sources()
     |> RecipientSource.suggest_all(socket.assigns.scope, context(socket), text)
-    |> Enum.any?(fn
-      %{address: found} when is_binary(found) -> String.downcase(found) == address
-      %{user: user} when is_binary(user) -> user == account
-      _ -> false
-    end)
+    |> Enum.any?(&offered_entry?(&1, keys))
   end
 
-  defp account_uuid(address) do
-    case Auth.get_user_by_email(address) do
-      %{uuid: uuid} -> uuid
-      _ -> nil
+  defp offer_keys(text) do
+    address = text |> String.trim() |> String.downcase()
+
+    case Mailboxes.fetch_mailbox_by_recipient(text, create: false) do
+      {:ok, %Mailbox{kind: "user", owner_uuid: owner} = mailbox} when is_binary(owner) ->
+        %{
+          user: owner,
+          addresses: address_set([address, Mailboxes.recipient_handle(mailbox), mailbox.address])
+        }
+
+      {:ok, {:member, user}} ->
+        %{
+          user: user.uuid,
+          addresses: address_set([address, Mailboxes.user_handle(user), user.email])
+        }
+
+      {:ok, %Mailbox{} = mailbox} ->
+        %{user: nil, addresses: address_set([address, mailbox.address, mailbox.slug])}
+
+      _ ->
+        %{user: nil, addresses: address_set([address])}
     end
   end
+
+  defp address_set(values) do
+    values
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+    |> Enum.reject(&(&1 == ""))
+    |> MapSet.new()
+  end
+
+  defp offered_entry?(entry, keys) do
+    address_hit?(entry, keys) or user_hit?(entry, keys)
+  end
+
+  defp address_hit?(%{address: found}, %{addresses: addresses}) when is_binary(found) do
+    normalized = found |> String.trim() |> String.downcase()
+    normalized in addresses
+  end
+
+  defp address_hit?(_, _), do: false
+
+  defp user_hit?(%{user: user}, %{user: account}) when is_binary(user) and is_binary(account) do
+    String.downcase(user) == String.downcase(account)
+  end
+
+  defp user_hit?(_, _), do: false
 
   defp internal?(scope, text) do
     match?([%{route: :internal}], Messages.resolve_recipient_routes(scope, [text]))

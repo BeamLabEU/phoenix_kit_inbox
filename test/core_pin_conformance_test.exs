@@ -13,11 +13,13 @@ defmodule PhoenixKitInbox.CorePinConformanceTest do
   because the workspace always resolves the latest core.
 
   The requirement is `>= 3.5.0 and < 4.0.0`. The floor is the minimum core
-  every PhoenixKit module requires; it carries everything this module builds
-  on without a run-time check: hidden system libraries, `dedup: false`,
-  `Storage.link_copy/3`, managed libraries, `Storage.relink_file/3` and
-  `delete_unreferenced_keys/1` (the maintenance task calls the last two
-  directly). The ceiling is open through every core 3.x.
+  every PhoenixKit module requires. It carries hidden system libraries,
+  `dedup: false`, `Storage.link_copy/3`, managed libraries,
+  `Storage.relink_file/3` and `delete_unreferenced_keys/1`. The maintenance
+  task uses the last two with no run-time check that they exist.
+  `link_copy/3` and the managed-library calls stay run-time lookups, so the
+  test seams can stand in for a core without them. The ceiling is open
+  through every core 3.x.
   """
 
   @floor "3.5.0"

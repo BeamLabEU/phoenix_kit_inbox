@@ -421,6 +421,8 @@ defmodule PhoenixKitInbox.Attachments.Maintenance do
   end
 
   defp relink_with(file, donor, opts, library, ruled_out) do
+    # apply/3, not a direct call: the clause below reports an answer the spec
+    # does not list, and a direct call makes dialyzer call that clause dead.
     # credo:disable-for-next-line Credo.Check.Refactor.Apply
     case apply(Storage, :relink_file, [file, donor, opts]) do
       {:ok, _, _} = ok ->

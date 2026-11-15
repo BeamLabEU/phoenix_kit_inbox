@@ -128,18 +128,22 @@ defmodule PhoenixKitInbox.Attachments do
   `dedup: false`. The core `mix.exs` requires (3.5.0) has all of it, and the
   three below. Without the hidden-library API every attachment is refused
   with `{:error, :storage_unsupported}` (and a log line); messages without
-  attachments are unaffected. Still looked up at run time, through the test
-  seams (`:storage_libraries`, `:storage_module`), and each doing without:
+  attachments are unaffected. Two of them are still looked up at run time,
+  through the test seams (`:storage_libraries`, `:storage_module`), and each
+  does without:
 
     * `Storage.link_copy/3` — snapshots share the donor's stored objects;
       without it they are full copies;
     * managed libraries (`Libraries.update_system_library_listing/2`,
       `media_listing/1`, `managed?/1`, the `managed: :owner` option) — the
       library is listed in Media, read-only, and filed in folders; without
-      them it stays hidden and unfiled;
-    * `Storage.relink_file/3` and `Storage.delete_unreferenced_keys/1` — only
-      the maintenance task (`PhoenixKitInbox.Attachments.Maintenance`) needs
-      them, with no check that they are there.
+      them it stays hidden and unfiled.
+
+  `Storage.relink_file/3` and `Storage.delete_unreferenced_keys/1` are used by
+  the maintenance task (`PhoenixKitInbox.Attachments.Maintenance`) with no
+  check that they are there — the floor's core has both. `relink_file/3` goes
+  through `apply/3` so a reply the spec does not list is still reported for
+  that record; `delete_unreferenced_keys/1` is a direct call.
 
   Snapshots are stored *before* the message transaction (Storage takes a
   directory lock for each, which must not be held across the send) and are
