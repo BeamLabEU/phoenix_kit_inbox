@@ -120,6 +120,51 @@ defmodule PhoenixKitInbox.Web.ComposeFormOwnUploadTest do
     refute has_element?(view, "#compose-demo-attachments li[data-upload]")
   end
 
+  test "hiding the control keeps an unfinished upload's input mounted until it finishes",
+       %{conn: conn} = ctx do
+    view = mount_form(ctx, conn, %{})
+
+    upload =
+      file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
+        %{name: "notes.txt", content: "some notes", type: "text/plain"}
+      ])
+
+    render_upload(upload, "notes.txt", 50)
+
+    send(view.pid, {:test_assigns, %{own_upload: false}})
+    render(view)
+
+    assert has_element?(view, "#compose-demo-upload-form[hidden] input[type=file]")
+    assert has_element?(view, "#compose-demo-attachments li[data-upload]", "50%")
+
+    render_upload(upload, "notes.txt", 50)
+    refute upload_form?(view)
+    assert has_element?(view, "#compose-demo-attachments li[data-upload]", "notes.txt")
+  end
+
+  test "an unfinished upload can be cancelled after its control is hidden",
+       %{conn: conn} = ctx do
+    view = mount_form(ctx, conn, %{})
+
+    upload =
+      file_input(view, "#compose-demo-upload-form", "inbox_compose_demo", [
+        %{name: "notes.txt", content: "some notes", type: "text/plain"}
+      ])
+
+    render_upload(upload, "notes.txt", 50)
+
+    send(view.pid, {:test_assigns, %{own_upload: false}})
+    render(view)
+    assert has_element?(view, "#compose-demo-upload-form[hidden] input[type=file]")
+
+    view
+    |> element("#compose-demo-attachments li[data-upload] button[phx-click=cancel_upload]")
+    |> render_click()
+
+    refute upload_form?(view)
+    refute has_element?(view, "#compose-demo-attachments li[data-upload]")
+  end
+
   describe "picks the host names, with the form's own upload off" do
     defp pick(view),
       do:

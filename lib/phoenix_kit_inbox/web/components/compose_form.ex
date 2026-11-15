@@ -84,7 +84,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   message: best effort, the refusal is the same. A change of
   `member_suggestions` asks again for the query of an open typed list, so the
   ids on screen belong to the sources now in force; the host's own picker
-  lists only those sources and stays.
+  lists only those sources and stays. A change of `recipient_sources` or
+  `scope`, or an access refresh, also rebuilds an open list and invalidates
+  its previous ids. Without access no source is asked.
   Doubles within a line are dropped; a line stops at the pipeline's
   limit (20 To, 5 Cc, 5 Bcc). With host sources, a button lists their people
   without a query. After a send that went, the host's sources that export
@@ -249,14 +251,16 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   def update(%{send_result: _}, socket), do: {:ok, socket}
   def update(%{send_lost: _}, socket), do: {:ok, socket}
 
-  # The host heard of an access change that changes no scope: the senders the
-  # form offers are read again, as for a new scope.
+  # The host heard of an access change that changes no scope: the senders and
+  # the people the form offers are read again, as for a new scope.
   def update(%{refresh: true}, %{assigns: %{allowed?: true, from: from}} = socket),
-    do: {:ok, socket |> assign_sender(from) |> refresh_summary()}
+    do: {:ok, socket |> assign_sender(from) |> refresh_summary() |> resuggest()}
 
   def update(%{refresh: true}, socket), do: {:ok, socket}
 
   def update(assigns, socket) do
+    previous_suggestions = suggestion_options(socket)
+
     socket =
       socket
       |> assign(Map.take(assigns, ~w(id scope around_send authorize_attachments)a))
@@ -272,26 +276,36 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     socket = forget_pending_draft(socket, draft)
     scope_changed? = socket.assigns[:options_scope] != socket.assigns.scope
 
-    cond do
-      not socket.assigns.allowed? ->
-        {:ok, socket}
+    socket =
+      cond do
+        not socket.assigns.allowed? ->
+          assign(socket, list: nil)
 
-      # A letter on its way is not the parent's to take back: its text, its
-      # key and its answer stay until it is over. The draft is kept for then,
-      # for a parent that does not say it twice.
-      draft != socket.assigns[:source_draft] and socket.assigns[:sending] == true ->
-        {:ok, assign(socket, :pending_draft, draft)}
+        # A letter on its way is not the parent's to take back: its text, its
+        # key and its answer stay until it is over. The draft is kept for then,
+        # for a parent that does not say it twice.
+        draft != socket.assigns[:source_draft] and socket.assigns[:sending] == true ->
+          assign(socket, :pending_draft, draft)
 
-      draft != socket.assigns[:source_draft] ->
-        {:ok, open_draft(socket, draft)}
+        draft != socket.assigns[:source_draft] ->
+          open_draft(socket, draft)
 
-      scope_changed? ->
-        {:ok, socket |> assign_sender(socket.assigns.from) |> refresh_summary()}
+        scope_changed? ->
+          socket |> assign_sender(socket.assigns.from) |> refresh_summary()
 
-      true ->
-        {:ok, socket}
-    end
+        true ->
+          socket
+      end
+
+    # Ask only after the scope gate and draft have been updated. An old list
+    # must not survive a source or permission change with selectable ids.
+    if previous_suggestions != suggestion_options(socket),
+      do: {:ok, resuggest(socket)},
+      else: {:ok, socket}
   end
+
+  defp suggestion_options(socket),
+    do: Map.take(socket.assigns, [:scope, :recipient_sources, :member_suggestions])
 
   # A parent that is back to the draft the form has has taken back what it
   # offered during the send.
@@ -322,27 +336,22 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   # Only `false` turns the module's members off; a missing key keeps the
   # value the form had (true at first), as the other attributes do.
-  # A change of the value rebuilds an open typed list: it was made under the
-  # other setting and its ids must not outlive it. A picker lists only the
-  # host's sources, so it stays.
   defp assign_member_suggestions(socket, assigns) do
-    if Map.has_key?(assigns, :member_suggestions) do
-      value = assigns.member_suggestions != false
-
-      if Map.get(socket.assigns, :member_suggestions, true) == value do
-        assign(socket, :member_suggestions, value)
-      else
-        socket |> assign(:member_suggestions, value) |> resuggest()
-      end
-    else
-      assign_new(socket, :member_suggestions, fn -> true end)
-    end
+    if Map.has_key?(assigns, :member_suggestions),
+      do: assign(socket, :member_suggestions, assigns.member_suggestions != false),
+      else: assign_new(socket, :member_suggestions, fn -> true end)
   end
 
   defp resuggest(%{assigns: %{list: %{kind: :typed, role: role}, inputs: inputs}} = socket)
        when is_map(inputs) do
     suggest(socket, role, inputs[role] || "")
   end
+
+  defp resuggest(%{assigns: %{list: %{kind: :picker}, recipient_sources: []}} = socket),
+    do: assign(socket, list: nil)
+
+  defp resuggest(%{assigns: %{list: %{kind: :picker, role: role}}} = socket),
+    do: open_picker(socket, role)
 
   defp resuggest(socket), do: socket
 
@@ -1151,6 +1160,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   defp live_uploads(%{uploads: uploads, upload_name: name}), do: live_uploads(uploads, name)
 
   defp live_uploads(uploads, name), do: Enum.reject(uploads[name].entries, & &1.cancelled?)
+
+  defp uploading?(uploads, name), do: Enum.any?(live_uploads(uploads, name), &(not &1.done?))
 
   # ── the line above the button ───────────────────────────────────────────────
 
@@ -2010,8 +2021,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           {@files_error}
         </p>
         <div class="flex flex-wrap items-center gap-1">
+          <%!-- Keep a running upload's input attached: LiveView routes progress through its DOM owner. --%>
           <form
-            :if={@own_upload}
+            :if={@own_upload or uploading?(@uploads, @upload_name)}
+            hidden={not @own_upload}
             id={"compose-#{@id}-upload-form"}
             phx-change="validate_upload"
             phx-target={@myself}

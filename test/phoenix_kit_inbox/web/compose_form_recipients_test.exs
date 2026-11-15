@@ -60,6 +60,31 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
     def suggest(_scope, _context, _query), do: raise("lookup failed")
   end
 
+  defmodule ScopedSource do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+
+    alias PhoenixKit.Users.Auth.Scope
+
+    @impl true
+    def suggest(scope, context, query) do
+      if Scope.can?(scope, "inbox.send_external"),
+        do: ClientSource.suggest(scope, context, query),
+        else: []
+    end
+  end
+
+  defmodule ObservedSource do
+    @moduledoc false
+    @behaviour PhoenixKitInbox.RecipientSource
+
+    @impl true
+    def suggest(scope, context, query) do
+      send(context.observer, {:source_asked, query})
+      ClientSource.suggest(scope, context, query)
+    end
+  end
+
   @external ["inbox", "inbox.send_external"]
   @anna %{address: "anna@client.test", label: "Anna Client", route: :email}
 
@@ -388,6 +413,81 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
   end
 
   describe "suggestions" do
+    test "losing access while changing member_suggestions does not query the host sources",
+         %{conn: conn} = ctx do
+      form_draft = draft(context: %{clients: [@anna], observer: self()})
+      view = mount_form(ctx, conn, form_draft, %{recipient_sources: [ObservedSource]})
+      type_into(view, "to", "ann")
+      assert_receive {:source_asked, "ann"}
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm,
+        id: "demo",
+        scope: scope_for(ctx.alice, []),
+        member_suggestions: false
+      )
+
+      render(view)
+
+      refute has_element?(view, "#compose-demo-form")
+      refute_receive {:source_asked, _}
+    end
+
+    test "replacing the host sources rebuilds a typed list and invalidates its old ids",
+         %{conn: conn} = ctx do
+      view =
+        mount_form(ctx, conn, draft(), %{
+          recipient_sources: [ClientSource],
+          member_suggestions: false
+        })
+
+      type_into(view, "to", "ann")
+      [old_id] = suggestion_ids(view, "to")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm, id: "demo", recipient_sources: [])
+      render(view)
+
+      refute has_element?(view, "#compose-demo-to-suggestions")
+      forge(view, "pick", %{"id" => old_id})
+      assert count(view, "#compose-demo-to li[data-route]") == 1
+    end
+
+    test "a new scope rebuilds suggestions with the viewer's current rights",
+         %{conn: conn} = ctx do
+      view =
+        mount_form(ctx, conn, draft(), %{
+          recipient_sources: [ScopedSource],
+          member_suggestions: false
+        })
+
+      type_into(view, "to", "ann")
+      [old_id] = suggestion_ids(view, "to")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm,
+        id: "demo",
+        scope: scope_for(ctx.alice, ["inbox"])
+      )
+
+      render(view)
+
+      refute has_element?(view, "#compose-demo-to-suggestions")
+      forge(view, "pick", %{"id" => old_id})
+      assert count(view, "#compose-demo-to li[data-route]") == 1
+    end
+
+    test "an access refresh rebuilds the list after a shared mailbox is archived",
+         %{conn: conn} = ctx do
+      desk = shared_mailbox_fixture(ctx.alice, %{name: "Help Desk", slug: "help-desk"})
+      view = mount_form(ctx, conn, draft())
+      type_into(view, "to", "help-desk")
+      assert has_element?(view, "#compose-demo-to-suggestions", "Help Desk")
+
+      assert {:ok, _} = Mailboxes.archive_mailbox(ctx.scope, desk)
+      Phoenix.LiveView.send_update(view.pid, ComposeForm, id: "demo", refresh: true)
+      render(view)
+
+      refute has_element?(view, "#compose-demo-to-suggestions", "Help Desk")
+    end
+
     test "suggestions come from all sources", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft(context: %{clients: [%{@anna | label: "Bobby Client"}]}))
 
@@ -557,6 +657,20 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientsTest do
   end
 
   describe "the picker of the host's lists" do
+    test "removing the host sources invalidates an open picker's entries",
+         %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft())
+      view |> element("button[phx-click=toggle_picker][phx-value-role=to]") |> render_click()
+      [old_id] = suggestion_ids(view, "to")
+
+      Phoenix.LiveView.send_update(view.pid, ComposeForm, id: "demo", recipient_sources: [])
+      render(view)
+
+      refute has_element?(view, "#compose-demo-to-suggestions", "Anna Client")
+      forge(view, "pick", %{"id" => old_id})
+      assert count(view, "#compose-demo-to li[data-route]") == 1
+    end
+
     test "the button is there only when the host brought sources", %{conn: conn} = ctx do
       with_source = mount_form(ctx, conn, draft())
       assert has_element?(with_source, "button[phx-click=toggle_picker]")
