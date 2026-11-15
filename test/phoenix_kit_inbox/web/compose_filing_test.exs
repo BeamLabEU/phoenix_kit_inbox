@@ -2,8 +2,8 @@ defmodule PhoenixKitInbox.Web.ComposeFilingTest do
   @moduledoc """
   Compose end to end on a core that links and files: an upload whose bytes
   already lie in Media, a saved draft (its snapshot in `Drafts`), the send
-  (the snapshot in the message's own folder). Skipped on a core without
-  `Storage.link_copy/3` or managed libraries.
+  (the snapshot in the message's own folder). Every core the `mix.exs` floor
+  (3.5.0) admits links and files.
   """
 
   use PhoenixKitInbox.LiveCase, async: false
@@ -15,17 +15,7 @@ defmodule PhoenixKitInbox.Web.ComposeFilingTest do
   alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Test.Repo
 
-  Code.ensure_loaded(Storage)
-
   @content "%PDF scanned"
-
-  @moduletag skip:
-               if(
-                 function_exported?(Storage, :link_copy, 3) and
-                   Attachments.managed_libraries?(),
-                 do: false,
-                 else: "needs a PhoenixKit core with link_copy/3 and managed libraries"
-               )
 
   setup :storage_setup
 

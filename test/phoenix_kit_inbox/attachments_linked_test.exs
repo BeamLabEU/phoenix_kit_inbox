@@ -162,16 +162,11 @@ defmodule PhoenixKitInbox.AttachmentsLinkedTest do
   defp clone_file(file, user) do
     uuid = UUIDv7.generate()
 
-    # Core 2.65+ gives every file a unique short code; a copy of the struct
-    # would carry the donor's.
-    short_code =
-      if Code.ensure_loaded?(ShortCode),
-        do: %{short_code: ShortCode.generate()},
-        else: %{}
-
+    # Every file has a unique short code; a copy of the struct would carry
+    # the donor's.
     file
     |> Ecto.put_meta(state: :built)
-    |> Map.merge(short_code)
+    |> Map.put(:short_code, ShortCode.generate())
     |> Map.merge(%{
       uuid: uuid,
       user_uuid: user.uuid,
