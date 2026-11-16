@@ -424,7 +424,8 @@ defmodule PhoenixKitInbox do
   sending identity as any outside send); an address that only works inside
   (`@username`, a shared mailbox's name or slug) is refused with
   `{:error, :internal_mail_disabled}`; the compose form offers no inside
-  route and `Messages.resolve_recipient_routes/2` answers `:email`. Letters
+  route and `Messages.resolve_recipient_routes/2` answers `:email` (with a
+  `refused: :internal_mail_disabled` key on what the send refuses). Letters
   already delivered stay readable, and Sent, Outbox, Drafts, shared
   mailboxes and their grants, `Messages.record_sent/4`, retry and outside
   sending are as they were.

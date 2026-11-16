@@ -32,6 +32,7 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
       |> ScopeRefresh.assign_scope()
       |> assign_gates()
       |> assign(:internal_enabled, PhoenixKitInbox.internal_enabled?())
+      |> assign(:toggle_nonce, 0)
 
     {:ok, load(socket, socket.assigns.can_manage_shared)}
   end
@@ -90,12 +91,19 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
         {:noreply, assign(socket, :internal_enabled, enabled)}
 
       _failed ->
+        # The nonce renews the toggle's element: the state it shows is the
+        # old one again, which a browser that already flipped it would not
+        # be told by an unchanged assign.
         {:noreply,
          socket
          |> assign(:internal_enabled, PhoenixKitInbox.internal_enabled?())
+         |> update(:toggle_nonce, &(&1 + 1))
          |> put_flash(:error, gettext("The setting could not be saved. Try again."))}
     end
   end
+
+  def handle_event("toggle_internal", _params, %{assigns: %{can_manage_shared: true}} = socket),
+    do: {:noreply, socket}
 
   def handle_event("toggle_internal", _params, socket),
     do: {:noreply, put_flash(socket, :error, Errors.message(:forbidden))}
@@ -132,7 +140,10 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
       <section :if={@can_manage_shared} id="internal-mail" class="card bg-base-100 shadow max-w-4xl">
         <div class="card-body gap-3">
           <h2 class="card-title text-base">{gettext("Mail inside the application")}</h2>
-          <label class="flex cursor-pointer items-start gap-3">
+          <label
+            id={"internal-mail-label-#{@toggle_nonce}"}
+            class="flex cursor-pointer items-start gap-3"
+          >
             <input
               id="internal-mail-toggle"
               type="checkbox"

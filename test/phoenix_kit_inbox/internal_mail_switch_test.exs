@@ -199,7 +199,7 @@ defmodule PhoenixKitInbox.InternalMailSwitchTest do
   end
 
   describe "off: lookups and suggestions" do
-    test "resolve_recipient_routes/2 answers :email, and :refused for what the send refuses",
+    test "resolve_recipient_routes/2 answers :email, with `refused:` on what the send refuses",
          ctx do
       addresses = ["@#{ctx.bob.username}", ctx.bob.email, "desk@company.test", ctx.plain.slug]
 
@@ -212,8 +212,11 @@ defmodule PhoenixKitInbox.InternalMailSwitchTest do
       assert Enum.map(routes, & &1.address) == addresses
       assert Enum.all?(routes, &(&1.mailbox_uuid == nil))
 
-      # What the send takes by email is :email; what it refuses is :refused.
-      assert Enum.map(routes, & &1.route) == [:refused, :email, :email, :refused]
+      # What the send refuses carries `refused:`; the route stays :email.
+      assert Enum.map(routes, & &1.route) == [:email, :email, :email, :email]
+
+      assert Enum.map(routes, &Map.get(&1, :refused)) ==
+               [:internal_mail_disabled, nil, nil, :internal_mail_disabled]
     end
 
     test "nobody is suggested, and a reply is addressed by email", ctx do

@@ -1415,8 +1415,9 @@ defmodule PhoenixKitInbox.Messages do
   While internal mail is off (`PhoenixKitInbox.internal_enabled?/0`) nothing is
   `:internal`: an email address is `:email` (a member's too — it goes as an
   outside email), and what only works inside and names somebody — `@username`,
-  a shared mailbox's name or slug — is `:refused` (`mailbox_uuid: nil`), which
-  the send answers `{:error, :internal_mail_disabled}`.
+  a shared mailbox's name or slug — is `:email` as well, with one more key,
+  `refused: :internal_mail_disabled`: the send answers it
+  `{:error, :internal_mail_disabled}`. No other entry has a `:refused` key.
 
   **One address per entry.** The send takes a recipient string apart at commas
   and semicolons; this does not. An entry holding several addresses is
@@ -1434,9 +1435,15 @@ defmodule PhoenixKitInbox.Messages do
   @spec resolve_recipient_routes(Scope.t() | nil, [String.t()]) :: [
           %{
             address: String.t(),
-            route: :internal | :email | :refused,
+            route: :internal | :email,
             mailbox_uuid: binary() | nil
           }
+          | %{
+              address: String.t(),
+              route: :email,
+              mailbox_uuid: nil,
+              refused: :internal_mail_disabled
+            }
         ]
   def resolve_recipient_routes(%Scope{} = scope, addresses) when is_list(addresses) do
     if Scope.can?(scope, "inbox") do
@@ -1473,7 +1480,13 @@ defmodule PhoenixKitInbox.Messages do
 
   # Internal mail is off and the text only works inside: the send refuses it.
   defp recipient_target(address, {:error, :internal_mail_disabled}),
-    do: %{address: address, route: :refused, mailbox_uuid: nil, user_uuid: nil}
+    do: %{
+      address: address,
+      route: :email,
+      mailbox_uuid: nil,
+      user_uuid: nil,
+      refused: :internal_mail_disabled
+    }
 
   defp recipient_target(address, {:error, _}),
     do: %{address: address, route: :email, mailbox_uuid: nil, user_uuid: nil}
@@ -1656,8 +1669,10 @@ defmodule PhoenixKitInbox.Messages do
       "cc" | "bcc", "status" => "sent" | "failed", "name", "error",
       "email_log_message_id"}]`, at least one; `role` defaults to `"to"`,
       `status` to `"sent"`. An address that names a member or a shared
-      mailbox is refused (`{:error, {:internal_recipients, addresses}}`) —
-      internal mail goes through `send_message/4`; anything that is not an
+      mailbox is refused while internal mail is on
+      (`{:error, {:internal_recipients, addresses}}`) — internal mail goes
+      through `send_message/4`; with it off such an address is recorded like
+      any outside one. Anything that is not an
       email address is `{:error, {:invalid_external_recipients, entries}}`.
       `"to"`, `"cc"` and `"bcc"` are not taken
       (`{:error, :use_external_recipients}`).

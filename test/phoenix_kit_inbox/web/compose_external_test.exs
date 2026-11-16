@@ -111,6 +111,12 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
 
     refute has_element?(view, "#compose-identity option[value='']")
     assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
+
+    # A refresh with the same mailbox keeps it, and says nothing about a reset.
+    refresh_scope(view, scope_for(ctx.alice, @external, [ctx.senders]))
+
+    refute has_element?(view, "#flash-error")
+    assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
   end
 
   test "without anything to send as, there is no picker", ctx do

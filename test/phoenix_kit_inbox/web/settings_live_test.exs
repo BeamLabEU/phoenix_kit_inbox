@@ -66,6 +66,15 @@ defmodule PhoenixKitInbox.Web.SettingsLiveTest do
       assert PhoenixKitInbox.internal_enabled?()
     end
 
+    test "a malformed toggle from a manager is ignored, without a forbidden flash", ctx do
+      {:ok, view, _html} = live(as(ctx.conn, ctx.admin, @manage), @path)
+
+      render_click(view, "toggle_internal", %{"enabled" => "maybe"})
+
+      refute has_element?(view, "#flash-error")
+      assert PhoenixKitInbox.internal_enabled?()
+    end
+
     test "shows no form", ctx do
       {:ok, view, _html} = live(as(ctx.conn, ctx.alice, ["inbox"]), @path)
 

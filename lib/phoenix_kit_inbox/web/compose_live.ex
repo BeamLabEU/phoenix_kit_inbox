@@ -358,12 +358,15 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         _ -> default_reply_to(socket)
       end
 
-    put_form_params(socket, %{"reply_to" => saved})
+    socket
+    |> put_form_params(%{"reply_to" => saved})
+    |> keep_identity()
   end
 
   defp init_sender(socket, false) do
     socket
     |> put_form_params(%{"reply_to" => default_reply_to(socket)})
+    |> keep_identity()
     |> switch_signature(default_signature(socket), socket.assigns.form.params["body"] || "")
   end
 
@@ -419,11 +422,10 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     end
   end
 
-  defp identity_offered?(socket, value) do
-    if value in [nil, ""],
-      do: default_identity(socket) == "",
-      else: offered?(socket.assigns.identities, :identity_uuid, value)
-  end
+  # A blank choice is never announced as lost: `keep_identity/1` puts the
+  # default in its place.
+  defp identity_offered?(socket, value),
+    do: offered?(socket.assigns.identities, :identity_uuid, value)
 
   defp sent_flash(%Message{external_status: :pending}),
     do: gettext("Message sent. The email to external addresses is on its way.")
