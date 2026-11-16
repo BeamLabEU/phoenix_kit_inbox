@@ -75,10 +75,26 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
   # ── Events ──────────────────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("toggle_internal", _params, %{assigns: %{can_manage_shared: true}} = socket) do
-    enabled = not PhoenixKitInbox.internal_enabled?()
-    PhoenixKitInbox.set_internal_enabled(enabled)
-    {:noreply, assign(socket, :internal_enabled, enabled)}
+  # The state to set is the one clicked on, not the opposite of what is read:
+  # a second admin or a double click sets it twice, it does not flip it back.
+  def handle_event(
+        "toggle_internal",
+        %{"enabled" => enabled},
+        %{assigns: %{can_manage_shared: true}} = socket
+      )
+      when enabled in ["true", "false"] do
+    enabled = enabled == "true"
+
+    case PhoenixKitInbox.set_internal_enabled(enabled) do
+      {:ok, _setting} ->
+        {:noreply, assign(socket, :internal_enabled, enabled)}
+
+      _failed ->
+        {:noreply,
+         socket
+         |> assign(:internal_enabled, PhoenixKitInbox.internal_enabled?())
+         |> put_flash(:error, gettext("The setting could not be saved. Try again."))}
+    end
   end
 
   def handle_event("toggle_internal", _params, socket),
@@ -123,6 +139,7 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
               class="toggle toggle-primary"
               checked={@internal_enabled}
               phx-click="toggle_internal"
+              phx-value-enabled={to_string(not @internal_enabled)}
             />
             <span class="text-sm">
               {gettext(

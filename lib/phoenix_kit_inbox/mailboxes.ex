@@ -29,6 +29,7 @@ defmodule PhoenixKitInbox.Mailboxes do
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKit.Users.Auth.User
   alias PhoenixKitInbox.AccessEvents
+  alias PhoenixKitInbox.External
   alias PhoenixKitInbox.Members
   alias PhoenixKitInbox.Schemas.Delivery
   alias PhoenixKitInbox.Schemas.Mailbox
@@ -297,12 +298,10 @@ defmodule PhoenixKitInbox.Mailboxes do
   def recipient_handle(%Mailbox{} = mailbox) do
     cond do
       PhoenixKitInbox.internal_enabled?() -> mailbox.address || mailbox.slug
-      email?(mailbox.address) -> mailbox.address
+      External.address?(mailbox.address) -> mailbox.address
       true -> nil
     end
   end
-
-  defp email?(text), do: is_binary(text) and String.contains?(text, "@")
 
   @doc "A user's To-field handle: `\"@username\"`, or the email without one."
   @spec user_handle(map()) :: String.t() | nil

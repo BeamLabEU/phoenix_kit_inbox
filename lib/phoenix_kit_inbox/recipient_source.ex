@@ -278,7 +278,8 @@ defmodule PhoenixKitInbox.RecipientSource do
     if Code.ensure_loaded?(source) and function_exported?(source, :suggest, 3) do
       case safely(source, scope, context, query) do
         {:ok, list} when is_list(list) ->
-          list |> Enum.take(@max_suggestions) |> Enum.flat_map(&normalize/1)
+          internal? = PhoenixKitInbox.internal_enabled?()
+          list |> Enum.take(@max_suggestions) |> Enum.flat_map(&normalize(&1, internal?))
 
         {:ok, _other} ->
           skip(source, "did not return a list")
@@ -317,7 +318,7 @@ defmodule PhoenixKitInbox.RecipientSource do
 
   # ── entries ─────────────────────────────────────────────────────────────────
 
-  defp normalize(%{route: route} = entry)
+  defp normalize(%{route: route} = entry, internal?)
        when route in [:internal, :email] and not is_struct(entry) do
     address = text(entry[:address])
     user = uuid(entry[:user])
@@ -325,7 +326,7 @@ defmodule PhoenixKitInbox.RecipientSource do
     # With internal mail off an inside entry has no inside route: an account
     # is offered by its login email, a handle that works only inside not at all.
     {route, address} =
-      if route == :internal and not PhoenixKitInbox.internal_enabled?(),
+      if route == :internal and not internal?,
         do: {:email, if(user, do: address)},
         else: {route, address}
 
@@ -336,7 +337,7 @@ defmodule PhoenixKitInbox.RecipientSource do
     end
   end
 
-  defp normalize(_), do: []
+  defp normalize(_, _internal?), do: []
 
   defp finish(identity, entry, route),
     do:

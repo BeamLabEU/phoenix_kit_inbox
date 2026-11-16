@@ -12,6 +12,7 @@ defmodule PhoenixKitInbox.InternalMailSwitchTest do
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.RecipientSource
+  alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.Message
 
   @external ["inbox", "inbox.send_external"]
@@ -171,11 +172,10 @@ defmodule PhoenixKitInbox.InternalMailSwitchTest do
       assert [%{address: "desk@company.test"}] = External.list(message.uuid)
     end
 
-    test "needs the right to write outside, like any outside send", ctx do
+    test "needs the right to write outside, and says so for a colleague's address", ctx do
       off!()
 
-      assert send_to(ctx, ctx.bob.email, %{}, :inside_only) ==
-               {:error, {:unknown_recipients, [ctx.bob.email]}}
+      assert send_to(ctx, ctx.bob.email, %{}, :inside_only) == {:error, :external_not_allowed}
 
       assert Messages.list_folder(ctx.bob_mb.uuid, "inbox") == []
     end
@@ -199,7 +199,8 @@ defmodule PhoenixKitInbox.InternalMailSwitchTest do
   end
 
   describe "off: lookups and suggestions" do
-    test "resolve_recipient_routes/2 answers :email for everyone", ctx do
+    test "resolve_recipient_routes/2 answers :email, and :refused for what the send refuses",
+         ctx do
       addresses = ["@#{ctx.bob.username}", ctx.bob.email, "desk@company.test", ctx.plain.slug]
 
       assert [%{route: :internal} | _] =
@@ -209,7 +210,10 @@ defmodule PhoenixKitInbox.InternalMailSwitchTest do
 
       routes = Messages.resolve_recipient_routes(ctx.inside_only, addresses)
       assert Enum.map(routes, & &1.address) == addresses
-      assert Enum.all?(routes, &(&1.route == :email and &1.mailbox_uuid == nil))
+      assert Enum.all?(routes, &(&1.mailbox_uuid == nil))
+
+      # What the send takes by email is :email; what it refuses is :refused.
+      assert Enum.map(routes, & &1.route) == [:refused, :email, :email, :refused]
     end
 
     test "nobody is suggested, and a reply is addressed by email", ctx do
@@ -254,6 +258,34 @@ defmodule PhoenixKitInbox.InternalMailSwitchTest do
                })
 
       assert [_, _] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    end
+
+    test "record_sent/4 takes a member's address as an outside address, and makes no mailbox",
+         ctx do
+      stranger = user_fixture()
+      off!()
+
+      assert {:ok, message} =
+               Messages.record_sent(ctx.outside, ctx.alice_mb, %{
+                 "subject" => "Recorded",
+                 "body" => "Body",
+                 "external_recipients" => [%{"address" => stranger.email}]
+               })
+
+      assert [%{address: address}] = External.list(message.uuid)
+      assert address == stranger.email
+      assert Repo.get_by(Mailbox, owner_uuid: stranger.uuid, kind: "user") == nil
+    end
+
+    test "record_sent/4 still refuses it while internal mail is on", ctx do
+      stranger = user_fixture()
+
+      assert {:error, {:internal_recipients, [_]}} =
+               Messages.record_sent(ctx.outside, ctx.alice_mb, %{
+                 "subject" => "Recorded",
+                 "body" => "Body",
+                 "external_recipients" => [%{"address" => stranger.email}]
+               })
     end
 
     test "turned on again, inside delivery is back", ctx do
