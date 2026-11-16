@@ -1841,7 +1841,7 @@ defmodule PhoenixKitInbox.Messages do
   Trash, and Restore in the UI. Needs `"write"` on the mailbox.
 
   `"outbox"` is the system's own: nobody files a message there by hand
-  (`{:error, :system_folder}`). Moving a copy *out* of Outbox is allowed, and
+  (`{:error, :system_folder}`, once the caller's right to write is checked). Moving a copy *out* of Outbox is allowed, and
   it stays where it was put when the email goes.
   """
   @spec move_to_folder(Scope.t(), Mailbox.t(), binary(), String.t()) ::
@@ -1852,8 +1852,10 @@ defmodule PhoenixKitInbox.Messages do
              | :mailbox_access_denied
              | :system_folder
              | Ecto.Changeset.t()}
-  def move_to_folder(%Scope{}, %Mailbox{}, _message_uuid, "outbox"),
-    do: {:error, :system_folder}
+  def move_to_folder(%Scope{} = scope, %Mailbox{} = mailbox, _message_uuid, "outbox") do
+    with {:ok, _fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write"),
+         do: {:error, :system_folder}
+  end
 
   def move_to_folder(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid, folder) do
     update_delivery(scope, mailbox, "write", message_uuid, fn delivery ->

@@ -940,6 +940,24 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert PhoenixKitInbox.Errors.message(:system_folder) =~ "Outbox"
     end
 
+    test "the right to write is checked before Outbox is refused", ctx do
+      assert Messages.move_to_folder(
+               scope_for(ctx.carol),
+               ctx.alice_mb,
+               ctx.message.uuid,
+               "outbox"
+             ) ==
+               {:error, :mailbox_access_denied}
+
+      assert Messages.move_to_folder(
+               scope_for(ctx.alice, []),
+               ctx.alice_mb,
+               ctx.message.uuid,
+               "outbox"
+             ) ==
+               {:error, :forbidden}
+    end
+
     test "a copy trashed from Sent can't be put into Outbox from the trash either", ctx do
       assert {:ok, _} =
                Messages.move_to_folder(ctx.alice_scope, ctx.alice_mb, ctx.message.uuid, "trash")

@@ -48,9 +48,20 @@ defmodule PhoenixKitInbox.ExternalReasonTest do
       assert label(%{some: "map"}) == "Sending failed."
       assert ExternalReason.label(nil) == "Sending failed."
       assert ExternalReason.label("") == "Sending failed."
-      # The stored text is cut at 500 characters: a cut tuple is not a reason.
-      assert ExternalReason.label("{:transport_failed, \"" <> String.duplicate("x", 40)) ==
-               "Sending failed."
+      # A reason that reads its payload is not guessed from half of it.
+      assert ExternalReason.label("{:external_too_large, 12") == "Sending failed."
+    end
+
+    test "a stored text cut at 500 characters keeps the reason of its tag" do
+      cut = "{:transport_failed, \"" <> String.duplicate("x", 480)
+
+      assert ExternalReason.known?(cut)
+      assert ExternalReason.label(cut) == "The mail server did not take the email."
+    end
+
+    test "the reasons of a sender who lost access in between" do
+      assert label(:mailbox_access_denied) == Errors.message(:mailbox_access_denied)
+      assert label(:mailbox_not_found) == Errors.message(:mailbox_not_found)
     end
 
     test "an unknown atom is not turned into an atom" do

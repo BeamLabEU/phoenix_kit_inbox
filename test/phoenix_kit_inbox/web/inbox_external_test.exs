@@ -175,6 +175,39 @@ defmodule PhoenixKitInbox.Web.InboxExternalTest do
       assert [_] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
     end
 
+    test "the badge follows the update while another folder is open", ctx do
+      view = open(ctx, ctx.alice, ctx.alice_mb, "inbox")
+      assert has_element?(view, "#outbox-count.badge-error", "1")
+
+      Repo.update_all(
+        from(r in ExternalRecipient, where: r.message_uuid == ^ctx.message.uuid),
+        set: [
+          status: "pending",
+          error: nil,
+          attempted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        ]
+      )
+
+      send(view.pid, {:inbox_external_updated, ctx.message.uuid})
+
+      assert has_element?(view, "#outbox-count.badge-ghost", "1")
+      refute has_element?(view, "#outbox-count.badge-error")
+    end
+
+    test "an Outbox copy marked unread keeps an unseen badge next to the count", ctx do
+      assert {:ok, _} =
+               Messages.mark_unseen(
+                 scope_for(ctx.alice, @external, [ctx.senders]),
+                 ctx.alice_mb,
+                 ctx.message.uuid
+               )
+
+      view = open_outbox(ctx)
+
+      assert has_element?(view, "#unseen-count-outbox", "1")
+      assert has_element?(view, "#outbox-count", "1")
+    end
+
     test "a forged move into Outbox is refused", ctx do
       view = open(ctx, ctx.alice, ctx.alice_mb, "sent")
 

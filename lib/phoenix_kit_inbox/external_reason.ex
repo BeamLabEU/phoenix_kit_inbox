@@ -15,10 +15,14 @@ defmodule PhoenixKitInbox.ExternalReason do
   alias PhoenixKitInbox.Errors
 
   @atoms ~w(external_disabled no_integration filter_failed no_recipients not_started
-            forbidden no_identity mailbox_archived)a
+            forbidden no_identity mailbox_archived mailbox_access_denied mailbox_not_found)a
   @atom_names Map.new(@atoms, &{Atom.to_string(&1), &1})
 
-  @tuple ~r/\A\{:(\w+),\s*(.*)\}\z/s
+  # Only the opening is matched: the stored text is cut at 500 characters, and
+  # a long payload (`transport_failed` carries the transport's message) must
+  # not cost the reason its label. Reasons that read their payload check the
+  # closing brace themselves.
+  @tuple ~r/\A\{:(\w+),\s*(.*)\z/s
 
   @doc """
   The translated reason for the stored `error` text of a failed row. Always a
@@ -42,7 +46,7 @@ defmodule PhoenixKitInbox.ExternalReason do
 
   defp parse("{" <> _ = text) do
     case Regex.run(@tuple, text) do
-      [_, tag, rest] -> tuple(tag, String.trim(rest))
+      [_, tag, rest] -> tuple(tag, rest)
       _ -> :error
     end
   end
@@ -57,15 +61,15 @@ defmodule PhoenixKitInbox.ExternalReason do
 
   defp tuple("external_too_large", rest) do
     case Integer.parse(rest) do
-      {max, ""} when max > 0 -> {:ok, {:external_too_large, max}}
+      {max, "}"} when max > 0 -> {:ok, {:external_too_large, max}}
       _ -> :error
     end
   end
 
-  defp tuple("identity_unusable", ":broken"), do: {:ok, {:identity_unusable, :broken}}
-  defp tuple("identity_unusable", ":not_found"), do: {:ok, {:identity_unusable, :not_found}}
+  defp tuple("identity_unusable", ":broken}"), do: {:ok, {:identity_unusable, :broken}}
+  defp tuple("identity_unusable", ":not_found}"), do: {:ok, {:identity_unusable, :not_found}}
 
-  defp tuple("identity_unusable", ":identity_not_for_mailbox"),
+  defp tuple("identity_unusable", ":identity_not_for_mailbox}"),
     do: {:ok, {:identity_unusable, :identity_not_for_mailbox}}
 
   defp tuple("identity_unusable", _rest), do: {:ok, {:identity_unusable, :other}}

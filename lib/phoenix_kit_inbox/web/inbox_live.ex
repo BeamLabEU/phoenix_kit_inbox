@@ -314,15 +314,28 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     ]
 
     entries = Messages.list_folder(assigns.mailbox.uuid, assigns.folder, opts)
+    socket = assign_counts(socket)
 
     socket
     |> assign(:entries, entries)
     |> assign(:outbox_states, outbox_states(assigns.folder, entries))
-    |> assign(:total, Messages.count_folder(assigns.mailbox.uuid, assigns.folder, opts))
-    |> assign_counts()
+    |> assign(:total, folder_total(socket, opts))
   end
 
+  # The Outbox total is the sidebar's count, already read — unless a search
+  # or the unseen filter narrows the list.
+  defp folder_total(%{assigns: %{folder: "outbox"} = assigns}, opts) do
+    if opts[:search] in [nil, ""] and not opts[:unseen_only],
+      do: assigns.outbox_summary.count,
+      else: Messages.count_folder(assigns.mailbox.uuid, "outbox", opts)
+  end
+
+  defp folder_total(%{assigns: assigns}, opts),
+    do: Messages.count_folder(assigns.mailbox.uuid, assigns.folder, opts)
+
   # The sidebar's numbers: unseen per folder, and what waits in Outbox.
+  defp assign_counts(%{assigns: %{mailbox: nil}} = socket), do: socket
+
   defp assign_counts(%{assigns: %{mailbox: mailbox}} = socket) do
     socket
     |> assign(:unseen_counts, Mailboxes.unseen_counts(mailbox.uuid))
@@ -358,7 +371,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
           Attachments.list_for_viewer(socket.assigns.scope, entry.message.uuid)
         )
         |> assign_externals(entry.message)
-        |> assign_counts()
+        |> assign(:unseen_counts, Mailboxes.unseen_counts(socket.assigns.mailbox.uuid))
 
       {:error, reason} ->
         socket
@@ -486,9 +499,14 @@ defmodule PhoenixKitInbox.Web.InboxLive do
         _ -> socket
       end
 
-    # The copy may have just left Outbox for Sent, or stayed with a reason.
+    # The copy may have just left Outbox for Sent, or stayed with a reason: the
+    # sidebar's Outbox badge changes whichever folder is open, the list only
+    # when it is one of those two.
     {:noreply,
-     if(socket.assigns.folder in ~w(outbox sent), do: load_messages(socket), else: socket)}
+     if(socket.assigns.folder in ~w(outbox sent),
+       do: load_messages(socket),
+       else: assign_counts(socket)
+     )}
   end
 
   def handle_info({:inbox_access_changed, _what}, socket),
@@ -714,7 +732,8 @@ defmodule PhoenixKitInbox.Web.InboxLive do
                 {@outbox_summary.count}
               </span>
               <span
-                :if={folder != "outbox" and unseen_count(@unseen_counts, folder) > 0}
+                :if={unseen_count(@unseen_counts, folder) > 0}
+                id={"unseen-count-#{folder}"}
                 class="badge badge-primary badge-sm"
               >
                 {unseen_count(@unseen_counts, folder)}
@@ -811,7 +830,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
               <div class="truncate text-xs text-base-content/60">
                 {Body.preview(entry.message)}
               </div>
-              <.outbox_state
+              <.outbox_status
                 :if={@folder == "outbox"}
                 uuid={entry.message.uuid}
                 state={Map.get(@outbox_states, entry.message.uuid)}
@@ -834,9 +853,9 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   attr(:state, :map, default: nil)
 
   # Where an Outbox letter stands, and for a failed one why.
-  defp outbox_state(%{state: nil} = assigns), do: ~H""
+  defp outbox_status(%{state: nil} = assigns), do: ~H""
 
-  defp outbox_state(assigns) do
+  defp outbox_status(assigns) do
     ~H"""
     <div id={"outbox-state-#{@uuid}"} class="flex flex-wrap items-center gap-1 text-xs">
       <span class={["badge badge-xs", outbox_badge(@state.state)]}>

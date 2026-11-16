@@ -428,7 +428,15 @@ defmodule PhoenixKitInbox.External do
   end
 
   defp finish(message, uuids, result) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    record_outcome(message, uuids, result)
+    broadcast(message)
+  end
+
+  # The rows and the sender's copy change together: both or neither. A pair
+  # that did not commit leaves the rows pending (see the rescue), never rows
+  # sent with the copy stranded in Outbox.
+  defp record_outcome(message, uuids, result) do
+    now = now()
 
     changes =
       case result do
@@ -444,12 +452,16 @@ defmodule PhoenixKitInbox.External do
           [status: "failed", error: describe_error(reason), attempted_at: now]
       end
 
-    {_count, _} =
-      from(r in ExternalRecipient, where: r.uuid in ^uuids and r.status == "pending")
-      |> repo().update_all(set: changes)
+    {:ok, :ok} =
+      repo().transaction(fn ->
+        {_count, _} =
+          from(r in ExternalRecipient, where: r.uuid in ^uuids and r.status == "pending")
+          |> repo().update_all(set: changes)
 
-    release_from_outbox(message)
-    broadcast(message)
+        release_from_outbox(message)
+      end)
+
+    :ok
   rescue
     # The email went (or not) — the rows stay pending, which reads as
     # "unknown, check the email log" after a while; never as failed, which
