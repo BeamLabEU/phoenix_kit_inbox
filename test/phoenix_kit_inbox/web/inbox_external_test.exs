@@ -90,6 +90,100 @@ defmodule PhoenixKitInbox.Web.InboxExternalTest do
     refute has_element?(view, "#retry-external")
   end
 
+  describe "the Outbox folder" do
+    defp open_outbox(ctx, user \\ nil, mailbox \\ nil) do
+      conn = put_test_scope(ctx.conn, scope_for(user || ctx.alice, @external, [ctx.senders]))
+
+      {:ok, view, _html} =
+        live(conn, "/en/admin/inbox?mailbox=#{(mailbox || ctx.alice_mb).uuid}&folder=outbox")
+
+      view
+    end
+
+    test "lists the letter that was not delivered, with its state and the reason", ctx do
+      view = open_outbox(ctx)
+
+      assert has_element?(view, "#outbox-state-#{ctx.message.uuid}", "not delivered")
+      # The stored text is `:smtp_down`: no words of its own, so the plain one.
+      assert has_element?(view, "#outbox-state-#{ctx.message.uuid}", "Sending failed.")
+    end
+
+    test "the sidebar counts what waits, in the error colour when it needs attention", ctx do
+      view = open_outbox(ctx)
+
+      assert has_element?(view, "#outbox-count.badge-error", "1")
+      refute has_element?(view, "#outbox-count.badge-ghost")
+    end
+
+    test "the sidebar counts a merely queued letter without the error colour", ctx do
+      Repo.update_all(
+        from(r in ExternalRecipient, where: r.message_uuid == ^ctx.message.uuid),
+        set: [
+          status: "pending",
+          error: nil,
+          attempted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        ]
+      )
+
+      view = open_outbox(ctx)
+
+      assert has_element?(view, "#outbox-count.badge-ghost", "1")
+      refute has_element?(view, "#outbox-count.badge-error")
+      assert has_element?(view, "#outbox-state-#{ctx.message.uuid}", "queued")
+    end
+
+    test "shows no counter and an empty list for a mailbox with nothing waiting", ctx do
+      view = open_outbox(ctx, ctx.bob, ctx.bob_mb)
+
+      refute has_element?(view, "#outbox-count")
+      refute has_element?(view, "[id^='outbox-state-']")
+    end
+
+    test "the reading pane gives the reason for each failed recipient, to the sender only", ctx do
+      view = open(ctx, ctx.alice, ctx.alice_mb, "outbox")
+
+      row =
+        ctx.message.uuid |> External.list() |> Enum.find(&(&1.address == "client@example.com"))
+
+      assert has_element?(view, "#external-reason-#{row.uuid}", "client@example.com")
+      assert has_element?(view, "#external-reason-#{row.uuid}", "Sending failed.")
+      # What it is not a reason for: the technical text stays in the tooltip.
+      assert has_element?(view, "#external-#{row.uuid}[title=':smtp_down']")
+
+      view = open(ctx, ctx.bob, ctx.bob_mb, "inbox")
+      refute has_element?(view, "#external-reasons")
+    end
+
+    test "the letter leaves the list when its email goes", ctx do
+      emails_module_enabled!()
+      email_log_fixture(%{"inbox_message_uuid" => ctx.message.uuid}, "failed")
+      view = open_outbox(ctx)
+      assert has_element?(view, "#outbox-state-#{ctx.message.uuid}")
+
+      assert Messages.retry_external(
+               scope_for(ctx.alice, @external, [ctx.senders]),
+               ctx.alice_mb,
+               ctx.message.uuid
+             ) ==
+               {:ok, :pending}
+
+      await_external(ctx.message.uuid)
+      send(view.pid, {:inbox_external_updated, ctx.message.uuid})
+
+      refute has_element?(view, "#outbox-state-#{ctx.message.uuid}")
+      refute has_element?(view, "#outbox-count")
+      assert [_] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    end
+
+    test "a forged move into Outbox is refused", ctx do
+      view = open(ctx, ctx.alice, ctx.alice_mb, "sent")
+
+      html = render_click(view, "move", %{"uuid" => ctx.message.uuid, "folder" => "outbox"})
+
+      assert html =~ "can&#39;t be moved into Outbox"
+    end
+  end
+
   test "a recipient sees the To and Cc addresses — no Bcc, no status, no Retry", ctx do
     emails_module_enabled!()
     view = open(ctx, ctx.bob, ctx.bob_mb, "inbox")

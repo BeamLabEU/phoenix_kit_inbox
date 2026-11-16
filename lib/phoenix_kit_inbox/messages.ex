@@ -13,8 +13,10 @@ defmodule PhoenixKitInbox.Messages do
        (`links:`) and the ones inherited from the conversation
        (`PhoenixKitInbox.Links`)
     4. fan out one `Delivery` per recipient into their `"inbox"`, plus the
-       sender's own copy into `"sent"`, and one `"pending"` row per external
-       recipient (`PhoenixKitInbox.External`)
+       sender's own copy — into `"outbox"` while the message has external
+       recipients (it moves to `"sent"` once the email to every one of them
+       went, see `PhoenixKitInbox.External`), else into `"sent"` — and one
+       `"pending"` row per external recipient
 
   A host that gives `idempotency_key:` can repeat a send safely: the key is
   checked first, before anything is stored or sent, and recorded in the same
@@ -658,7 +660,8 @@ defmodule PhoenixKitInbox.Messages do
   attachments must fit `PhoenixKitInbox.external_max_bytes/0`
   (`{:error, {:external_too_large, max}}`). The email to them goes after the
   commit; the returned message's `external_status` is `:pending`, else
-  `:none`. See `PhoenixKitInbox.External`.
+  `:none`. The sender's copy waits in `"outbox"` until then (and stays there
+  while a recipient is not sent to). See `PhoenixKitInbox.External`.
 
   Attachments need the scope form; the three-argument form refuses them with
   `{:error, :attachments_need_scope}` (also when promoting a draft that has
@@ -1245,9 +1248,10 @@ defmodule PhoenixKitInbox.Messages do
            do: {:ok, :written}
     end)
     |> Multi.run(:sender_copy, fn repo, %{thread: message} ->
-      # Moves the draft's own delivery row from "drafts" to "sent" when
-      # promoting a draft, or creates it outright for a fresh send.
-      upsert_delivery(repo, message.uuid, mailbox.uuid, "from", "sent")
+      # Moves the draft's own delivery row from "drafts" to "sent" (or, with
+      # external recipients, "outbox") when promoting a draft, or creates it
+      # outright for a fresh send.
+      upsert_delivery(repo, message.uuid, mailbox.uuid, "from", sender_folder(externals))
     end)
     |> Multi.run(:deliveries, fn repo, %{thread: message} ->
       fan_out(repo, message, recipients)
@@ -1267,6 +1271,16 @@ defmodule PhoenixKitInbox.Messages do
         {:error, reason}
     end
   end
+
+  # The sender's copy waits in Outbox while an email to outsiders is still to
+  # go (see `External.finish/3`, which moves it on).
+  defp sender_folder([]), do: "sent"
+  defp sender_folder(_externals), do: "outbox"
+
+  # A recorded send is over: a failed recipient keeps the copy in Outbox,
+  # where the sender sees it (and can archive or delete it).
+  defp recorded_folder(entries),
+    do: if(Enum.any?(entries, &(&1.status == "failed")), do: "outbox", else: "sent")
 
   # Server-written, so a caller's "sender" key can't impersonate anyone. The
   # write check before it guarantees a sender uuid.
@@ -1594,6 +1608,10 @@ defmodule PhoenixKitInbox.Messages do
   shows what went out. Nothing is sent and nobody inside the application
   receives anything.
 
+  The copy goes to Sent; when any recipient is recorded as `"failed"` it goes
+  to Outbox instead, where the sender sees what did not go out. There is no
+  Retry for it: the sender can archive or delete the copy.
+
   Needs the `"inbox"` permission and `"write"` on `mailbox`. `attrs`:
 
     * `"subject"`, `"body"`, `"body_format"` — as for `send_message/4`
@@ -1760,7 +1778,7 @@ defmodule PhoenixKitInbox.Messages do
     Multi.new()
     |> Multi.insert(:message, changeset)
     |> Multi.run(:sender_copy, fn repo, %{message: message} ->
-      upsert_delivery(repo, message.uuid, mailbox.uuid, "from", "sent")
+      upsert_delivery(repo, message.uuid, mailbox.uuid, "from", recorded_folder(entries))
     end)
     |> Multi.run(:external, fn repo, %{message: message} ->
       External.insert_rows(repo, message.uuid, entries)
@@ -1821,11 +1839,22 @@ defmodule PhoenixKitInbox.Messages do
   @doc """
   Moves a delivery to another folder — the one operation behind Archive, Spam,
   Trash, and Restore in the UI. Needs `"write"` on the mailbox.
+
+  `"outbox"` is the system's own: nobody files a message there by hand
+  (`{:error, :system_folder}`). Moving a copy *out* of Outbox is allowed, and
+  it stays where it was put when the email goes.
   """
   @spec move_to_folder(Scope.t(), Mailbox.t(), binary(), String.t()) ::
           {:ok, Delivery.t()}
           | {:error,
-             :message_not_found | :forbidden | :mailbox_access_denied | Ecto.Changeset.t()}
+             :message_not_found
+             | :forbidden
+             | :mailbox_access_denied
+             | :system_folder
+             | Ecto.Changeset.t()}
+  def move_to_folder(%Scope{}, %Mailbox{}, _message_uuid, "outbox"),
+    do: {:error, :system_folder}
+
   def move_to_folder(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid, folder) do
     update_delivery(scope, mailbox, "write", message_uuid, fn delivery ->
       delivery

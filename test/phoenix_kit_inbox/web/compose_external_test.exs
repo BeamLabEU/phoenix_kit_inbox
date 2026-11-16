@@ -7,10 +7,13 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
 
   use PhoenixKitInbox.LiveCase
 
+  import Ecto.Query, only: [from: 2]
+
   alias PhoenixKitInbox.External
   alias PhoenixKitInbox.Identities
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
+  alias PhoenixKitInbox.Test.Repo
 
   @external ["inbox", "inbox.send_external"]
 
@@ -117,9 +120,19 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
 
     assert {to, _flash} = assert_redirect(view)
 
-    assert to =~ "folder=sent"
-    assert [%{message: message}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    # An email on its way: the sender lands where it waits.
+    assert to =~ "folder=outbox"
+
+    message =
+      Repo.one!(
+        from(m in PhoenixKitInbox.Schemas.Message,
+          where: m.sender_mailbox_uuid == ^ctx.alice_mb.uuid
+        )
+      )
+
     await_external(message.uuid)
+    assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    assert uuid == message.uuid
 
     assert [%{address: "client@example.com", status: "sent"}] = External.list(message.uuid)
     assert_received {:outbound, %{to: [{"", "client@example.com"}]}, smtp, _opts}

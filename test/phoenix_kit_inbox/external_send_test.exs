@@ -695,6 +695,186 @@ defmodule PhoenixKitInbox.ExternalSendTest do
     end
   end
 
+  describe "Outbox" do
+    # The transport holds the email until the test lets it go, so the copy
+    # can be looked at while the email is on its way.
+    defp hold_transport do
+      test = self()
+
+      outbound_result(fn _email, _uuid, _opts ->
+        send(test, {:held, self()})
+
+        receive do
+          :release -> {:ok, %{id: "ok"}}
+        after
+          5_000 -> {:error, :never_released}
+        end
+      end)
+    end
+
+    defp send_unawaited(ctx) do
+      Messages.send_message(ctx.scope, ctx.alice_mb, %{
+        "to" => "@#{ctx.bob.username}, client@example.com",
+        "subject" => "Offer",
+        "body" => "Hello",
+        "identity_uuid" => ctx.common.uuid
+      })
+    end
+
+    defp folder_of(ctx, message, folder \\ nil) do
+      ctx.alice_mb.uuid
+      |> Messages.list_folder(folder || "outbox")
+      |> Enum.any?(&(&1.message.uuid == message.uuid))
+    end
+
+    test "the sender's copy waits in Outbox while the email is on its way, then goes to Sent",
+         ctx do
+      hold_transport()
+
+      assert {:ok, %Message{external_status: :pending} = message} =
+               send_unawaited(ctx)
+
+      assert_receive {:held, task}
+      assert folder_of(ctx, message)
+      refute folder_of(ctx, message, "sent")
+
+      # Mixed letter: the internal part was delivered at once, as always.
+      assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
+      assert uuid == message.uuid
+
+      send(task, :release)
+      await_external(message.uuid)
+
+      assert folder_of(ctx, message, "sent")
+      refute folder_of(ctx, message)
+    end
+
+    test "a message to inside recipients only goes straight to Sent", ctx do
+      assert {:ok, %Message{external_status: :none} = message} =
+               Messages.send_message(ctx.scope, ctx.alice_mb, %{
+                 "to" => "@#{ctx.bob.username}",
+                 "subject" => "Inside",
+                 "body" => "Hi"
+               })
+
+      assert folder_of(ctx, message, "sent")
+      refute folder_of(ctx, message)
+    end
+
+    test "a failed email stays in Outbox, with the reason in words", ctx do
+      outbound_filter({OutboundFilters, :refuse})
+
+      assert {:ok, message} = send_mail(ctx, %{})
+
+      assert folder_of(ctx, message)
+      refute folder_of(ctx, message, "sent")
+
+      assert %{state: :failed, reason: reason} =
+               Map.fetch!(External.outbox_states([message.uuid]), message.uuid)
+
+      assert reason == PhoenixKitInbox.Errors.message({:filter_refused, nil})
+
+      assert External.outbox_summary(ctx.alice_mb.uuid) == %{count: 1, attention?: true}
+    end
+
+    test "a reason it has no words for reads \"Sending failed.\"", ctx do
+      outbound_result({:error, {:smtp, "550 rejected"}})
+
+      assert {:ok, message} = send_mail(ctx, %{})
+
+      assert %{state: :failed, reason: "Sending failed."} =
+               Map.fetch!(External.outbox_states([message.uuid]), message.uuid)
+    end
+
+    test "a queued letter is counted without needing attention; unknown after 15 minutes does",
+         ctx do
+      {message, _uuids} = pending_send(ctx)
+
+      assert %{state: :pending, reason: nil} =
+               Map.fetch!(External.outbox_states([message.uuid]), message.uuid)
+
+      assert External.outbox_summary(ctx.alice_mb.uuid) == %{count: 1, attention?: false}
+
+      long_ago = DateTime.utc_now() |> DateTime.add(-20 * 60) |> DateTime.truncate(:second)
+
+      Repo.update_all(from(r in ExternalRecipient, where: r.message_uuid == ^message.uuid),
+        set: [attempted_at: nil, inserted_at: long_ago]
+      )
+
+      assert %{state: :unknown} =
+               Map.fetch!(External.outbox_states([message.uuid]), message.uuid)
+
+      assert External.outbox_summary(ctx.alice_mb.uuid) == %{count: 1, attention?: true}
+    end
+
+    test "an empty Outbox has nothing to count", ctx do
+      assert External.outbox_summary(ctx.alice_mb.uuid) == %{count: 0, attention?: false}
+      assert External.outbox_states([]) == %{}
+    end
+
+    test "a copy the user moved out of Outbox stays where it was put", ctx do
+      hold_transport()
+      assert {:ok, message} = send_unawaited(ctx)
+      assert_receive {:held, task}
+
+      assert {:ok, _} = Messages.move_to_folder(ctx.scope, ctx.alice_mb, message.uuid, "archive")
+
+      send(task, :release)
+      await_external(message.uuid)
+
+      assert folder_of(ctx, message, "archive")
+      refute folder_of(ctx, message, "sent")
+      refute folder_of(ctx, message)
+    end
+
+    test "the copy stays in Outbox while one external row is still not sent", ctx do
+      {message, uuids} = pending_send(ctx)
+      [kept | sending] = uuids
+
+      # One row is left failed; the other two are sent by the task's body.
+      Repo.update_all(from(r in ExternalRecipient, where: r.uuid == ^kept),
+        set: [status: "failed", error: ":smtp_down"]
+      )
+
+      External.deliver_now(message, sending, ctx.scope, ctx.alice_mb)
+
+      assert [%{status: "failed"}, %{status: "sent"}, %{status: "sent"}] = rows(message)
+      assert folder_of(ctx, message)
+      refute folder_of(ctx, message, "sent")
+    end
+
+    test "a draft with external recipients is promoted into Outbox, and on to Sent", ctx do
+      assert {:ok, draft} =
+               Messages.save_draft(ctx.scope, ctx.alice_mb, %{
+                 "to" => "client@example.com",
+                 "subject" => "Offer",
+                 "body" => "Hello",
+                 "identity_uuid" => ctx.common.uuid
+               })
+
+      assert folder_of(ctx, draft, "drafts")
+      hold_transport()
+
+      assert {:ok, %Message{uuid: uuid}} =
+               Messages.send_message(ctx.scope, ctx.alice_mb, %{
+                 "uuid" => draft.uuid,
+                 "to" => "client@example.com",
+                 "subject" => "Offer",
+                 "body" => "Hello",
+                 "identity_uuid" => ctx.common.uuid
+               })
+
+      assert uuid == draft.uuid
+      assert_receive {:held, task}
+      assert folder_of(ctx, draft)
+      refute folder_of(ctx, draft, "drafts")
+
+      send(task, :release)
+      await_external(draft.uuid)
+      assert folder_of(ctx, draft, "sent")
+    end
+  end
+
   describe "retry" do
     setup ctx do
       outbound_result({:error, :smtp_down})
@@ -726,6 +906,32 @@ defmodule PhoenixKitInbox.ExternalSendTest do
 
       assert Messages.retry_external(ctx.scope, ctx.alice_mb, ctx.message.uuid) ==
                {:error, :nothing_to_retry}
+    end
+
+    test "the failed copy waits in Outbox; a retry that goes through moves it to Sent", ctx do
+      assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.alice_mb.uuid, "outbox")
+      assert uuid == ctx.message.uuid
+      assert Messages.list_folder(ctx.alice_mb.uuid, "sent") == []
+
+      assert Messages.retry_external(ctx.scope, ctx.alice_mb, ctx.message.uuid) ==
+               {:ok, :pending}
+
+      await_external(ctx.message.uuid)
+
+      assert Messages.list_folder(ctx.alice_mb.uuid, "outbox") == []
+      assert [%{message: %{uuid: ^uuid}}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    end
+
+    test "a retry that fails again leaves the copy in Outbox", ctx do
+      outbound_result({:error, :smtp_still_down})
+
+      assert Messages.retry_external(ctx.scope, ctx.alice_mb, ctx.message.uuid) ==
+               {:ok, :pending}
+
+      await_external(ctx.message.uuid)
+
+      assert [_] = Messages.list_folder(ctx.alice_mb.uuid, "outbox")
+      assert Messages.list_folder(ctx.alice_mb.uuid, "sent") == []
     end
 
     test "is offered only while every log row failed", ctx do

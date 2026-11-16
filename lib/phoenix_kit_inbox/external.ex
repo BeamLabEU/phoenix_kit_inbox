@@ -87,9 +87,11 @@ defmodule PhoenixKitInbox.External do
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Body
   alias PhoenixKitInbox.EmailLog
+  alias PhoenixKitInbox.ExternalReason
   alias PhoenixKitInbox.Identities
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Outbound
+  alias PhoenixKitInbox.Schemas.Delivery
   alias PhoenixKitInbox.Schemas.ExternalRecipient
   alias PhoenixKitInbox.Schemas.Mailbox
   alias PhoenixKitInbox.Schemas.Message
@@ -245,6 +247,82 @@ defmodule PhoenixKitInbox.External do
       else: :pending
   end
 
+  # ── outbox ──────────────────────────────────────────────────────────────────
+
+  @doc """
+  What the Outbox of `mailbox_uuid` needs the sidebar to say: how many letters
+  wait in it, and whether any of them needs the sender's attention — an
+  external row `"failed"`, or still `"pending"` after 15 minutes (`:unknown`).
+  """
+  @spec outbox_summary(binary()) :: %{count: non_neg_integer(), attention?: boolean()}
+  def outbox_summary(mailbox_uuid) when is_binary(mailbox_uuid) do
+    waiting = outbox_deliveries(mailbox_uuid)
+
+    cutoff =
+      DateTime.utc_now() |> DateTime.add(-@unknown_after_seconds) |> DateTime.truncate(:second)
+
+    attention? =
+      from(d in waiting,
+        join: r in ExternalRecipient,
+        on: r.message_uuid == d.message_uuid,
+        where:
+          r.status == "failed" or
+            (r.status == "pending" and
+               coalesce(r.attempted_at, r.inserted_at) < type(^cutoff, :utc_datetime))
+      )
+      |> repo().exists?()
+
+    %{count: repo().aggregate(waiting, :count), attention?: attention?}
+  end
+
+  def outbox_summary(_), do: %{count: 0, attention?: false}
+
+  defp outbox_deliveries(mailbox_uuid) do
+    from(d in Delivery,
+      where: d.mailbox_uuid == ^mailbox_uuid and d.folder == "outbox" and d.status == "active"
+    )
+  end
+
+  @doc """
+  The state of each of `message_uuids` as the Outbox list shows it:
+  `%{message_uuid => %{state: :pending | :failed | :unknown, reason: String.t() | nil}}`.
+  The worst row decides (`:failed`, then `:unknown`, then `:pending`); `reason`
+  is the translated reason of the first failed row (`PhoenixKitInbox.ExternalReason`).
+  A message with every row sent is absent.
+  """
+  @spec outbox_states([binary()], DateTime.t()) :: %{
+          binary() => %{state: :pending | :failed | :unknown, reason: String.t() | nil}
+        }
+  def outbox_states(message_uuids, now \\ DateTime.utc_now())
+
+  def outbox_states([], _now), do: %{}
+
+  def outbox_states(message_uuids, now) do
+    from(r in ExternalRecipient,
+      where: r.message_uuid in ^message_uuids and r.status != "sent",
+      order_by: [asc: r.inserted_at, asc: r.uuid]
+    )
+    |> repo().all()
+    |> Enum.group_by(& &1.message_uuid)
+    |> Map.new(fn {uuid, rows} -> {uuid, outbox_state(rows, now)} end)
+  end
+
+  defp outbox_state(rows, now) do
+    states = Enum.map(rows, &display_status(&1, now))
+
+    cond do
+      :failed in states ->
+        failed = Enum.find(rows, &(&1.status == "failed"))
+        %{state: :failed, reason: ExternalReason.label(failed.error)}
+
+      :unknown in states ->
+        %{state: :unknown, reason: nil}
+
+      true ->
+        %{state: :pending, reason: nil}
+    end
+  end
+
   # ── pubsub ──────────────────────────────────────────────────────────────────
 
   @doc """
@@ -370,6 +448,7 @@ defmodule PhoenixKitInbox.External do
       from(r in ExternalRecipient, where: r.uuid in ^uuids and r.status == "pending")
       |> repo().update_all(set: changes)
 
+    release_from_outbox(message)
     broadcast(message)
   rescue
     # The email went (or not) — the rows stay pending, which reads as
@@ -377,6 +456,30 @@ defmodule PhoenixKitInbox.External do
     # would offer a retry of something that may have been sent.
     e -> Logger.error("[Inbox] could not record the external send: #{Exception.message(e)}")
   end
+
+  # The sender's copy leaves Outbox once no external row of the message is
+  # left unsent. Only from Outbox: a copy the user archived or trashed stays
+  # where they put it.
+  defp release_from_outbox(message) do
+    unsent? =
+      from(r in ExternalRecipient,
+        where: r.message_uuid == ^message.uuid and r.status != "sent"
+      )
+      |> repo().exists?()
+
+    unless unsent? do
+      from(d in Delivery,
+        where:
+          d.message_uuid == ^message.uuid and d.mailbox_uuid == ^message.sender_mailbox_uuid and
+            d.role == "from" and d.folder == "outbox" and d.status == "active"
+      )
+      |> repo().update_all(set: [folder: "sent", updated_at: now()])
+    end
+
+    :ok
+  end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 
   defp describe_error(reason) do
     reason

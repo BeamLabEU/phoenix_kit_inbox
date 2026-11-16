@@ -1705,3 +1705,53 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "%{name} (shared mailbox)"
 msgstr ""
+
+#: lib/phoenix_kit_inbox/web/inbox_live.ex
+#, elixir-autogen, elixir-format
+msgid "Outbox"
+msgstr ""
+
+#: lib/phoenix_kit_inbox/web/inbox_live.ex
+#, elixir-autogen, elixir-format
+msgid "queued"
+msgstr ""
+
+#: lib/phoenix_kit_inbox/external_reason.ex
+#, elixir-autogen, elixir-format
+msgid "Sending failed."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/external_reason.ex
+#, elixir-autogen, elixir-format
+msgid "No recipient was left to send to."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/external_reason.ex
+#, elixir-autogen, elixir-format
+msgid "The send could not be started."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/external_reason.ex
+#, elixir-autogen, elixir-format
+msgid "The sender is no longer allowed to send this email."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/external_reason.ex
+#, elixir-autogen, elixir-format
+msgid "The sender has no email address to send from."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/external_reason.ex
+#, elixir-autogen, elixir-format
+msgid "The mail server did not take the email."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/external_reason.ex
+#, elixir-autogen, elixir-format
+msgid "The email could not be built."
+msgstr ""
+
+#: lib/phoenix_kit_inbox/errors.ex
+#, elixir-autogen, elixir-format
+msgid "Messages can't be moved into Outbox by hand."
+msgstr ""

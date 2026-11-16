@@ -12,9 +12,11 @@ defmodule PhoenixKitInbox.ObjectMail do
 
   What is read:
 
-    * a letter the viewer's mailboxes hold an active copy of in the Inbox or
-      Sent folder, or sent from one of them and not moved out — the trash, the
-      spam and the archive folders and drafts are not mail of the object;
+    * a letter the viewer's mailboxes hold an active copy of in the Inbox,
+      Outbox (an email still to go, or not sent) or Sent folder, or sent from
+      one of them and not moved out — the trash, the spam and the archive
+      folders and drafts are not mail of the object. A letter in Outbox is a
+      `:sent` one, with the status of its recipients;
     * a letter held through two of the viewer's mailboxes is one letter;
     * each letter as `Messages.project_for_viewer/2` shows it to the mailbox
       it is read through (the sending mailbox if the viewer holds a copy
@@ -44,7 +46,7 @@ defmodule PhoenixKitInbox.ObjectMail do
   alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Text
 
-  @folders ~w(inbox sent)
+  @folders ~w(inbox outbox sent)
   @default_limit 50
   @max_limit 200
 
@@ -188,7 +190,7 @@ defmodule PhoenixKitInbox.ObjectMail do
 
   # ── what can be read ────────────────────────────────────────────────────────
 
-  # Sent letters with an active Inbox or Sent copy in one of `mailbox_uuids`.
+  # Sent letters with an active Inbox, Outbox or Sent copy in one of `mailbox_uuids`.
   # Named `:message`, for the subqueries built on it.
   defp visible(mailbox_uuids) do
     copy =

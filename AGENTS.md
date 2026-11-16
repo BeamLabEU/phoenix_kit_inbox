@@ -38,6 +38,8 @@ Inbox is **internal** first. Messages address mailboxes inside the app; nothing 
 
 External recipients (`PhoenixKitInbox.External`): rows written `pending` in the send's transaction; the email goes after the commit in a task under `PhoenixKitInbox.TaskSupervisor` (`children/0`, started by PhoenixKit itself — a host does not add it to its own tree); the rows become `sent`/`failed` and `{:inbox_external_updated, uuid}` is broadcast on the sending mailbox's topic. A failure there must never touch the internal part. Retry only takes `failed` rows, in one `UPDATE … RETURNING`, so it can't send twice; it needs `phoenix_kit_emails` (its log decides whether anything went out — found by `message_tags.inbox_message_uuid`, `inbox_kind = "message"`) and is never offered for `record_sent` messages.
 
+**Outbox**: the sender's own copy (role `from`) of a message with external recipients is in `"outbox"` while any of its external rows is not `sent`, and in `"sent"` once every one is. `send_message/4` files it there in the send's transaction (internal-only → `"sent"`), `External.finish/3` moves it `outbox` → `sent` after a send or retry — **only from `outbox`**, so a copy the user archived or trashed stays — and `record_sent/4` files a record with a `failed` recipient in `"outbox"`. `move_to_folder/4` refuses `"outbox"` (`{:error, :system_folder}`): nobody files a letter there. The reason shown with a failed letter is read back from the stored `error` text by `PhoenixKitInbox.ExternalReason` (no column; unknown → "Sending failed."). `ObjectMail` counts `"outbox"` as mail of the object (a `:sent` one). Letters that failed before the folder existed stay in Sent with their badge and Retry.
+
 The **email nudge** in `PhoenixKitInbox.Notify` goes the same way, from the shared identity named by `inbox_nudge_identity_uuid` — never core's default integration; no sender, no nudge. `phoenix_kit_emails` stays a **soft** dependency, **not** in `mix.exs`: `EmailLog` asks it `enabled?/0` through `apply/3` behind `Code.ensure_loaded?/1` + `function_exported?/3` (a literal call is a `--warnings-as-errors` failure). Nudges fire **after** the commit, in a task, and every failure is rescued and logged.
 
 ## Database & Migrations
@@ -89,7 +91,7 @@ Consequences worth remembering before changing anything:
 - **`Messages.fetch_for_mailbox/2` is scoped through the delivery.** Asking for a message uuid a mailbox was never sent returns `{:error, :message_not_found}` — that is the read-authorization boundary, not an incidental join.
 - **`purge/3` marks the delivery `"deleted"`, not the message.** Deleting your copy of a thread must not delete anyone else's.
 - **`thread_uuid` is NOT NULL and a root message's equals its own uuid.** It can't be set before insert, so `backfill_thread_uuid/2` writes it inside the same `Multi`.
-- **Folders are a column, not a table.** Six fixed values. User-defined labels would be a new table + join, i.e. a V02 — not a v1 guess.
+- **Folders are a column, not a table.** Seven fixed values (`outbox` among them, below). User-defined labels would be a new table + join, i.e. a V02 — not a v1 guess.
 
 ## Sending
 
@@ -261,7 +263,7 @@ Not oversights — decided against for the first release:
 
 - **No tab inside `/profile/settings`.** Core's profile settings tabs are a fixed list; the user's mail settings live on their own page, reached from the avatar menu.
 - **No threaded reading pane.** The data supports it (`thread_uuid`, `list_thread/1`); the UI shows one message at a time.
-- **No user-defined labels/folders.** Folders are a fixed six-value column.
+- **No user-defined labels/folders.** Folders are a fixed seven-value column.
 - **Downloads copy the whole file first.** `Web.AttachmentController` reads the snapshot through core's `Storage.retrieve_file/1` into a temporary file and sends that — core has no streaming read. A 200 MB attachment is a 200 MB temporary file per download.
 - **A lost reply to COMMIT.** If the connection drops after the database committed a send but before the reply arrived, the send counts as failed and its snapshots are released; `release/1` keeps every file a row names, so only a commit not yet visible to its query could lose its files — very unlikely, not handled.
 - **No full-text index.** Search is `ILIKE`. `pg_trgm` is already a core-required extension, so a trigram index is a cheap V02 when volume justifies it.

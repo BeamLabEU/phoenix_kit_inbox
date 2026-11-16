@@ -106,6 +106,18 @@ defmodule PhoenixKitInbox.ObjectMailTest do
       refute between_others.uuid in uuids(threads(ctx.alice_scope, [@order, @other], limit: 100))
     end
 
+    test "a letter in Outbox is mail of the object: under :all and :sent, not :inbox", ctx do
+      queued = mail(ctx, :alice, handle(ctx.bob), %{}, links: [@order])
+      move_copy!(queued, ctx.alice_mb, "outbox")
+
+      assert uuids(threads(ctx.alice_scope)) == [queued.uuid]
+      assert uuids(threads(ctx.alice_scope, [@order], folder: :all)) == [queued.uuid]
+      assert uuids(threads(ctx.alice_scope, [@order], folder: :sent)) == [queued.uuid]
+      assert threads(ctx.alice_scope, [@order], folder: :inbox) == []
+
+      assert [%{messages: [%{direction: :sent}]}] = threads(ctx.alice_scope)
+    end
+
     test "a link does not widen who may read", ctx do
       secret = mail(ctx, :bob, handle(ctx.carol), %{}, links: [@order])
 
