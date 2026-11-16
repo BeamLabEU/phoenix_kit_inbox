@@ -432,6 +432,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp chips(_other, _role, from), do: {[], from}
 
+  # With internal mail off there is no inside route to show.
+  defp chip_route(route) when route in [:internal, "internal"],
+    do: if(PhoenixKitInbox.internal_enabled?(), do: :internal, else: :email)
+
+  defp chip_route(_route), do: :email
+
   # What the pipeline reads as a recipient, the form reads: atom or string
   # keys, a bare text for an outside address. A field left empty names nobody
   # and is dropped. Anything else that gives no address (a user who is gone,
@@ -440,7 +446,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   defp chip(text) when is_binary(text), do: chip(%{address: text})
 
   defp chip(%{} = entry) when not is_struct(entry) do
-    route = if field(entry, :route) in [:internal, "internal"], do: :internal, else: :email
+    route = chip_route(field(entry, :route))
 
     user =
       if is_binary(field(entry, :user)) and field(entry, :user) != "", do: field(entry, :user)

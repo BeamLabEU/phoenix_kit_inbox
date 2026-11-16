@@ -603,7 +603,11 @@ defmodule PhoenixKitInbox.Web.Components.ComposePipeline do
   defp blank?(_), do: false
 
   defp route(nil), do: {:ok, :email}
-  defp route(route) when route in [:internal, "internal"], do: {:ok, :internal}
+  # With internal mail off there is no inside route: a recipient the host or
+  # the form chose as `:internal` goes by their login email, as any outside one.
+  defp route(route) when route in [:internal, "internal"],
+    do: {:ok, if(PhoenixKitInbox.internal_enabled?(), do: :internal, else: :email)}
+
   defp route(route) when route in [:email, "email"], do: {:ok, :email}
   defp route(_), do: {:error, :invalid_recipients}
 

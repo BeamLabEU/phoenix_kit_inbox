@@ -31,6 +31,7 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
       |> assign(:page_title, gettext("Mail"))
       |> ScopeRefresh.assign_scope()
       |> assign_gates()
+      |> assign(:internal_enabled, PhoenixKitInbox.internal_enabled?())
 
     {:ok, load(socket, socket.assigns.can_manage_shared)}
   end
@@ -74,6 +75,15 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
   # ── Events ──────────────────────────────────────────────────────────────────
 
   @impl true
+  def handle_event("toggle_internal", _params, %{assigns: %{can_manage_shared: true}} = socket) do
+    enabled = not PhoenixKitInbox.internal_enabled?()
+    PhoenixKitInbox.set_internal_enabled(enabled)
+    {:noreply, assign(socket, :internal_enabled, enabled)}
+  end
+
+  def handle_event("toggle_internal", _params, socket),
+    do: {:noreply, put_flash(socket, :error, Errors.message(:forbidden))}
+
   def handle_event(
         "ident_" <> _ = event,
         params,
@@ -102,6 +112,26 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
         </span>
         <.link navigate={Paths.my_settings()} class="link">{gettext("Your mail settings")}</.link>
       </div>
+
+      <section :if={@can_manage_shared} id="internal-mail" class="card bg-base-100 shadow max-w-4xl">
+        <div class="card-body gap-3">
+          <h2 class="card-title text-base">{gettext("Mail inside the application")}</h2>
+          <label class="flex cursor-pointer items-start gap-3">
+            <input
+              id="internal-mail-toggle"
+              type="checkbox"
+              class="toggle toggle-primary"
+              checked={@internal_enabled}
+              phx-click="toggle_internal"
+            />
+            <span class="text-sm">
+              {gettext(
+                "Deliver mail between people and to shared mailboxes inside the application. When this is off, a colleague is written to by their email address and “@name” addresses are refused; letters already delivered stay readable."
+              )}
+            </span>
+          </label>
+        </div>
+      </section>
 
       <section :if={@can_manage_shared} class="card bg-base-100 shadow max-w-4xl">
         <div class="card-body gap-3">

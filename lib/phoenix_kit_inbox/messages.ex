@@ -1417,17 +1417,20 @@ defmodule PhoenixKitInbox.Messages do
           %{address: String.t(), route: :internal | :email, mailbox_uuid: binary() | nil}
         ]
   def resolve_recipient_routes(%Scope{} = scope, addresses) when is_list(addresses) do
-    if Scope.can?(scope, "inbox"),
-      do: for(address <- addresses, is_binary(address), do: recipient_route(address)),
-      else: []
+    if Scope.can?(scope, "inbox") do
+      internal? = PhoenixKitInbox.internal_enabled?()
+      for address <- addresses, is_binary(address), do: recipient_route(address, internal?)
+    else
+      []
+    end
   end
 
   def resolve_recipient_routes(_scope, _addresses), do: []
 
-  defp recipient_route(address) do
+  defp recipient_route(address, internal?) do
     lookup =
       case parse_recipient_list(address) do
-        [entry] -> Mailboxes.fetch_mailbox_by_recipient(entry, create: false)
+        [entry] -> lookup_recipient(entry, false, internal?)
         _ -> {:error, :recipient_not_found}
       end
 
@@ -1454,15 +1457,42 @@ defmodule PhoenixKitInbox.Messages do
   # A member's missing mailbox is created only after the check passes.
   defp resolve_recipients(attrs, check_routes) do
     create? = is_nil(check_routes)
+    internal? = PhoenixKitInbox.internal_enabled?()
 
     lookups =
       for role <- @recipient_roles, entry <- parse_recipient_list(Map.get(attrs, role)) do
-        {role, entry, Mailboxes.fetch_mailbox_by_recipient(entry, create: create?)}
+        {role, entry, lookup_recipient(entry, create?, internal?)}
       end
 
-    with :ok <- check_recipient_routes(lookups, check_routes) do
+    with :ok <- refuse_internal_only(lookups),
+         :ok <- check_recipient_routes(lookups, check_routes) do
       classify_recipients(lookups)
     end
+  end
+
+  # With internal mail off nobody is delivered inside: an email address is an
+  # outside address even when it is a member's (it is not looked up at all),
+  # and what only works inside — `@username`, a shared mailbox's name or slug —
+  # is answered `:internal_mail_disabled` when it names somebody, else it is
+  # as unknown as it always was.
+  defp lookup_recipient(entry, create?, true),
+    do: Mailboxes.fetch_mailbox_by_recipient(entry, create: create?)
+
+  defp lookup_recipient(entry, _create?, false) do
+    if String.contains?(entry, "@") and not String.starts_with?(entry, "@") do
+      {:error, :recipient_not_found}
+    else
+      case Mailboxes.fetch_mailbox_by_recipient(entry, create: false) do
+        {:error, :recipient_not_found} = unknown -> unknown
+        _found_or_ambiguous -> {:error, :internal_mail_disabled}
+      end
+    end
+  end
+
+  defp refuse_internal_only(lookups) do
+    if Enum.any?(lookups, &match?({_role, _entry, {:error, :internal_mail_disabled}}, &1)),
+      do: {:error, :internal_mail_disabled},
+      else: :ok
   end
 
   defp check_recipient_routes(_lookups, nil), do: :ok
