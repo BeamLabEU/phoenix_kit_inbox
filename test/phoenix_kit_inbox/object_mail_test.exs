@@ -183,7 +183,10 @@ defmodule PhoenixKitInbox.ObjectMailTest do
           role: role,
           address: address,
           status: "failed",
-          error: "smtp 550 mailbox unavailable: #{address}",
+          error:
+            inspect(
+              {:send, {:permanent_failure, ~c"mx.relay.example", ~c"550 rejected: #{address}"}}
+            ),
           email_log_message_id: "<log-#{role}@mail.test>"
         })
       end
@@ -195,7 +198,10 @@ defmodule PhoenixKitInbox.ObjectMailTest do
 
       # How the send went is the sender's: a reader gets the addresses alone.
       assert [%{error: nil, email_log_message_id: nil}] = for_alice.external
-      assert Enum.all?(for_bob.external, &(&1.error =~ "smtp 550"))
+      # ... and even then as the reason in words: the server's answer (its
+      # relay host, its text) is read by every holder of a grant on the mailbox.
+      assert Enum.all?(for_bob.external, &(&1.error == "The mail server did not take the email."))
+      refute inspect(for_bob.external) =~ "mx.relay.example"
       assert Enum.all?(for_bob.external, &(&1.email_log_message_id =~ "<log-"))
       refute Map.has_key?(for_alice.message.metadata, "identity")
 

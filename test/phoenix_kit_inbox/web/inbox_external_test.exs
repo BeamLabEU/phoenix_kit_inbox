@@ -54,6 +54,8 @@ defmodule PhoenixKitInbox.Web.InboxExternalTest do
 
     %{
       conn: conn,
+      admin: admin,
+      smtp: smtp,
       common: common,
       alice: alice,
       bob: bob,
@@ -148,9 +150,11 @@ defmodule PhoenixKitInbox.Web.InboxExternalTest do
 
       assert has_element?(view, "#external-reason-#{row.uuid}", "client@example.com")
       assert has_element?(view, "#external-reason-#{row.uuid}", "Sending failed.")
-      # Only the label is the reason; the technical text stays in the tooltip.
+      # Only the label is the reason, in the pane and in the tooltip: the
+      # stored text (`:smtp_down`) is rendered nowhere.
       refute view |> element("#external-reason-#{row.uuid}") |> render() =~ "smtp_down"
-      assert has_element?(view, "#external-#{row.uuid}[title=':smtp_down']")
+      assert has_element?(view, "#external-#{row.uuid}[title='Sending failed.']")
+      refute render(view) =~ "smtp_down"
 
       view = open(ctx, ctx.bob, ctx.bob_mb, "inbox")
       refute has_element?(view, "#external-reasons")
@@ -225,6 +229,61 @@ defmodule PhoenixKitInbox.Web.InboxExternalTest do
 
       assert reason =~ "The mail server did not take the email."
       refute reason =~ "4242"
+    end
+
+    test "a read-only grant on the sending mailbox sees no word of the server's answer", ctx do
+      desk = shared_mailbox_fixture(ctx.admin, %{name: "Desk", address: "desk@company.test"})
+      grant_fixture(desk, ctx.alice, "write")
+      grant_fixture(desk, ctx.bob, "read")
+
+      {:ok, bound} =
+        Identities.create_shared(scope_for(ctx.admin, ["inbox", "inbox.manage_shared"]), %{
+          "label" => "Desk",
+          "integration_uuid" => ctx.smtp,
+          "mailbox_uuid" => desk.uuid
+        })
+
+      outbound_result(
+        {:error,
+         {:send,
+          {:permanent_failure, ~c"mx.relay.example",
+           ~c"550 5.7.1 <victim@secret.example> rejected by policy"}}}
+      )
+
+      :ok = External.subscribe(desk.uuid)
+
+      {:ok, message} =
+        Messages.send_message(scope_for(ctx.alice, @external, [ctx.senders]), desk, %{
+          "to" => "victim@secret.example",
+          "subject" => "From the desk",
+          "body" => "Hello",
+          "identity_uuid" => bound.uuid
+        })
+
+      await_external(message.uuid)
+      [row] = External.list(message.uuid)
+      assert row.error =~ "mx.relay.example"
+
+      for {user, permissions} <- [{ctx.bob, ["inbox"]}, {ctx.alice, @external}] do
+        conn = put_test_scope(ctx.conn, scope_for(user, permissions, [ctx.senders]))
+
+        {:ok, view, _html} =
+          live(
+            conn,
+            "/en/admin/inbox?mailbox=#{desk.uuid}&folder=outbox&message=#{message.uuid}"
+          )
+
+        # The reader sees the letter and that it was not delivered ...
+        assert has_element?(view, "#external-reason-#{row.uuid}", "The mail server did not take")
+        assert has_element?(view, "#external-#{row.uuid}[title*='did not take the email']")
+
+        # ... and nothing of the answer, in the text or in any attribute.
+        html = render(view)
+        refute html =~ "mx.relay.example"
+        refute html =~ "rejected by policy"
+        refute html =~ "550 5.7.1"
+        refute html =~ "permanent_failure"
+      end
     end
 
     test "the letter leaves the list when its email goes", ctx do

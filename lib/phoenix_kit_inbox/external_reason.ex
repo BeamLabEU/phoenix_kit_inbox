@@ -15,8 +15,10 @@ defmodule PhoenixKitInbox.ExternalReason do
   rule for what it builds from a filter's answer). What a transport *returns*
   is recognised by its shape, not by its content:
 
-    * Swoosh's SMTP adapter — `{type, message}` of `gen_smtp`
-      (`:permanent_failure`, `:retries_exceeded`, `:network_failure`, …);
+    * Swoosh's SMTP adapter — `{type, message}` of `gen_smtp`: `:send`,
+      `:retries_exceeded`, `:no_more_hosts` (the failure types nested inside,
+      `:permanent_failure`, `:network_failure`, …, are listed too, in case an
+      adapter hands one back directly);
     * an API adapter — `{status, body}` with an HTTP status;
     * a plain connection error (`:timeout`, `:closed`, `:econnrefused`,
       `:nxdomain`).

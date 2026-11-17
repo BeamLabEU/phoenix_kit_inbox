@@ -381,8 +381,9 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   end
 
   # How the external part went is the sender's business: the sending mailbox
-  # sees each status (and error), its writers get Retry; a recipient sees
-  # only the To and Cc addresses.
+  # sees each status and the reason in words (never the stored error text, see
+  # `reason_text/1`), its writers get Retry; a recipient sees only the To and
+  # Cc addresses.
   defp assign_externals(socket, message) do
     mailbox = socket.assigns.mailbox
     externals = Messages.list_external_recipients(message.uuid, mailbox.uuid)
@@ -1025,7 +1026,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
           "badge badge-sm gap-1",
           if(@sender, do: external_badge(External.display_status(row, @now)), else: "badge-ghost")
         ]}
-        title={@sender && row.error}
+        title={@sender && row.error && reason_text(row)}
       >
         <span class="uppercase opacity-60">{row.role}</span>
         {row.name || row.address}
@@ -1054,10 +1055,10 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   defp failed_rows(externals), do: Enum.filter(externals, &(&1.status == "failed"))
 
-  # The reason in words, and only that: the stored text of a failure can carry
-  # the relay's host and the remote server's words (addresses, account data),
-  # and every reader of the sending mailbox sees this pane. The sender's own
-  # badge keeps the technical text as its tooltip.
+  # The reason in words, and only that — in the pane and in the badge's
+  # tooltip: the stored text of a failure can carry the relay's host and the
+  # remote server's words (addresses, account data), and every reader of the
+  # sending mailbox, a read-only grant included, sees this page.
   defp reason_text(row), do: ExternalReason.label(row.error)
 
   defp external_badge(:sent), do: "badge-success badge-outline"

@@ -865,6 +865,9 @@ defmodule PhoenixKitInbox.ExternalSendTest do
       refute folder_of(ctx, message)
     end
 
+    # The trigger below is DDL inside the test's sandbox transaction: it is
+    # rolled back with it, and it holds a lock on the deliveries table until
+    # then — which is only safe while this module is `async: false`.
     test "the rows and the copy change together: a failure on the copy leaves the rows pending",
          ctx do
       {message, uuids} = pending_send(ctx)
