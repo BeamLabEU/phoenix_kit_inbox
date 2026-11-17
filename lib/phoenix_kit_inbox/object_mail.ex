@@ -23,8 +23,10 @@ defmodule PhoenixKitInbox.ObjectMail do
       there, otherwise the first of the viewer's mailboxes holding a copy): another recipient's
       Bcc, the sending identity of someone else's letter and the host's
       `html_body` are not in it. The external recipients are filtered by the
-      same rule, and only the sending mailbox gets how the send went (the
-      transport's `error`, the email log's id).
+      same rule, and only the sending mailbox gets how the send went: the
+      reason in words in `error` (`PhoenixKitInbox.ExternalReason`, `nil` for
+      a row with no error — never the transport's own text) and the email
+      log's id.
 
   Needs `Scope.can?(scope, "inbox")`; without it every answer is `[]`.
 
@@ -65,7 +67,8 @@ defmodule PhoenixKitInbox.ObjectMail do
     * `:links` — its links to the objects asked for (`Links` rows)
     * `:external` — its external recipients the viewer may see; for the
       sending mailbox their `error` is the reason in words
-      (`PhoenixKitInbox.ExternalReason`), never the transport's own text
+      (`PhoenixKitInbox.ExternalReason`; `nil` for a row with no error), never
+      the transport's own text, and `nil` in every row of any other viewer
   """
   @type entry :: %{
           message: Message.t(),

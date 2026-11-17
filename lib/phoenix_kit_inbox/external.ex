@@ -198,6 +198,12 @@ defmodule PhoenixKitInbox.External do
   The external recipients of a message as the mailbox `viewer_mailbox_uuid`
   may see them: all of them for the sending mailbox, To and Cc for anyone
   else (an external Bcc stays blind, like an internal one).
+
+  The rows are as stored — only the Bcc rows are filtered. Every row keeps its
+  `error`, the technical text of the transport's answer (the relay's host, the
+  remote server's words), and its `email_log_message_id`, whoever the viewer
+  is: for an operator, never to be rendered to users. Show
+  `PhoenixKitInbox.ExternalReason.label/1` of `error` instead.
   """
   @spec list_for_viewer(binary(), binary() | nil) :: [ExternalRecipient.t()]
   def list_for_viewer(message_uuid, viewer_mailbox_uuid) when is_binary(message_uuid) do

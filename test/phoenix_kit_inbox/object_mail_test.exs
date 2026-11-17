@@ -213,6 +213,30 @@ defmodule PhoenixKitInbox.ObjectMailTest do
       assert for_bob.message.metadata["identity"]["from_address"] == "desk@company.test"
     end
 
+    test "a row that carries no error has none in the sender's entry either", ctx do
+      message = mail(ctx, :bob, handle(ctx.alice), %{}, links: [@order])
+
+      # A letter that went, and one still on its way: nothing to give a reason for.
+      for {role, address, status} <- [
+            {"to", "went@example.com", "sent"},
+            {"cc", "waits@example.com", "pending"}
+          ] do
+        Repo.insert!(%ExternalRecipient{
+          message_uuid: message.uuid,
+          role: role,
+          address: address,
+          status: status
+        })
+      end
+
+      [%{messages: [for_bob]}] = threads(ctx.bob_scope)
+
+      assert Enum.map(for_bob.external, &{&1.status, &1.error}) == [
+               {"sent", nil},
+               {"pending", nil}
+             ]
+    end
+
     test "html_body never reaches the reader", ctx do
       message = mail(ctx, :bob, handle(ctx.alice), %{}, links: [@order])
 

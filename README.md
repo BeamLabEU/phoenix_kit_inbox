@@ -209,7 +209,7 @@ Reply-To choices are the user's own email and the address of every shared mailbo
 })
 message.external_status                     #=> :pending (:none without external recipients)
 
-Messages.list_external_recipients(message.uuid, viewer_mailbox_uuid)  # Bcc only for the sender
+Messages.list_external_recipients(message.uuid, viewer_mailbox_uuid)  # Bcc only for the sender; rows as stored — `error` is the raw transport text, render ExternalReason.label(row.error)
 External.display_status(row)                #=> :pending | :sent | :failed | :unknown
 External.subscribe(from_mailbox.uuid)       # {:inbox_external_updated, message_uuid}
 Messages.retry_external(scope, from_mailbox, message.uuid)            #=> {:ok, :pending}

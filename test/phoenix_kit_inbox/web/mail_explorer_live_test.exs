@@ -238,6 +238,18 @@ defmodule PhoenixKitInbox.Web.MailExplorerLiveTest do
       refute render(view) =~ "rejected by policy"
     end
 
+    test "the chip of a letter that went has no tooltip", %{conn: conn} = ctx do
+      :ok = External.subscribe(ctx.alice_mb.uuid)
+      {:ok, message} = send_external(ctx, ctx.alice_mb)
+      await_external(message.uuid)
+
+      view = open(ctx, conn, ctx.sender_scope)
+      chip = status_of(view, message)
+
+      assert chip =~ "sent"
+      refute chip =~ "title="
+    end
+
     test "the status of a letter from a mailbox granted after the page opened",
          %{conn: conn} = ctx do
       view = open(ctx, conn, ctx.sender_scope)
