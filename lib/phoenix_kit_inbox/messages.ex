@@ -660,6 +660,12 @@ defmodule PhoenixKitInbox.Messages do
   commit; the returned message's `external_status` is `:pending`, else
   `:none`. See `PhoenixKitInbox.External`.
 
+  The three-argument form has no scope, so it never sends outside email: an
+  email address that names nobody inside is `{:error, :external_needs_scope}`
+  — and while internal mail is off (`PhoenixKitInbox.internal_enabled?/0`)
+  that is every email address, a member's included (it is no longer looked
+  up). A host that needs outside mail uses the scope form.
+
   Attachments need the scope form; the three-argument form refuses them with
   `{:error, :attachments_need_scope}` (also when promoting a draft that has
   some). See `PhoenixKitInbox.Attachments` for how each file is checked and
