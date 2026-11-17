@@ -54,6 +54,7 @@ defmodule PhoenixKitInbox.Web.InboxExternalTest do
 
     %{
       conn: conn,
+      common: common,
       alice: alice,
       bob: bob,
       alice_mb: alice_mb,
@@ -147,11 +148,83 @@ defmodule PhoenixKitInbox.Web.InboxExternalTest do
 
       assert has_element?(view, "#external-reason-#{row.uuid}", "client@example.com")
       assert has_element?(view, "#external-reason-#{row.uuid}", "Sending failed.")
-      # What it is not a reason for: the technical text stays in the tooltip.
+      # Only the label is the reason; the technical text stays in the tooltip.
+      refute view |> element("#external-reason-#{row.uuid}") |> render() =~ "smtp_down"
       assert has_element?(view, "#external-#{row.uuid}[title=':smtp_down']")
 
       view = open(ctx, ctx.bob, ctx.bob_mb, "inbox")
       refute has_element?(view, "#external-reasons")
+    end
+
+    test "an answer of the mail server shows only the label — no relay, no address", ctx do
+      outbound_result(
+        {:error,
+         {:send,
+          {:permanent_failure, ~c"mx.relay.example",
+           ~c"550 5.7.1 <victim@secret.example> rejected by policy"}}}
+      )
+
+      {:ok, message} =
+        Messages.send_message(scope_for(ctx.alice, @external, [ctx.senders]), ctx.alice_mb, %{
+          "to" => "victim@secret.example",
+          "subject" => "Bounce",
+          "body" => "Hello",
+          "identity_uuid" => ctx.common.uuid
+        })
+
+      await_external(message.uuid)
+      [row] = External.list(message.uuid)
+      assert row.status == "failed"
+      # The technical text is stored, as before.
+      assert row.error =~ "mx.relay.example"
+
+      conn = put_test_scope(ctx.conn, scope_for(ctx.alice, @external, [ctx.senders]))
+
+      {:ok, view, _html} =
+        live(
+          conn,
+          "/en/admin/inbox?mailbox=#{ctx.alice_mb.uuid}&folder=outbox&message=#{message.uuid}"
+        )
+
+      reason = view |> element("#external-reason-#{row.uuid}") |> render()
+
+      assert reason =~ "The mail server did not take the email."
+      refute reason =~ "mx.relay.example"
+      refute reason =~ "550"
+      refute reason =~ "rejected by policy"
+
+      # The list says the same: the label, nothing of the answer.
+      state = view |> element("#outbox-state-#{message.uuid}") |> render()
+      assert state =~ "The mail server did not take the email."
+      refute state =~ "mx.relay.example"
+    end
+
+    test "an API answer — status and body — shows only the label", ctx do
+      outbound_result({:error, {401, %{"error" => "bad key for account 4242"}}})
+
+      {:ok, message} =
+        Messages.send_message(scope_for(ctx.alice, @external, [ctx.senders]), ctx.alice_mb, %{
+          "to" => "someone@example.org",
+          "subject" => "Api",
+          "body" => "Hello",
+          "identity_uuid" => ctx.common.uuid
+        })
+
+      await_external(message.uuid)
+      [row] = External.list(message.uuid)
+
+      conn = put_test_scope(ctx.conn, scope_for(ctx.alice, @external, [ctx.senders]))
+
+      {:ok, view, _html} =
+        live(
+          conn,
+          "/en/admin/inbox?mailbox=#{ctx.alice_mb.uuid}&folder=outbox&message=#{message.uuid}"
+        )
+
+      reason = view |> element("#external-reason-#{row.uuid}") |> render()
+
+      assert reason =~ "The mail server did not take the email."
+      refute reason =~ "4242"
     end
 
     test "the letter leaves the list when its email goes", ctx do

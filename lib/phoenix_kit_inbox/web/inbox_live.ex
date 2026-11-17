@@ -1054,14 +1054,11 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   defp failed_rows(externals), do: Enum.filter(externals, &(&1.status == "failed"))
 
-  # The reason in words; one we have no words for also shows the stored text.
-  defp reason_text(row) do
-    label = ExternalReason.label(row.error)
-
-    if ExternalReason.known?(row.error) or is_nil(row.error),
-      do: label,
-      else: "#{label} (#{row.error})"
-  end
+  # The reason in words, and only that: the stored text of a failure can carry
+  # the relay's host and the remote server's words (addresses, account data),
+  # and every reader of the sending mailbox sees this pane. The sender's own
+  # badge keeps the technical text as its tooltip.
+  defp reason_text(row), do: ExternalReason.label(row.error)
 
   defp external_badge(:sent), do: "badge-success badge-outline"
   defp external_badge(:failed), do: "badge-error badge-outline"

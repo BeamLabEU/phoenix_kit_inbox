@@ -24,7 +24,7 @@ Neighbouring modules, so you pick the right one:
 
 - **Personal mailboxes** — one per user, created lazily on first visit; no signup hook, works for users who predate the install
 - **Shared mailboxes** — `support@`, `sales@`, … with per-user `read` / `write` / `admin` grants
-- **Six folders** — Inbox, Sent, Drafts, Spam, Trash, Archive
+- **Seven folders** — Inbox, Outbox, Sent, Drafts, Spam, Trash, Archive
 - **Per-recipient state** — seen/unseen, starred, and folder are per mailbox, so marking a group thread read doesn't mark it read for everyone else
 - **Compose, reply, forward** — with quoted bodies, `Re:`/`Fwd:` subjects, and inherited threading
 - **Drafts** — saved as real messages and *promoted* on send, so the uuid stays stable

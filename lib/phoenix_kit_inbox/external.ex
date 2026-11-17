@@ -253,26 +253,35 @@ defmodule PhoenixKitInbox.External do
   What the Outbox of `mailbox_uuid` needs the sidebar to say: how many letters
   wait in it, and whether any of them needs the sender's attention — an
   external row `"failed"`, or still `"pending"` after 15 minutes (`:unknown`).
+  One query.
+
+  Takes a bare uuid and checks nobody's access: the caller must have
+  authorized the mailbox for its viewer (`Mailboxes.authorize_scope/3`), as
+  `Web.InboxLive` does for the mailbox it opens.
   """
   @spec outbox_summary(binary()) :: %{count: non_neg_integer(), attention?: boolean()}
   def outbox_summary(mailbox_uuid) when is_binary(mailbox_uuid) do
-    waiting = outbox_deliveries(mailbox_uuid)
-
     cutoff =
       DateTime.utc_now() |> DateTime.add(-@unknown_after_seconds) |> DateTime.truncate(:second)
 
-    attention? =
-      from(d in waiting,
-        join: r in ExternalRecipient,
-        on: r.message_uuid == d.message_uuid,
-        where:
-          r.status == "failed" or
-            (r.status == "pending" and
-               coalesce(r.attempted_at, r.inserted_at) < type(^cutoff, :utc_datetime))
-      )
-      |> repo().exists?()
-
-    %{count: repo().aggregate(waiting, :count), attention?: attention?}
+    # A letter is counted once however many external rows it has.
+    from(d in outbox_deliveries(mailbox_uuid),
+      left_join: r in ExternalRecipient,
+      on: r.message_uuid == d.message_uuid,
+      select: %{
+        count: count(d.uuid, :distinct),
+        attention?:
+          fragment(
+            "coalesce(bool_or(? = 'failed' or (? = 'pending' and coalesce(?, ?) < ?)), false)",
+            r.status,
+            r.status,
+            r.attempted_at,
+            r.inserted_at,
+            type(^cutoff, :utc_datetime)
+          )
+      }
+    )
+    |> repo().one()
   end
 
   def outbox_summary(_), do: %{count: 0, attention?: false}
@@ -288,7 +297,11 @@ defmodule PhoenixKitInbox.External do
   `%{message_uuid => %{state: :pending | :failed | :unknown, reason: String.t() | nil}}`.
   The worst row decides (`:failed`, then `:unknown`, then `:pending`); `reason`
   is the translated reason of the first failed row (`PhoenixKitInbox.ExternalReason`).
-  A message with every row sent is absent.
+  A message with every row sent is absent. One query for the whole list.
+
+  Takes bare message uuids and checks nobody's access: the caller must have
+  authorized the mailbox they were listed from (`Mailboxes.authorize_scope/3`),
+  and pass only the messages of its Outbox list.
   """
   @spec outbox_states([binary()], DateTime.t()) :: %{
           binary() => %{state: :pending | :failed | :unknown, reason: String.t() | nil}
