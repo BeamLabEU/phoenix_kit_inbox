@@ -13,8 +13,10 @@ defmodule PhoenixKitInbox.Messages do
        (`links:`) and the ones inherited from the conversation
        (`PhoenixKitInbox.Links`)
     4. fan out one `Delivery` per recipient into their `"inbox"`, plus the
-       sender's own copy into `"sent"`, and one `"pending"` row per external
-       recipient (`PhoenixKitInbox.External`)
+       sender's own copy — into `"outbox"` while the message has external
+       recipients (it moves to `"sent"` once the email to every one of them
+       went, see `PhoenixKitInbox.External`), else into `"sent"` — and one
+       `"pending"` row per external recipient
 
   A host that gives `idempotency_key:` can repeat a send safely: the key is
   checked first, before anything is stored or sent, and recorded in the same
@@ -658,7 +660,14 @@ defmodule PhoenixKitInbox.Messages do
   attachments must fit `PhoenixKitInbox.external_max_bytes/0`
   (`{:error, {:external_too_large, max}}`). The email to them goes after the
   commit; the returned message's `external_status` is `:pending`, else
-  `:none`. See `PhoenixKitInbox.External`.
+  `:none`. The sender's copy waits in `"outbox"` until then (and stays there
+  while a recipient is not sent to). See `PhoenixKitInbox.External`.
+
+  The three-argument form has no scope, so it never sends outside email: an
+  email address that names nobody inside is `{:error, :external_needs_scope}`
+  — and while internal mail is off (`PhoenixKitInbox.internal_enabled?/0`)
+  that is every email address, a member's included (it is no longer looked
+  up). A host that needs outside mail uses the scope form.
 
   Attachments need the scope form; the three-argument form refuses them with
   `{:error, :attachments_need_scope}` (also when promoting a draft that has
@@ -670,7 +679,11 @@ defmodule PhoenixKitInbox.Messages do
 
     * `"to"` / `"cc"` / `"bcc"` — comma-separated recipient strings, or lists.
       Each entry is a `@username`, an email, or a shared mailbox's slug, name
-      or address (see `Mailboxes.fetch_mailbox_by_recipient/1`).
+      or address (see `Mailboxes.fetch_mailbox_by_recipient/1`). While
+      internal mail is off (`PhoenixKitInbox.internal_enabled?/0`) an email
+      address is not looked up — it is an outside address, a member's too —
+      and a `@username` or shared name that names somebody is
+      `{:error, :internal_mail_disabled}`.
     * `"subject"`, `"body"`, `"body_format"` (`"text"`, `"html"` or
       `"markdown"`)
     * `"identity_uuid"` — the sending identity, checked with
@@ -796,6 +809,7 @@ defmodule PhoenixKitInbox.Messages do
   defp deliver(mailbox, sender_user_uuid, attrs, scope, opts) do
     attrs = normalize_attrs(attrs)
     key = send_key(opts)
+    internal? = PhoenixKitInbox.internal_enabled?()
 
     with :ok <- check_send_key(key, mailbox, sender_user_uuid),
          {:ok, host_record} <- host_options(opts),
@@ -803,8 +817,8 @@ defmodule PhoenixKitInbox.Messages do
          {:ok, sender_record} <- sender_options(scope, mailbox, attrs),
          sender_record = Map.merge(sender_record, host_record),
          {:ok, recipients, externals} <-
-           resolve_recipients(attrs, Keyword.get(opts, :check_recipient_routes)),
-         {:ok, externals} <- admit_externals(scope, mailbox, sender_record, externals),
+           resolve_recipients(attrs, Keyword.get(opts, :check_recipient_routes), internal?),
+         {:ok, externals} <- admit_externals(scope, mailbox, sender_record, externals, internal?),
          # Only an email to outsiders can be sent again, and so needs its HTML.
          sender_record = keep_html_for_externals(sender_record, externals),
          :ok <- ensure_any_recipient(recipients ++ externals),
@@ -1042,18 +1056,20 @@ defmodule PhoenixKitInbox.Messages do
   # right to write externally — without it they are unknown recipients, as
   # before there was external mail — a sending identity to go out as (none
   # the user may use from this mailbox is `:external_not_allowed`), and
-  # external sending open.
-  defp admit_externals(_scope, _mailbox, _sender_record, []), do: {:ok, []}
+  # external sending open. With internal mail off every address is an outside
+  # one, so a person without the right is told so (`:external_not_allowed`), not
+  # that a colleague they can see is "not found".
+  defp admit_externals(_scope, _mailbox, _sender_record, [], _internal?), do: {:ok, []}
 
-  defp admit_externals(nil, _mailbox, _sender_record, _externals),
+  defp admit_externals(nil, _mailbox, _sender_record, _externals, _internal?),
     do: {:error, :external_needs_scope}
 
-  defp admit_externals(scope, mailbox, sender_record, externals) do
+  defp admit_externals(scope, mailbox, sender_record, externals, internal?) do
     identity = Map.get(sender_record, "identity")
 
     cond do
       not External.allowed?(scope, identity) ->
-        {:error, {:unknown_recipients, Enum.map(externals, & &1.address)}}
+        {:error, refused_externals(externals, internal?)}
 
       is_nil(identity) and Identities.list_usable(scope, mailbox) == [] ->
         {:error, :external_not_allowed}
@@ -1065,6 +1081,11 @@ defmodule PhoenixKitInbox.Messages do
         with :ok <- Outbound.check_open(), do: {:ok, externals}
     end
   end
+
+  defp refused_externals(externals, true),
+    do: {:unknown_recipients, Enum.map(externals, & &1.address)}
+
+  defp refused_externals(_externals, false), do: :external_not_allowed
 
   defp check_external_size([], _items), do: :ok
 
@@ -1245,9 +1266,10 @@ defmodule PhoenixKitInbox.Messages do
            do: {:ok, :written}
     end)
     |> Multi.run(:sender_copy, fn repo, %{thread: message} ->
-      # Moves the draft's own delivery row from "drafts" to "sent" when
-      # promoting a draft, or creates it outright for a fresh send.
-      upsert_delivery(repo, message.uuid, mailbox.uuid, "from", "sent")
+      # Moves the draft's own delivery row from "drafts" to "sent" (or, with
+      # external recipients, "outbox") when promoting a draft, or creates it
+      # outright for a fresh send.
+      upsert_delivery(repo, message.uuid, mailbox.uuid, "from", sender_folder(externals))
     end)
     |> Multi.run(:deliveries, fn repo, %{thread: message} ->
       fan_out(repo, message, recipients)
@@ -1267,6 +1289,16 @@ defmodule PhoenixKitInbox.Messages do
         {:error, reason}
     end
   end
+
+  # The sender's copy waits in Outbox while an email to outsiders is still to
+  # go (see `External.finish/3`, which moves it on).
+  defp sender_folder([]), do: "sent"
+  defp sender_folder(_externals), do: "outbox"
+
+  # A recorded send is over: a failed recipient keeps the copy in Outbox,
+  # where the sender sees it (and can archive or delete it).
+  defp recorded_folder(entries),
+    do: if(Enum.any?(entries, &(&1.status == "failed")), do: "outbox", else: "sent")
 
   # Server-written, so a caller's "sender" key can't impersonate anyone. The
   # write check before it guarantees a sender uuid.
@@ -1400,6 +1432,13 @@ defmodule PhoenixKitInbox.Messages do
   `:email` too: the send refuses those itself (an ambiguous address is
   `:email` here, and `{:error, {:ambiguous_recipients, _}}` in the send).
 
+  While internal mail is off (`PhoenixKitInbox.internal_enabled?/0`) nothing is
+  `:internal`: an email address is `:email` (a member's too — it goes as an
+  outside email), and what only works inside and names somebody — `@username`,
+  a shared mailbox's name or slug — is `:email` as well, with one more key,
+  `refused: :internal_mail_disabled`: the send answers it
+  `{:error, :internal_mail_disabled}`. No other entry has a `:refused` key.
+
   **One address per entry.** The send takes a recipient string apart at commas
   and semicolons; this does not. An entry holding several addresses is
   `:email`, whatever they are — pass them one by one. Padding around a single
@@ -1414,20 +1453,33 @@ defmodule PhoenixKitInbox.Messages do
   context the send will run in, or the answer may differ from the send's.
   """
   @spec resolve_recipient_routes(Scope.t() | nil, [String.t()]) :: [
-          %{address: String.t(), route: :internal | :email, mailbox_uuid: binary() | nil}
+          %{
+            address: String.t(),
+            route: :internal | :email,
+            mailbox_uuid: binary() | nil
+          }
+          | %{
+              address: String.t(),
+              route: :email,
+              mailbox_uuid: nil,
+              refused: :internal_mail_disabled
+            }
         ]
   def resolve_recipient_routes(%Scope{} = scope, addresses) when is_list(addresses) do
-    if Scope.can?(scope, "inbox"),
-      do: for(address <- addresses, is_binary(address), do: recipient_route(address)),
-      else: []
+    if Scope.can?(scope, "inbox") do
+      internal? = PhoenixKitInbox.internal_enabled?()
+      for address <- addresses, is_binary(address), do: recipient_route(address, internal?)
+    else
+      []
+    end
   end
 
   def resolve_recipient_routes(_scope, _addresses), do: []
 
-  defp recipient_route(address) do
+  defp recipient_route(address, internal?) do
     lookup =
       case parse_recipient_list(address) do
-        [entry] -> Mailboxes.fetch_mailbox_by_recipient(entry, create: false)
+        [entry] -> lookup_recipient(entry, false, internal?)
         _ -> {:error, :recipient_not_found}
       end
 
@@ -1446,23 +1498,59 @@ defmodule PhoenixKitInbox.Messages do
   defp recipient_target(address, {:ok, {:member, user}}),
     do: %{address: address, route: :internal, mailbox_uuid: nil, user_uuid: user.uuid}
 
+  # Internal mail is off and the text only works inside: the send refuses it.
+  defp recipient_target(address, {:error, :internal_mail_disabled}),
+    do: %{
+      address: address,
+      route: :email,
+      mailbox_uuid: nil,
+      user_uuid: nil,
+      refused: :internal_mail_disabled
+    }
+
   defp recipient_target(address, {:error, _}),
     do: %{address: address, route: :email, mailbox_uuid: nil, user_uuid: nil}
 
   # ComposePipeline checks the actual targets. Use the same lookups for
   # delivery so a changed recipient circle cannot redirect the message.
   # A member's missing mailbox is created only after the check passes.
-  defp resolve_recipients(attrs, check_routes) do
+  defp resolve_recipients(attrs, check_routes, internal?) do
     create? = is_nil(check_routes)
 
     lookups =
       for role <- @recipient_roles, entry <- parse_recipient_list(Map.get(attrs, role)) do
-        {role, entry, Mailboxes.fetch_mailbox_by_recipient(entry, create: create?)}
+        {role, entry, lookup_recipient(entry, create?, internal?)}
       end
 
-    with :ok <- check_recipient_routes(lookups, check_routes) do
+    with :ok <- refuse_internal_only(lookups),
+         :ok <- check_recipient_routes(lookups, check_routes) do
       classify_recipients(lookups)
     end
+  end
+
+  # With internal mail off nobody is delivered inside: an email address is an
+  # outside address even when it is a member's (it is not looked up at all),
+  # and what only works inside — `@username`, a shared mailbox's name or slug —
+  # is answered `:internal_mail_disabled` when it names somebody, else it is
+  # as unknown as it always was.
+  defp lookup_recipient(entry, create?, true),
+    do: Mailboxes.fetch_mailbox_by_recipient(entry, create: create?)
+
+  defp lookup_recipient(entry, _create?, false) do
+    if External.address?(entry) do
+      {:error, :recipient_not_found}
+    else
+      case Mailboxes.fetch_mailbox_by_recipient(entry, create: false) do
+        {:error, :recipient_not_found} = unknown -> unknown
+        _found_or_ambiguous -> {:error, :internal_mail_disabled}
+      end
+    end
+  end
+
+  defp refuse_internal_only(lookups) do
+    if Enum.any?(lookups, &match?({_role, _entry, {:error, :internal_mail_disabled}}, &1)),
+      do: {:error, :internal_mail_disabled},
+      else: :ok
   end
 
   defp check_recipient_routes(_lookups, nil), do: :ok
@@ -1566,6 +1654,14 @@ defmodule PhoenixKitInbox.Messages do
   The external recipients of a message, with their status, as the mailbox
   `viewer_mailbox_uuid` may see them: all for the sending mailbox, To and Cc
   for anyone else (`nil` sees To and Cc). See `PhoenixKitInbox.External`.
+
+  The rows are **as stored**: only the Bcc rows are filtered, so every row
+  carries its `error` — the technical text of the transport's answer, with
+  the relay's host and the remote server's words — and its
+  `email_log_message_id`, for any viewer. That is data for an operator; do not
+  render it to users. A screen shows the reason in words,
+  `PhoenixKitInbox.ExternalReason.label/1` of `error` (`ObjectMail` does this
+  already for the mail of an object).
   """
   @spec list_external_recipients(binary(), binary() | nil) :: [ExternalRecipient.t()]
   def list_external_recipients(message_uuid, viewer_mailbox_uuid),
@@ -1594,6 +1690,10 @@ defmodule PhoenixKitInbox.Messages do
   shows what went out. Nothing is sent and nobody inside the application
   receives anything.
 
+  The copy goes to Sent; when any recipient is recorded as `"failed"` it goes
+  to Outbox instead, where the sender sees what did not go out. There is no
+  Retry for it: the sender can archive or delete the copy.
+
   Needs the `"inbox"` permission and `"write"` on `mailbox`. `attrs`:
 
     * `"subject"`, `"body"`, `"body_format"` — as for `send_message/4`
@@ -1601,11 +1701,16 @@ defmodule PhoenixKitInbox.Messages do
       "cc" | "bcc", "status" => "sent" | "failed", "name", "error",
       "email_log_message_id"}]`, at least one; `role` defaults to `"to"`,
       `status` to `"sent"`. An address that names a member or a shared
-      mailbox is refused (`{:error, {:internal_recipients, addresses}}`) —
-      internal mail goes through `send_message/4`; anything that is not an
+      mailbox is refused while internal mail is on
+      (`{:error, {:internal_recipients, addresses}}`) — internal mail goes
+      through `send_message/4`; with it off such an address is recorded like
+      any outside one. Anything that is not an
       email address is `{:error, {:invalid_external_recipients, entries}}`.
       `"to"`, `"cc"` and `"bcc"` are not taken
-      (`{:error, :use_external_recipients}`).
+      (`{:error, :use_external_recipients}`). A recipient's `"error"` text is
+      stored as given, for the operator, and shown nowhere: the sender's
+      pages read it back through `PhoenixKitInbox.ExternalReason`, so a text
+      it has no words for reads "Sending failed.".
     * `"attachments"` — `[%{"filename" => name, "size_bytes" => n}]`: what
       the email carried, by name and size. **No file is stored**: the host
       keeps its files, so a recorded message can't be forwarded with them.
@@ -1627,7 +1732,7 @@ defmodule PhoenixKitInbox.Messages do
          :ok <- ensure_active(fresh),
          :ok <- refuse_typed_recipients(attrs),
          {:ok, entries} <- recorded_recipients(Map.get(attrs, "external_recipients")),
-         :ok <- refuse_internal(entries),
+         :ok <- refuse_internal(entries, PhoenixKitInbox.internal_enabled?()),
          {:ok, files} <- recorded_attachments(Map.get(attrs, "attachments")),
          {:ok, message} <- do_record(fresh, user_uuid, attrs, entries, files, opts) do
       Notify.message_recorded(message, %{external: length(entries), attachments: length(files)})
@@ -1684,7 +1789,12 @@ defmodule PhoenixKitInbox.Messages do
 
   defp recorded_recipient(entry), do: {:error, inspect(entry, limit: 5)}
 
-  defp refuse_internal(entries) do
+  # Refused only while mail inside the application is on: off, there is no
+  # inside route to send them by, so a member's address is a recorded outside
+  # address like any other (and no mailbox is made for it by looking).
+  defp refuse_internal(_entries, false), do: :ok
+
+  defp refuse_internal(entries, true) do
     internal =
       entries
       |> Enum.map(& &1.address)
@@ -1760,7 +1870,7 @@ defmodule PhoenixKitInbox.Messages do
     Multi.new()
     |> Multi.insert(:message, changeset)
     |> Multi.run(:sender_copy, fn repo, %{message: message} ->
-      upsert_delivery(repo, message.uuid, mailbox.uuid, "from", "sent")
+      upsert_delivery(repo, message.uuid, mailbox.uuid, "from", recorded_folder(entries))
     end)
     |> Multi.run(:external, fn repo, %{message: message} ->
       External.insert_rows(repo, message.uuid, entries)
@@ -1821,11 +1931,24 @@ defmodule PhoenixKitInbox.Messages do
   @doc """
   Moves a delivery to another folder — the one operation behind Archive, Spam,
   Trash, and Restore in the UI. Needs `"write"` on the mailbox.
+
+  `"outbox"` is the system's own: nobody files a message there by hand
+  (`{:error, :system_folder}`, once the caller's right to write is checked). Moving a copy *out* of Outbox is allowed, and
+  it stays where it was put when the email goes.
   """
   @spec move_to_folder(Scope.t(), Mailbox.t(), binary(), String.t()) ::
           {:ok, Delivery.t()}
           | {:error,
-             :message_not_found | :forbidden | :mailbox_access_denied | Ecto.Changeset.t()}
+             :message_not_found
+             | :forbidden
+             | :mailbox_access_denied
+             | :system_folder
+             | Ecto.Changeset.t()}
+  def move_to_folder(%Scope{} = scope, %Mailbox{} = mailbox, _message_uuid, "outbox") do
+    with {:ok, _fresh} <- Mailboxes.authorize_scope(scope, mailbox, "write"),
+         do: {:error, :system_folder}
+  end
+
   def move_to_folder(%Scope{} = scope, %Mailbox{} = mailbox, message_uuid, folder) do
     update_delivery(scope, mailbox, "write", message_uuid, fn delivery ->
       delivery

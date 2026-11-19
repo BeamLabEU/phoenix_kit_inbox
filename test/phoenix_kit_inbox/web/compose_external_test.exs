@@ -7,14 +7,18 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
 
   use PhoenixKitInbox.LiveCase
 
+  import Ecto.Query, only: [from: 2]
+
   alias PhoenixKitInbox.External
   alias PhoenixKitInbox.Identities
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
+  alias PhoenixKitInbox.Test.Repo
 
   @external ["inbox", "inbox.send_external"]
 
   setup :outbound_setup
+  setup :internal_mail_setup
 
   setup %{conn: conn} do
     enable_inbox!()
@@ -102,6 +106,45 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
     refute has_element?(view, "#compose-identity option[value='#{ctx.common.uuid}']")
   end
 
+  test "with internal mail off there is no inside-only choice, and the first identity is chosen",
+       ctx do
+    {:ok, _} = PhoenixKitInbox.set_internal_enabled(false)
+
+    {:ok, view, _html} = live(as_alice(ctx), "/en/admin/inbox/compose")
+
+    refute has_element?(view, "#compose-identity option[value='']")
+    assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
+
+    # A refresh with the same mailbox keeps it, and says nothing about a reset.
+    refresh_scope(view, scope_for(ctx.alice, @external, [ctx.senders]))
+
+    refute has_element?(view, "#flash-error")
+    assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
+  end
+
+  test "an open page follows the switch: the choices, the default sender, the To hint", ctx do
+    {:ok, view, _html} = live(as_alice(ctx), "/en/admin/inbox/compose")
+
+    assert has_element?(view, "#compose-identity option[selected][value='']")
+    assert has_element?(view, ~s(input[name=to][placeholder*="@username"]))
+
+    {:ok, _} = PhoenixKitInbox.set_internal_enabled(false)
+    # The broadcast went before this call: the page has handled it.
+    _ = :sys.get_state(view.pid)
+
+    refute has_element?(view, "#compose-identity option[value='']")
+    assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
+    assert has_element?(view, ~s(input[name=to][placeholder^="Email addresses"]))
+
+    {:ok, _} = PhoenixKitInbox.set_internal_enabled(true)
+    _ = :sys.get_state(view.pid)
+
+    # Inside-only is a choice again; the sender chosen meanwhile stays.
+    assert has_element?(view, "#compose-identity option[value='']")
+    assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
+    assert has_element?(view, ~s(input[name=to][placeholder*="@username"]))
+  end
+
   test "without anything to send as, there is no picker", ctx do
     {:ok, view, _html} = live(as_alice(ctx, ["inbox"]), "/en/admin/inbox/compose")
     refute has_element?(view, "#compose-identity")
@@ -117,9 +160,19 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
 
     assert {to, _flash} = assert_redirect(view)
 
-    assert to =~ "folder=sent"
-    assert [%{message: message}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    # An email on its way: the sender lands where it waits.
+    assert to =~ "folder=outbox"
+
+    message =
+      Repo.one!(
+        from(m in PhoenixKitInbox.Schemas.Message,
+          where: m.sender_mailbox_uuid == ^ctx.alice_mb.uuid
+        )
+      )
+
     await_external(message.uuid)
+    assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    assert uuid == message.uuid
 
     assert [%{address: "client@example.com", status: "sent"}] = External.list(message.uuid)
     assert_received {:outbound, %{to: [{"", "client@example.com"}]}, smtp, _opts}

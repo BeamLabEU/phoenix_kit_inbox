@@ -6,7 +6,7 @@ defmodule PhoenixKitInbox.Schemas.Delivery do
   ordered by `inserted_at`), which is why the migration puts a compound index
   there. All per-recipient state lives here rather than on the message:
 
-    * `folder` — which of the six fixed folders the copy sits in
+    * `folder` — which of the seven fixed folders the copy sits in
     * `role` — `"from"` for the sender's own copy, `"to"`/`"cc"`/`"bcc"` for
       recipients. Drives the recipient chips in the reading pane.
     * `seen_at` — nil means unseen (the bold rows and the "Unseen" filter)
@@ -16,8 +16,12 @@ defmodule PhoenixKitInbox.Schemas.Delivery do
 
   ## Folders
 
-  Fixed set, matching the reference webmail: inbox, sent, drafts, spam, trash,
-  archive. Deliberately a column and not a table for 0.1.0 — user-defined
+  Fixed set, matching the reference webmail: inbox, outbox, sent, drafts, spam,
+  trash, archive. `"outbox"` holds the sender's own copy of a message with
+  external recipients while any of them has not been sent to (queued, failed or
+  unknown); nobody files a message there by hand (`Messages.move_to_folder/4`
+  refuses it), and the copy goes to `"sent"` once every external row is sent.
+  Deliberately a column and not a table for 0.1.0 — user-defined
   folders/labels would be a `phoenix_kit_inbox_labels` table plus a join, and
   that is a v2 migration, not a v1 guess.
 
@@ -32,7 +36,7 @@ defmodule PhoenixKitInbox.Schemas.Delivery do
   @primary_key {:uuid, UUIDv7, autogenerate: true}
   @foreign_key_type UUIDv7
 
-  @folders ~w(inbox sent drafts spam trash archive)
+  @folders ~w(inbox outbox sent drafts spam trash archive)
   @roles ~w(from to cc bcc)
   @statuses ~w(active deleted)
 
@@ -50,7 +54,7 @@ defmodule PhoenixKitInbox.Schemas.Delivery do
     timestamps(type: :utc_datetime)
   end
 
-  @doc "The six fixed folders, in sidebar order."
+  @doc "The seven fixed folders, in sidebar order."
   @spec folders() :: [String.t()]
   def folders, do: @folders
 

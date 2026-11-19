@@ -24,7 +24,7 @@ Neighbouring modules, so you pick the right one:
 
 - **Personal mailboxes** — one per user, created lazily on first visit; no signup hook, works for users who predate the install
 - **Shared mailboxes** — `support@`, `sales@`, … with per-user `read` / `write` / `admin` grants
-- **Six folders** — Inbox, Sent, Drafts, Spam, Trash, Archive
+- **Seven folders** — Inbox, Outbox, Sent, Drafts, Spam, Trash, Archive
 - **Per-recipient state** — seen/unseen, starred, and folder are per mailbox, so marking a group thread read doesn't mark it read for everyone else
 - **Compose, reply, forward** — with quoted bodies, `Re:`/`Fwd:` subjects, and inherited threading
 - **Drafts** — saved as real messages and *promoted* on send, so the uuid stays stable
@@ -209,7 +209,7 @@ Reply-To choices are the user's own email and the address of every shared mailbo
 })
 message.external_status                     #=> :pending (:none without external recipients)
 
-Messages.list_external_recipients(message.uuid, viewer_mailbox_uuid)  # Bcc only for the sender
+Messages.list_external_recipients(message.uuid, viewer_mailbox_uuid)  # Bcc only for the sender; rows as stored — `error` is the raw transport text, render ExternalReason.label(row.error)
 External.display_status(row)                #=> :pending | :sent | :failed | :unknown
 External.subscribe(from_mailbox.uuid)       # {:inbox_external_updated, message_uuid}
 Messages.retry_external(scope, from_mailbox, message.uuid)            #=> {:ok, :pending}
@@ -226,9 +226,11 @@ Without both, `{:error, :external_disabled}`. Every email the module sends — a
 
 The message, its deliveries and its external recipients (`pending`) are written in one transaction; the email goes after the commit, in a task under the module's `PhoenixKitInbox.TaskSupervisor`, and the rows become `sent` or `failed`. A failure there never touches the internal part. A row still pending after 15 minutes reads as `:unknown` — check the email log. The body is the Markdown rendered as in the reading pane, plus a plain-text part; attachments travel as real attachments, read from Storage, up to `inbox_external_max_bytes` in total as base64 (25 MB by default) — a larger message is refused before anything is stored.
 
+**Outbox**: while an email to external addresses is queued, failed or unknown, the sender's copy of the message waits in the Outbox folder (with the reason in words for a failed one) and moves to Sent when every external recipient has been sent to. Nobody files a message into Outbox by hand.
+
 **Retry** re-sends the failed rows, from the sending mailbox only, with the identity and the right to write externally checked again, and only when `phoenix_kit_emails` runs and every log row of the message's email is `failed` or `rejected`; the rows are taken in one statement, so two retries at once send one email.
 
-A host that sent an email itself records it in the sender's Sent folder:
+A host that sent an email itself records it in the sender's Sent folder (in Outbox, if a recipient is recorded as failed):
 
 ```elixir
 Messages.record_sent(scope, mailbox, %{
@@ -445,8 +447,11 @@ Never filled from a form: `links:`, `html_body:` (the host's HTML for the outsid
 | `inbox_email_nudges_enabled` | `false` | Send a "new message" email to recipients — also needs a nudge sender and external sending open |
 | `inbox_nudge_identity_uuid` | none | The shared identity nudges go out from; without one there is no nudge |
 | `inbox_external_enabled` | `false` | Allow mail to addresses outside the application — also needs the host's `outbound_filter` |
+| `inbox_internal_enabled` | `true` (the host's `config :phoenix_kit_inbox, internal_mail_default:`, when never saved) | Deliver mail inside the application — between members and to shared mailboxes. Off: see below |
 | `inbox_external_max_bytes` | `26214400` | Largest total of attachments for external recipients, as base64 |
 | `inbox_max_upload_bytes` | `200000000` | Largest attachment accepted, in bytes |
+
+**Internal mail off** (`PhoenixKitInbox.set_internal_enabled(false)`, or the toggle on the module's Settings page for holders of `inbox.manage_shared`): nothing new is delivered inside. An email address — a member's login email, a shared mailbox's address — is an outside address and goes as an outside email (with the usual right and sending identity); `@username`, a shared mailbox's name or slug is refused with `{:error, :internal_mail_disabled}`; `Messages.resolve_recipient_routes/2` answers `:email`, with a `refused: :internal_mail_disabled` key on what the send refuses; a user without the outside right is told so (`:external_not_allowed`), not that the colleague is "not found"; the compose form has no inside suggestions, shows a host's inside chip on its email route and does not offer "Inside the application only" as a sender (the first identity is the default) — an open compose page follows a flip of the switch without a reload; `record_sent/4` takes a member's address as an outside address; nudges have no internal mail to be about. Delivered letters stay readable; Sent, Drafts, shared mailboxes and their grants, retry and outside sending are unchanged. A host can ship it off with `config :phoenix_kit_inbox, internal_mail_default: false` (used until the setting is saved; `true` when not configured, so an upgrade changes nothing). The switch belongs to the `inbox.manage_shared` permission: its holders turn mail inside the application on or off for everybody. A host that sends through the three-argument `Messages.send_message/3` (a mailbox and a user uuid, no scope) cannot send outside email at all, so while the switch is off an address — a member's too — answers `{:error, :external_needs_scope}` ("Addresses outside this application need the sender's scope."), not `:internal_mail_disabled`; use the scope form.
 
 ```elixir
 PhoenixKitInbox.set_email_nudges(true)

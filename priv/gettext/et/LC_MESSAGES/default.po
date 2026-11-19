@@ -21,7 +21,7 @@ msgstr "Fail %{filename} ületab üleslaadimise piiri."
 msgid "%{sender} sent you a message."
 msgstr "%{sender} saatis sulle sõnumi."
 
-#: lib/phoenix_kit_inbox.ex:482
+#: lib/phoenix_kit_inbox.ex:537
 #: lib/phoenix_kit_inbox/attachments/folders.ex:671
 #: lib/phoenix_kit_inbox/notify.ex:242
 #: lib/phoenix_kit_inbox/notify.ex:243
@@ -29,13 +29,13 @@ msgstr "%{sender} saatis sulle sõnumi."
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:693
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:722
 #: lib/phoenix_kit_inbox/web/components/mail_tree.ex:97
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:758
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:836
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:829
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:937
 #, elixir-autogen, elixir-format
 msgid "(no subject)"
 msgstr "(teema puudub)"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1021
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1285
 #, elixir-autogen, elixir-format
 msgid "@username, email or shared mailbox — comma separated"
 msgstr "@kasutajanimi, e-posti aadress või jagatud postkast — komadega eraldatud"
@@ -45,12 +45,12 @@ msgstr "@kasutajanimi, e-posti aadress või jagatud postkast — komadega eralda
 msgid "A file can't be attached: it is in the trash or no longer available."
 msgstr "Faili ei saa lisada: see on prügikastis või pole enam saadaval."
 
-#: lib/phoenix_kit_inbox/errors.ex:216
+#: lib/phoenix_kit_inbox/errors.ex:221
 #, elixir-autogen, elixir-format
 msgid "A recorded email names its recipients as external recipients, with their outcome."
 msgstr "Salvestatud kirjas on saajad nimetatud välissaajatena koos tulemusega."
 
-#: lib/phoenix_kit_inbox/errors.ex:117
+#: lib/phoenix_kit_inbox/errors.ex:119
 #, elixir-autogen, elixir-format
 msgid "A sending identity and a Reply-To need the sender's scope."
 msgstr "Saatja identiteet ja Reply-To vajavad saatja õigusi."
@@ -101,7 +101,7 @@ msgstr "Lisatakse isiklikust postkastist kirjutatud sõnumi lõppu, pärast rida
 msgid "Address"
 msgstr "Aadress"
 
-#: lib/phoenix_kit_inbox/errors.ex:150
+#: lib/phoenix_kit_inbox/errors.ex:155
 #, elixir-autogen, elixir-format
 msgid "Addresses outside this application need the sender's scope."
 msgstr "Rakendusevälised aadressid vajavad saatja õigusi."
@@ -116,8 +116,8 @@ msgstr "Haldur"
 msgid "An attachment could not be stored. Try again."
 msgstr "Manust ei õnnestunud salvestada. Proovi uuesti."
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1030
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1082
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1144
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1197
 #: lib/phoenix_kit_inbox/web/mailboxes_live.ex:455
 #, elixir-autogen, elixir-format
 msgid "Archive"
@@ -128,12 +128,12 @@ msgstr "Arhiiv"
 msgid "Archive this mailbox?"
 msgstr "Arhiveerida see postkast?"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1215
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1251
 #, elixir-autogen, elixir-format
 msgid "Attach existing file"
 msgstr "Lisa olemasolev fail"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:961
+#: lib/phoenix_kit_inbox/web/compose_live.ex:996
 #, elixir-autogen, elixir-format
 msgid "Attach existing files"
 msgstr "Lisa olemasolevaid faile"
@@ -143,7 +143,7 @@ msgstr "Lisa olemasolevaid faile"
 msgid "Attachments are not supported by this installation's file storage."
 msgstr "Selle paigalduse failihoidla manuseid ei toeta."
 
-#: lib/phoenix_kit_inbox/errors.ex:219
+#: lib/phoenix_kit_inbox/errors.ex:224
 #, elixir-autogen, elixir-format
 msgid "Attachments are unavailable right now. Try again."
 msgstr "Manused pole praegu saadaval. Proovi uuesti."
@@ -158,10 +158,10 @@ msgstr "Manused vajavad saatja õigusi."
 msgid "Back to mailbox"
 msgstr "Tagasi postkasti"
 
-#: lib/phoenix_kit_inbox/errors.ex:311
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2259
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2734
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1033
+#: lib/phoenix_kit_inbox/errors.ex:316
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2266
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2741
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1069
 #, elixir-autogen, elixir-format
 msgid "Bcc"
 msgstr "Bcc"
@@ -171,24 +171,24 @@ msgstr "Bcc"
 msgid "Broken"
 msgstr "Katki"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2459
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1089
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2466
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1125
 #: lib/phoenix_kit_inbox/web/identity_editor.ex:356
 #: lib/phoenix_kit_inbox/web/signature_editor.ex:179
 #, elixir-autogen, elixir-format
 msgid "Cancel"
 msgstr "Tühista"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2370
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1191
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2377
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1227
 #, elixir-autogen, elixir-format
 msgid "Cancel upload"
 msgstr "Katkesta üleslaadimine"
 
-#: lib/phoenix_kit_inbox/errors.ex:310
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2249
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2733
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1027
+#: lib/phoenix_kit_inbox/errors.ex:315
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2256
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2740
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1063
 #, elixir-autogen, elixir-format
 msgid "Cc"
 msgstr "Cc"
@@ -198,18 +198,18 @@ msgstr "Cc"
 msgid "Check"
 msgstr "Kontrolli"
 
-#: lib/phoenix_kit_inbox/errors.ex:153
+#: lib/phoenix_kit_inbox/errors.ex:158
 #, elixir-autogen, elixir-format
 msgid "Choose a sender under “Send as” to write to addresses outside this application."
 msgstr "Rakendusevälistele aadressidele kirjutamiseks vali saatja väljal „Saatja nimel“."
 
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:668
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:838
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:939
 #, elixir-autogen, elixir-format
 msgid "Close"
 msgstr "Sulge"
 
-#: lib/phoenix_kit_inbox.ex:209
+#: lib/phoenix_kit_inbox.ex:213
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:647
 #, elixir-autogen, elixir-format
 msgid "Compose"
@@ -241,12 +241,12 @@ msgstr "Vaikimisi"
 msgid "Delete"
 msgstr "Kustuta"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1063
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1177
 #, elixir-autogen, elixir-format
 msgid "Delete forever"
 msgstr "Kustuta jäädavalt"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1060
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1174
 #, elixir-autogen, elixir-format
 msgid "Delete this message from your mailbox permanently?"
 msgstr "Kustutada see sõnum sinu postkastist jäädavalt?"
@@ -266,39 +266,39 @@ msgstr "Kustutada see allkiri?"
 msgid "Derived from the name when left blank"
 msgstr "Tühjaks jättes tuletatakse nimest"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1101
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1137
 #, elixir-autogen, elixir-format
 msgid "Discard draft"
 msgstr "Hülga mustand"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1097
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1133
 #, elixir-autogen, elixir-format
 msgid "Discard this draft?"
 msgstr "Hüljata see mustand?"
 
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:795
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:880
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:981
 #, elixir-autogen, elixir-format
 msgid "Download"
 msgstr "Lae alla"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:493
+#: lib/phoenix_kit_inbox/web/compose_live.ex:525
 #, elixir-autogen, elixir-format
 msgid "Draft"
 msgstr "Mustand"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:569
+#: lib/phoenix_kit_inbox/web/compose_live.ex:601
 #, elixir-autogen, elixir-format
 msgid "Draft discarded."
 msgstr "Mustand hüljatud."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:668
+#: lib/phoenix_kit_inbox/web/compose_live.ex:702
 #, elixir-autogen, elixir-format
 msgid "Draft saved."
 msgstr "Mustand salvestatud."
 
 #: lib/phoenix_kit_inbox/attachments/folders.ex:670
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1079
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1194
 #, elixir-autogen, elixir-format
 msgid "Drafts"
 msgstr "Mustandid"
@@ -309,20 +309,20 @@ msgstr "Mustandid"
 msgid "Edit"
 msgstr "Muuda"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:725
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:796
 #, elixir-autogen, elixir-format
 msgid "Empty list."
 msgstr "Nimekiri on tühi."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:464
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1011
+#: lib/phoenix_kit_inbox/web/compose_live.ex:496
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1125
 #, elixir-autogen, elixir-format
 msgid "Forward"
 msgstr "Edasta"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2134
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2145
-#: lib/phoenix_kit_inbox/web/compose_live.ex:995
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2141
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2152
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1031
 #, elixir-autogen, elixir-format
 msgid "From"
 msgstr "Saatja"
@@ -332,15 +332,15 @@ msgstr "Saatja"
 msgid "Grant access"
 msgstr "Anna juurdepääs"
 
-#: lib/phoenix_kit_inbox.ex:195
+#: lib/phoenix_kit_inbox.ex:199
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:831
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:77
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1077
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:80
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1191
 #, elixir-autogen, elixir-format
 msgid "Inbox"
 msgstr "Saabunud"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1239
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1278
 #, elixir-autogen, elixir-format
 msgid "Inside the application only"
 msgstr "Ainult rakenduse sees"
@@ -350,16 +350,16 @@ msgstr "Ainult rakenduse sees"
 msgid "Its mail connection is missing, disconnected or no longer usable. Fix it, then check again."
 msgstr "Selle meiliühendus puudub, on katkestatud või ei kõlba enam. Paranda see ja kontrolli uuesti."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3072
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1244
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3079
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1289
 #, elixir-autogen, elixir-format
 msgid "Larger than the upload limit."
 msgstr "Ületab üleslaadimise piiri."
 
-#: lib/phoenix_kit_inbox.ex:144
-#: lib/phoenix_kit_inbox.ex:180
-#: lib/phoenix_kit_inbox.ex:240
-#: lib/phoenix_kit_inbox.ex:272
+#: lib/phoenix_kit_inbox.ex:145
+#: lib/phoenix_kit_inbox.ex:184
+#: lib/phoenix_kit_inbox.ex:244
+#: lib/phoenix_kit_inbox.ex:276
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:138
 #: lib/phoenix_kit_inbox/web/settings_live.ex:31
 #, elixir-autogen, elixir-format
@@ -371,7 +371,7 @@ msgstr "Post"
 msgid "Mail connection (its login is the From address)"
 msgstr "Meiliühendus (selle kasutajanimi on saatja aadress)"
 
-#: lib/phoenix_kit_inbox.ex:284
+#: lib/phoenix_kit_inbox.ex:288
 #: lib/phoenix_kit_inbox/web/my_settings_live.ex:43
 #, elixir-autogen, elixir-format
 msgid "Mail settings"
@@ -392,8 +392,8 @@ msgstr "Postkasti ei leitud."
 msgid "Mailbox “%{name}” created."
 msgstr "Postkast „%{name}“ loodud."
 
-#: lib/phoenix_kit_inbox.ex:222
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:620
+#: lib/phoenix_kit_inbox.ex:226
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:675
 #: lib/phoenix_kit_inbox/web/mailboxes_live.ex:52
 #, elixir-autogen, elixir-format
 msgid "Mailboxes"
@@ -404,24 +404,24 @@ msgstr "Postkastid"
 msgid "Manage your mail connections"
 msgstr "Halda oma meiliühendusi"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1019
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1133
 #, elixir-autogen, elixir-format
 msgid "Mark read"
 msgstr "Märgi loetuks"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1019
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1133
 #, elixir-autogen, elixir-format
 msgid "Mark unread"
 msgstr "Märgi lugemata"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1065
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1101
 #, elixir-autogen, elixir-format
 msgid "Markdown: **bold**, _italic_, [link](https://…), - lists."
 msgstr "Markdown: **rasvane**, _kursiiv_, [link](https://…), - loendid."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2321
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2322
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1063
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2328
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2329
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1099
 #, elixir-autogen, elixir-format
 msgid "Message"
 msgstr "Sõnum"
@@ -431,22 +431,22 @@ msgstr "Sõnum"
 msgid "Message not found."
 msgstr "Sõnumit ei leitud."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:414
+#: lib/phoenix_kit_inbox/web/compose_live.ex:442
 #, elixir-autogen, elixir-format
 msgid "Message sent."
 msgstr "Sõnum saadetud."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:412
+#: lib/phoenix_kit_inbox/web/compose_live.ex:440
 #, elixir-autogen, elixir-format
 msgid "Message sent. The email to external addresses is on its way."
 msgstr "Sõnum saadetud. Kiri välisaadressidele on teel."
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:78
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:81
 #, elixir-autogen, elixir-format
 msgid "Messages between users of this application"
 msgstr "Selle rakenduse kasutajate vahelised sõnumid"
 
-#: lib/phoenix_kit_inbox/errors.ex:287
+#: lib/phoenix_kit_inbox/errors.ex:292
 #, elixir-autogen, elixir-format
 msgid "More than one recipient matches: %{recipients}. Use the full email address instead."
 msgstr "Sobib mitu saajat: %{recipients}. Kasuta selle asemel täielikku e-posti aadressi."
@@ -469,8 +469,8 @@ msgstr "Saajatele näidatav nimi"
 msgid "Put the sender's own name into the From name"
 msgstr "Lisa saatja enda nimi From-nimesse"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:108
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:609
+#: lib/phoenix_kit_inbox/web/compose_live.ex:109
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:664
 #, elixir-autogen, elixir-format
 msgid "New message"
 msgstr "Uus sõnum"
@@ -485,12 +485,12 @@ msgstr "Uus sõnum: %{subject}"
 msgid "New shared mailbox"
 msgstr "Uus jagatud postkast"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1233
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1269
 #, elixir-autogen, elixir-format
 msgid "No Reply-To — replies go to this mailbox"
 msgstr "Reply-To puudub — vastused tulevad sellesse postkasti"
 
-#: lib/phoenix_kit_inbox/errors.ex:226
+#: lib/phoenix_kit_inbox/errors.ex:231
 #, elixir-autogen, elixir-format
 msgid "No recipient matches: %{recipients}. Use @username, an email address, or a shared mailbox name."
 msgstr "Ühtegi saajat ei leitud: %{recipients}. Kasuta @kasutajanime, e-posti aadressi või jagatud postkasti nime."
@@ -505,8 +505,8 @@ msgstr "Saatjaid pole veel."
 msgid "No shared mailboxes yet."
 msgstr "Jagatud postkaste pole veel."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2278
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1074
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2285
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1110
 #, elixir-autogen, elixir-format
 msgid "No signature"
 msgstr "Allkirja pole"
@@ -516,12 +516,12 @@ msgstr "Allkirja pole"
 msgid "No signatures yet."
 msgstr "Allkirju pole veel."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:761
+#: lib/phoenix_kit_inbox/web/compose_live.ex:795
 #, elixir-autogen, elixir-format
 msgid "Not attached: %{names}. %{reason}"
 msgstr "Ei lisatud: %{names}. %{reason}"
 
-#: lib/phoenix_kit_inbox/errors.ex:212
+#: lib/phoenix_kit_inbox/errors.ex:217
 #, elixir-autogen, elixir-format
 msgid "Not email addresses: %{entries}."
 msgstr "Need pole e-posti aadressid: %{entries}."
@@ -536,7 +536,7 @@ msgstr "Ei leitud"
 msgid "Not found."
 msgstr "Ei leitud."
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:726
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:797
 #, elixir-autogen, elixir-format
 msgid "Nothing in this folder yet."
 msgstr "Selles kaustas pole veel midagi."
@@ -581,25 +581,25 @@ msgstr "Loe seda siit: %{url}"
 msgid "Recipient not found."
 msgstr "Saajat ei leitud."
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:612
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:667
 #, elixir-autogen, elixir-format
 msgid "Refresh"
 msgstr "Värskenda"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1164
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1165
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1200
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1201
 #, elixir-autogen, elixir-format
 msgid "Remove attachment"
 msgstr "Eemalda manus"
 
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:822
-#: lib/phoenix_kit_inbox/web/compose_live.ex:441
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1002
+#: lib/phoenix_kit_inbox/web/compose_live.ex:473
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1116
 #, elixir-autogen, elixir-format
 msgid "Reply"
 msgstr "Vasta"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1046
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1082
 #: lib/phoenix_kit_inbox/web/my_settings_live.ex:228
 #, elixir-autogen, elixir-format
 msgid "Reply-To"
@@ -610,7 +610,7 @@ msgstr "Reply-To"
 msgid "Reply-To saved."
 msgstr "Reply-To salvestatud."
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:944
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1050
 #, elixir-autogen, elixir-format
 msgid "Retry"
 msgstr "Proovi uuesti"
@@ -627,28 +627,28 @@ msgstr "Võta ära"
 msgid "Save"
 msgstr "Salvesta"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1113
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1149
 #, elixir-autogen, elixir-format
 msgid "Save draft"
 msgstr "Salvesta mustand"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:716
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:787
 #, elixir-autogen, elixir-format
 msgid "Search"
 msgstr "Otsi"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:823
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:924
 #, elixir-autogen, elixir-format
 msgid "Select any message in the list to view it here."
 msgstr "Vali nimekirjast sõnum, et seda siin vaadata."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1576
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1124
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1583
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1160
 #, elixir-autogen, elixir-format
 msgid "Send"
 msgstr "Saada"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1007
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1043
 #, elixir-autogen, elixir-format
 msgid "Send as"
 msgstr "Saatja nimel"
@@ -673,17 +673,17 @@ msgstr "Saatja salvestatud."
 msgid "Senders"
 msgstr "Saatjad"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:442
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:485
 #, elixir-autogen, elixir-format
 msgid "Sending again."
 msgstr "Saadan uuesti."
 
-#: lib/phoenix_kit_inbox/errors.ex:147
+#: lib/phoenix_kit_inbox/errors.ex:152
 #, elixir-autogen, elixir-format
 msgid "Sending to addresses outside this application is turned off."
 msgstr "Rakendusevälistele aadressidele saatmine on välja lülitatud."
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1078
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1193
 #, elixir-autogen, elixir-format
 msgid "Sent"
 msgstr "Saadetud"
@@ -703,9 +703,9 @@ msgstr "Jagatud postkastid ja kes neid kasutada saab"
 msgid "Shared mailboxes you are given access to appear here."
 msgstr "Siin on jagatud postkastid, millele sulle on juurdepääs antud."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2239
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2276
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1069
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2246
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2283
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1105
 #, elixir-autogen, elixir-format
 msgid "Signature"
 msgstr "Allkiri"
@@ -736,20 +736,20 @@ msgstr "Allkirjad"
 msgid "Slug"
 msgstr "Lühinimi (slug)"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1041
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1080
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1155
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1195
 #, elixir-autogen, elixir-format
 msgid "Spam"
 msgstr "Rämpspost"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:745
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:816
 #, elixir-autogen, elixir-format
 msgid "Star"
 msgstr "Märgi tärniga"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2301
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2307
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1062
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2308
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2314
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1098
 #, elixir-autogen, elixir-format
 msgid "Subject"
 msgstr "Teema"
@@ -764,62 +764,62 @@ msgstr "Teema: %{subject}"
 msgid "Support"
 msgstr "Tugi"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1855
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1862
 #, elixir-autogen, elixir-format
 msgid "That address is inside this application and cannot be added here."
 msgstr "See aadress on selle rakenduse sees ja seda ei saa siia lisada."
 
-#: lib/phoenix_kit_inbox/errors.ex:135
+#: lib/phoenix_kit_inbox/errors.ex:137
 #, elixir-autogen, elixir-format
 msgid "That connection can't send email."
 msgstr "See ühendus ei saa e-kirju saata."
 
-#: lib/phoenix_kit_inbox/errors.ex:132
+#: lib/phoenix_kit_inbox/errors.ex:134
 #, elixir-autogen, elixir-format
 msgid "That mail connection doesn't exist."
 msgstr "Sellist meiliühendust ei ole."
 
-#: lib/phoenix_kit_inbox/errors.ex:144
+#: lib/phoenix_kit_inbox/errors.ex:146
 #, elixir-autogen, elixir-format
 msgid "That mail connection has no login email address to send from."
 msgstr "Sellel meiliühendusel pole sisselogimise e-posti aadressi, millelt saata."
 
-#: lib/phoenix_kit_inbox/errors.ex:141
+#: lib/phoenix_kit_inbox/errors.ex:143
 #, elixir-autogen, elixir-format
 msgid "That mail connection isn't available for this sender."
 msgstr "See meiliühendus pole sellele saatjale saadaval."
 
-#: lib/phoenix_kit_inbox/errors.ex:138
+#: lib/phoenix_kit_inbox/errors.ex:140
 #, elixir-autogen, elixir-format
 msgid "That mail connection isn't connected."
 msgstr "See meiliühendus pole ühendatud."
 
-#: lib/phoenix_kit_inbox/errors.ex:284
+#: lib/phoenix_kit_inbox/errors.ex:289
 #, elixir-autogen, elixir-format
 msgid "That name matches more than one recipient."
 msgstr "See nimi sobib mitmele saajale."
 
-#: lib/phoenix_kit_inbox/errors.ex:126
+#: lib/phoenix_kit_inbox/errors.ex:128
 #, elixir-autogen, elixir-format
 msgid "That sender can't be used from this mailbox."
 msgstr "Seda saatjat ei saa sellest postkastist kasutada."
 
-#: lib/phoenix_kit_inbox/errors.ex:121
+#: lib/phoenix_kit_inbox/errors.ex:123
 #, elixir-autogen, elixir-format
 msgid "That sender can't send right now: its mail connection is missing or disconnected."
 msgstr "See saatja ei saa praegu saata: tema meiliühendus puudub või on katkestatud."
 
-#: lib/phoenix_kit_inbox/errors.ex:174
+#: lib/phoenix_kit_inbox/errors.ex:179
 #, elixir-autogen, elixir-format
 msgid "That sender has no mail connection."
 msgstr "Sellel saatjal pole meiliühendust."
 
-#: lib/phoenix_kit_inbox/errors.ex:123
+#: lib/phoenix_kit_inbox/errors.ex:125
 #, elixir-autogen, elixir-format
 msgid "That sender no longer exists."
 msgstr "Seda saatjat enam ei ole."
 
-#: lib/phoenix_kit_inbox/errors.ex:160
+#: lib/phoenix_kit_inbox/errors.ex:165
 #, elixir-autogen, elixir-format
 msgid "The attachments are too large for an email outside this application (at most %{size})."
 msgstr "Manused on rakendusevälise kirja jaoks liiga suured (kuni %{size})."
@@ -829,24 +829,24 @@ msgstr "Manused on rakendusevälise kirja jaoks liiga suured (kuni %{size})."
 msgid "The attachments could not be read."
 msgstr "Manuseid ei õnnestunud lugeda."
 
-#: lib/phoenix_kit_inbox/errors.ex:170
+#: lib/phoenix_kit_inbox/errors.ex:175
 #, elixir-autogen, elixir-format
 msgid "The email could not be checked against this installation's rules, so it was not sent."
 msgstr "Kirja ei õnnestunud selle paigalduse reeglite vastu kontrollida, seega seda ei saadetud."
 
-#: lib/phoenix_kit_inbox/errors.ex:179
+#: lib/phoenix_kit_inbox/errors.ex:184
 #, elixir-autogen, elixir-format
 msgid "The email log shows the email may have gone out, so it is not sent again."
 msgstr "E-kirjade logi järgi võis kiri juba välja minna, seega seda uuesti ei saadeta."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2091
-#: lib/phoenix_kit_inbox/web/compose_live.ex:388
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2098
+#: lib/phoenix_kit_inbox/web/compose_live.ex:397
 #, elixir-autogen, elixir-format
 msgid "The signature in the message was edited, so it was left as it is."
 msgstr "Sõnumi allkirja oli muudetud, seega jäeti see nii nagu on."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3075
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1247
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3082
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1292
 #, elixir-autogen, elixir-format
 msgid "The upload failed."
 msgstr "Üleslaadimine ebaõnnestus."
@@ -856,12 +856,12 @@ msgstr "Üleslaadimine ebaõnnestus."
 msgid "There is no mail connection with a login address to send from yet."
 msgstr "Sisselogimise aadressiga meiliühendust, mille kaudu saata, pole veel."
 
-#: lib/phoenix_kit_inbox/errors.ex:181
+#: lib/phoenix_kit_inbox/errors.ex:186
 #, elixir-autogen, elixir-format
 msgid "There is nothing to send again."
 msgstr "Uuesti saata pole midagi."
 
-#: lib/phoenix_kit_inbox/errors.ex:206
+#: lib/phoenix_kit_inbox/errors.ex:211
 #, elixir-autogen, elixir-format
 msgid "These addresses belong to people or mailboxes inside this application: %{addresses}."
 msgstr "Need aadressid kuuluvad selle rakenduse inimestele või postkastidele: %{addresses}."
@@ -876,13 +876,13 @@ msgstr "Neid manuseid ei saa nendele saajatele saata."
 msgid "These options need the sender's scope."
 msgstr "Need valikud vajavad saatja õigusi."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3074
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1246
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3081
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1291
 #, elixir-autogen, elixir-format
 msgid "This file type is not accepted."
 msgstr "Seda failitüüpi ei võeta vastu."
 
-#: lib/phoenix_kit_inbox/errors.ex:166
+#: lib/phoenix_kit_inbox/errors.ex:171
 #, elixir-autogen, elixir-format
 msgid "This installation's rules don't let that email leave the application."
 msgstr "Selle paigalduse reeglid ei luba seda kirja rakendusest välja saata."
@@ -892,43 +892,43 @@ msgstr "Selle paigalduse reeglid ei luba seda kirja rakendusest välja saata."
 msgid "This mailbox is archived; it can't send."
 msgstr "See postkast on arhiveeritud; sellest ei saa saata."
 
-#: lib/phoenix_kit_inbox/errors.ex:176
+#: lib/phoenix_kit_inbox/errors.ex:181
 #, elixir-autogen, elixir-format
 msgid "This message can't be sent again from here."
 msgstr "Seda sõnumit ei saa siit uuesti saata."
 
-#: lib/phoenix_kit_inbox/errors.ex:309
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2206
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2732
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1020
+#: lib/phoenix_kit_inbox/errors.ex:314
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2213
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2739
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1056
 #, elixir-autogen, elixir-format
 msgid "To"
 msgstr "Kellele"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3073
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1245
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3080
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1290
 #, elixir-autogen, elixir-format
 msgid "Too many files."
 msgstr "Faile on liiga palju."
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1052
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1081
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1166
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1196
 #, elixir-autogen, elixir-format
 msgid "Trash"
 msgstr "Prügikast"
 
-#: lib/phoenix_kit_inbox/errors.ex:335
+#: lib/phoenix_kit_inbox/errors.ex:340
 #, elixir-autogen, elixir-format
 msgid "Unexpected error: %{reason}"
 msgstr "Ootamatu viga: %{reason}"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:685
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:755
 #, elixir-autogen, elixir-format
 msgid "Unseen only"
 msgstr "Ainult lugemata"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2414
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1203
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2421
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1239
 #, elixir-autogen, elixir-format
 msgid "Upload files"
 msgstr "Laadi faile üles"
@@ -958,12 +958,12 @@ msgstr "Kirjutamine"
 msgid "You can't attach a file you don't have access to."
 msgstr "Faili, millele sul juurdepääsu pole, ei saa lisada."
 
-#: lib/phoenix_kit_inbox/errors.ex:129
+#: lib/phoenix_kit_inbox/errors.ex:131
 #, elixir-autogen, elixir-format
 msgid "You can't send as that sender."
 msgstr "Sa ei saa selle saatja nimel saata."
 
-#: lib/phoenix_kit_inbox/errors.ex:114
+#: lib/phoenix_kit_inbox/errors.ex:116
 #, elixir-autogen, elixir-format
 msgid "You can't use that Reply-To address."
 msgstr "Seda Reply-To aadressi ei saa kasutada."
@@ -973,7 +973,7 @@ msgstr "Seda Reply-To aadressi ei saa kasutada."
 msgid "You don't have access to this mailbox."
 msgstr "Sul pole sellele postkastile juurdepääsu."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:930
+#: lib/phoenix_kit_inbox/web/compose_live.ex:964
 #, elixir-autogen, elixir-format
 msgid "You don't have any mailbox you can send from."
 msgstr "Sul pole ühtegi postkasti, millest saata."
@@ -983,11 +983,11 @@ msgstr "Sul pole ühtegi postkasti, millest saata."
 msgid "You don't have permission to do that."
 msgstr "Sul pole selleks õigust."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:925
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:589
+#: lib/phoenix_kit_inbox/web/compose_live.ex:959
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:644
 #: lib/phoenix_kit_inbox/web/mailboxes_live.ex:306
 #: lib/phoenix_kit_inbox/web/my_settings_live.ex:189
-#: lib/phoenix_kit_inbox/web/settings_live.ex:95
+#: lib/phoenix_kit_inbox/web/settings_live.ex:129
 #, elixir-autogen, elixir-format
 msgid "You don't have permission to use Inbox."
 msgstr "Sul pole õigust postkasti kasutada."
@@ -997,133 +997,130 @@ msgstr "Sul pole õigust postkasti kasutada."
 msgid "Your access"
 msgstr "Sinu juurdepääs"
 
-#: lib/phoenix_kit_inbox/web/settings_live.ex:103
+#: lib/phoenix_kit_inbox/web/settings_live.ex:137
 #, elixir-autogen, elixir-format
 msgid "Your mail settings"
 msgstr "Sinu postiseaded"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:776
+#: lib/phoenix_kit_inbox/web/compose_live.ex:810
 #, elixir-autogen, elixir-format
 msgid "a file"
 msgstr "fail"
 
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:847
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:956
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:875
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1070
 #, elixir-autogen, elixir-format
 msgid "not delivered"
 msgstr "kohale toimetamata"
 
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:848
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:957
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1071
 #, elixir-autogen, elixir-format
 msgid "sending…"
 msgstr "saadan…"
 
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:846
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:955
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1069
 #, elixir-autogen, elixir-format
 msgid "sent"
 msgstr "saadetud"
 
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:849
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:958
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:876
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1072
 #, elixir-autogen, elixir-format
 msgid "unknown — check the email log"
 msgstr "teadmata — vaata e-kirjade logi"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1107
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1222
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Apr"
 msgstr "apr"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1111
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1226
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Aug"
 msgstr "aug"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1115
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1230
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Dec"
 msgstr "dets"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1105
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1220
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Feb"
 msgstr "veebr"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1104
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1219
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Jan"
 msgstr "jaan"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1110
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1225
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Jul"
 msgstr "juuli"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1109
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1224
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Jun"
 msgstr "juuni"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1106
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1221
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Mar"
 msgstr "märts"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1108
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1223
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "May"
 msgstr "mai"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1114
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1229
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Nov"
 msgstr "nov"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1113
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1228
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Oct"
 msgstr "okt"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:1112
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1227
 #, elixir-autogen, elixir-format
 msgctxt "month, abbreviated"
 msgid "Sep"
 msgstr "sept"
 
-#: lib/phoenix_kit_inbox.ex:158
-#, elixir-autogen, elixir-format
-msgid "Create shared mailboxes and set their addresses"
-msgstr "Loo jagatud postkaste ja määra nende aadressid"
-
-#: lib/phoenix_kit_inbox.ex:146
+#: lib/phoenix_kit_inbox.ex:147
 #, elixir-autogen, elixir-format
 msgid "Internal mailboxes — send and receive messages between users"
 msgstr "Sisemised postkastid — sõnumite saatmine ja vastuvõtmine kasutajate vahel"
 
-#: lib/phoenix_kit_inbox.ex:157
+#: lib/phoenix_kit_inbox.ex:158
 #, elixir-autogen, elixir-format
 msgid "Manage shared mailboxes"
 msgstr "Halda jagatud postkaste"
 
-#: lib/phoenix_kit_inbox.ex:152
+#: lib/phoenix_kit_inbox.ex:153
 #, elixir-autogen, elixir-format
 msgid "Send to external addresses"
 msgstr "Saada välisaadressidele"
 
-#: lib/phoenix_kit_inbox.ex:153
+#: lib/phoenix_kit_inbox.ex:154
 #, elixir-autogen, elixir-format
 msgid "Write to email addresses outside this application"
 msgstr "Kirjuta rakendusevälistele e-posti aadressidele"
@@ -1135,17 +1132,17 @@ msgid_plural "A message can carry at most %{max} files."
 msgstr[0] "Sõnumiga saab lisada kuni %{max} faili."
 msgstr[1] "Sõnumiga saab lisada kuni %{max} faili."
 
-#: lib/phoenix_kit_inbox/mailboxes.ex:589
+#: lib/phoenix_kit_inbox/mailboxes.ex:604
 #, elixir-autogen, elixir-format
 msgid "User %{id}"
 msgstr "Kasutaja %{id}"
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:993
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1107
 #, elixir-autogen, elixir-format
 msgid "Edit draft"
 msgstr "Muuda mustandit"
 
-#: lib/phoenix_kit_inbox/web/settings_live.ex:110
+#: lib/phoenix_kit_inbox/web/settings_live.ex:168
 #, elixir-autogen, elixir-format
 msgid "A system mail connection people send from their personal mailbox, as “their name | the mail's name”. Each one is open to the roles ticked; the Owner always."
 msgstr "Süsteemne meiliühendus, mille nimel saadetakse isiklikust postkastist kujul „oma nimi | posti nimi“. Iga post on avatud märgitud rollidele; omanikule (Owner) alati."
@@ -1180,7 +1177,7 @@ msgstr "Ühise posti haldus"
 msgid "Name, @username or email"
 msgstr "Nimi, @kasutajanimi või e-posti aadress"
 
-#: lib/phoenix_kit_inbox/errors.ex:156
+#: lib/phoenix_kit_inbox/errors.ex:161
 #, elixir-autogen, elixir-format
 msgid "No mail is open to you for writing to addresses outside this application."
 msgstr "Ükski post pole sulle rakendusevälistele aadressidele kirjutamiseks avatud."
@@ -1210,12 +1207,12 @@ msgstr "Rollid: %{roles}"
 msgid "Sending also needs the “Send to external addresses” permission. Nobody can read this mail here."
 msgstr "Saatmiseks on vaja ka õigust „Saada välisaadressidele“. Seda posti ei saa siin keegi lugeda."
 
-#: lib/phoenix_kit_inbox/web/settings_live.ex:108
+#: lib/phoenix_kit_inbox/web/settings_live.ex:166
 #, elixir-autogen, elixir-format
 msgid "Shared mail"
 msgstr "Ühine post"
 
-#: lib/phoenix_kit_inbox/web/settings_live.ex:101
+#: lib/phoenix_kit_inbox/web/settings_live.ex:135
 #, elixir-autogen, elixir-format
 msgid "Shared mail is managed by holders of “Manage shared mailboxes”."
 msgstr "Ühist posti haldavad need, kellel on õigus „Halda jagatud postkaste“."
@@ -1245,17 +1242,17 @@ msgstr "Kes võivad selle nimel saata"
 msgid "the role has no “Send to external addresses” permission — grant it in the roles matrix"
 msgstr "rollil pole õigust „Saada välisaadressidele“ — anna see rollide maatriksis"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:279
+#: lib/phoenix_kit_inbox/web/compose_live.ex:281
 #, elixir-autogen, elixir-format
 msgid "The Reply-To you chose is no longer available, so it was reset."
 msgstr "Valitud Reply-To ei ole enam saadaval, seega see lähtestati."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:276
+#: lib/phoenix_kit_inbox/web/compose_live.ex:278
 #, elixir-autogen, elixir-format
 msgid "The sender you chose is no longer available, so it was reset."
 msgstr "Valitud saatja ei ole enam saadaval, seega see lähtestati."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:260
+#: lib/phoenix_kit_inbox/web/compose_live.ex:262
 #, elixir-autogen, elixir-format
 msgid "You can no longer send from “%{lost}”, so this message is now from “%{name}”."
 msgstr "Sa ei saa enam saata postkastist „%{lost}“, seega läheb see sõnum nüüd postkastist „%{name}“."
@@ -1265,70 +1262,70 @@ msgstr "Sa ei saa enam saata postkastist „%{lost}“, seega läheb see sõnum 
 msgid "You no longer have access to Inbox."
 msgstr "Sul pole enam õigust postkasti kasutada."
 
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:165
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:170
 #, elixir-autogen, elixir-format
 msgid "You no longer have access to “%{name}”."
 msgstr "Sul pole enam ligipääsu postkastile „%{name}“."
 
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:808
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1156
-#: lib/phoenix_kit_inbox/web/inbox_live.ex:893
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1192
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:994
 #, elixir-autogen, elixir-format
 msgid "Attachment not available"
 msgstr "Manus pole saadaval"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1109
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1145
 #, elixir-autogen, elixir-format
 msgid "Saving…"
 msgstr "Salvestan…"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1574
-#: lib/phoenix_kit_inbox/web/compose_live.ex:1120
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1581
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1156
 #, elixir-autogen, elixir-format
 msgid "Sending…"
 msgstr "Saadan…"
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:680
+#: lib/phoenix_kit_inbox/web/compose_live.ex:714
 #, elixir-autogen, elixir-format
 msgid "The draft could not be saved. Try again."
 msgstr "Mustandit ei õnnestunud salvestada. Proovi uuesti."
 
-#: lib/phoenix_kit_inbox/web/compose_live.ex:653
+#: lib/phoenix_kit_inbox/web/compose_live.ex:687
 #, elixir-autogen, elixir-format
 msgid "The message may not have been sent. Check Sent before trying again."
 msgstr "Sõnum võib olla saatmata. Enne uuesti proovimist vaata kausta Saadetud."
 
-#: lib/phoenix_kit_inbox/errors.ex:184
+#: lib/phoenix_kit_inbox/errors.ex:189
 #, elixir-autogen, elixir-format
 msgid "This send key was already used by someone else. Reopen the form and try again."
 msgstr "See saatmisvõti on juba kellegi teise kasutada. Ava vorm uuesti ja proovi veel kord."
 
-#: lib/phoenix_kit_inbox/errors.ex:187
+#: lib/phoenix_kit_inbox/errors.ex:192
 #, elixir-autogen, elixir-format
 msgid "The send key is not valid. Reopen the form and try again."
 msgstr "Saatmisvõti ei kehti. Ava vorm uuesti ja proovi veel kord."
 
-#: lib/phoenix_kit_inbox/errors.ex:190
+#: lib/phoenix_kit_inbox/errors.ex:195
 #, elixir-autogen, elixir-format
 msgid "The links to the related objects could not be saved; the message was not sent."
 msgstr "Seotud objektide linke ei õnnestunud salvestada; sõnumit ei saadetud."
 
-#: lib/phoenix_kit_inbox/errors.ex:192
+#: lib/phoenix_kit_inbox/errors.ex:197
 #, elixir-autogen, elixir-format
 msgid "The link to the related object is not valid."
 msgstr "Seotud objekti link ei kehti."
 
-#: lib/phoenix_kit_inbox/errors.ex:195
+#: lib/phoenix_kit_inbox/errors.ex:200
 #, elixir-autogen, elixir-format
 msgid "The Reply-To address is not a valid email address."
 msgstr "Vastusaadress ei ole kehtiv e-posti aadress."
 
-#: lib/phoenix_kit_inbox/errors.ex:197
+#: lib/phoenix_kit_inbox/errors.ex:202
 #, elixir-autogen, elixir-format
 msgid "The email's HTML is too large to send."
 msgstr "Kirja HTML on saatmiseks liiga suur."
 
-#: lib/phoenix_kit_inbox/errors.ex:199
+#: lib/phoenix_kit_inbox/errors.ex:204
 #, elixir-autogen, elixir-format
 msgid "The email's HTML cannot be sent as it is."
 msgstr "Kirja HTML-i ei saa sellisena saata."
@@ -1340,7 +1337,7 @@ msgid_plural "%{count} letters"
 msgstr[0] "%{count} kiri"
 msgstr[1] "%{count} kirja"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2785
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2792
 #: lib/phoenix_kit_inbox/web/components/mail_explorer.ex:830
 #, elixir-autogen, elixir-format
 msgid "All"
@@ -1426,54 +1423,54 @@ msgstr "vestlus"
 msgid "People and shared mailboxes"
 msgstr "Inimesed ja ühised postkastid"
 
-#: lib/phoenix_kit_inbox/errors.ex:256
+#: lib/phoenix_kit_inbox/errors.ex:261
 #, elixir-autogen, elixir-format
 msgid "%{addresses} is inside this application. Choose them from the list as an internal recipient instead of typing the email."
 msgid_plural "%{addresses} are inside this application. Choose them from the list as internal recipients instead of typing the email."
 msgstr[0] "%{addresses} on rakenduse sees. Vali ta loendist sisemise saajana, mitte ei sisesta e-posti."
 msgstr[1] "%{addresses} on rakenduse sees. Vali nad loendist sisemiste saajatena, mitte ei sisesta e-posti."
 
-#: lib/phoenix_kit_inbox/errors.ex:242
+#: lib/phoenix_kit_inbox/errors.ex:247
 #, elixir-autogen, elixir-format
 msgid "At most %{max} addresses in %{field}."
 msgstr "Väljal „%{field}“ võib olla kuni %{max} aadressi."
 
-#: lib/phoenix_kit_inbox/errors.ex:234
+#: lib/phoenix_kit_inbox/errors.ex:239
 #, elixir-autogen, elixir-format
 msgid "Not a valid recipient: %{entry}. Add one address at a time."
 msgstr "Sobimatu saaja: %{entry}. Lisa aadressid ükshaaval."
 
-#: lib/phoenix_kit_inbox/errors.ex:252
+#: lib/phoenix_kit_inbox/errors.ex:257
 #, elixir-autogen, elixir-format
 msgid "That sender is not valid."
 msgstr "Saatja ei sobi."
 
-#: lib/phoenix_kit_inbox/errors.ex:273
+#: lib/phoenix_kit_inbox/errors.ex:278
 #, elixir-autogen, elixir-format
 msgid "The message could not be sent."
 msgstr "Sõnumit ei õnnestunud saata."
 
-#: lib/phoenix_kit_inbox/errors.ex:271
+#: lib/phoenix_kit_inbox/errors.ex:276
 #, elixir-autogen, elixir-format
 msgid "The recipients could not be checked. Try again."
 msgstr "Saajaid ei õnnestunud kontrollida. Proovi uuesti."
 
-#: lib/phoenix_kit_inbox/errors.ex:238
+#: lib/phoenix_kit_inbox/errors.ex:243
 #, elixir-autogen, elixir-format
 msgid "The recipients could not be read."
 msgstr "Saajate loendit ei õnnestunud lugeda."
 
-#: lib/phoenix_kit_inbox/errors.ex:248
+#: lib/phoenix_kit_inbox/errors.ex:253
 #, elixir-autogen, elixir-format
 msgid "The subject is too long (500 characters at most)."
 msgstr "Teema on liiga pikk (kuni 500 märki)."
 
-#: lib/phoenix_kit_inbox/errors.ex:250
+#: lib/phoenix_kit_inbox/errors.ex:255
 #, elixir-autogen, elixir-format
 msgid "The text contains characters that can't be sent."
 msgstr "Tekstis on märke, mida ei saa saata."
 
-#: lib/phoenix_kit_inbox/errors.ex:265
+#: lib/phoenix_kit_inbox/errors.ex:270
 #, elixir-autogen, elixir-format
 msgid "These recipients would not be reached the way they were chosen: %{addresses}. Choose them again."
 msgstr "Need saajad saaksid kirja muud teed kui valitud: %{addresses}. Vali nad uuesti."
@@ -1494,109 +1491,109 @@ msgstr "Näidatud on ainult %{count} uusimat kirja."
 msgid "Show more"
 msgstr "Näita rohkem"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:749
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:756
 #, elixir-autogen, elixir-format
 msgid "%{name} (personal)"
 msgstr "%{name} (isiklik)"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2231
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2238
 #, elixir-autogen, elixir-format
 msgid "+ Bcc"
 msgstr "+ Peidetud koopia"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2223
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2230
 #, elixir-autogen, elixir-format
 msgid "+ Cc"
 msgstr "+ Koopia"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2335
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2342
 #, elixir-autogen, elixir-format
 msgid "Attachments"
 msgstr "Manused"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3078
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3081
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3085
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3088
 #, elixir-autogen, elixir-format
 msgid "File"
 msgstr "Fail"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2217
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2224
 #, elixir-autogen, elixir-format
 msgid "More fields"
 msgstr "Lisaväljad"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2154
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2163
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2161
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2170
 #, elixir-autogen, elixir-format
 msgid "Replies go to %{address}"
 msgstr "Vastused tulevad aadressile %{address}"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:820
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:827
 #, elixir-autogen, elixir-format
 msgid "Unavailable sender"
 msgstr "Saatja pole saadaval"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2684
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2691
 #, elixir-autogen, elixir-format
 msgid "Add"
 msgstr "Lisa"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2585
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2672
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2813
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2817
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2592
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2679
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2820
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2824
 #, elixir-autogen, elixir-format
 msgid "Name or email"
 msgstr "Nimi või e-post"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2822
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2954
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2829
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2961
 #, elixir-autogen, elixir-format
 msgid "No addresses found."
 msgstr "Aadresse ei leitud."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2928
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3061
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2935
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3068
 #, elixir-autogen, elixir-format
 msgid "Remove %{name}"
 msgstr "Eemalda: %{name}"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1839
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1845
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1846
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1852
 #, elixir-autogen, elixir-format
 msgid "That is not an email address."
 msgstr "See ei ole e-posti aadress."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3011
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:3018
 #, elixir-autogen, elixir-format
 msgid "internal"
 msgstr "sisemine"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2351
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2358
 #, elixir-autogen, elixir-format
 msgid "File %{id}"
 msgstr "Fail %{id}"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1548
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1555
 #, elixir-autogen, elixir-format
 msgid "%{count} hidden"
 msgid_plural "%{count} hidden"
 msgstr[0] "%{count} peidetud"
 msgstr[1] "%{count} peidetud"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1547
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1554
 #, elixir-autogen, elixir-format
 msgid "%{count} in copy"
 msgid_plural "%{count} in copy"
 msgstr[0] "%{count} koopias"
 msgstr[1] "%{count} koopias"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1595
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1602
 #, elixir-autogen, elixir-format
 msgid "From %{from} → %{to}"
 msgstr "Saatja %{from} → %{to}"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1114
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1121
 #, elixir-autogen, elixir-format
 msgid "Remove the files that failed, then send again."
 msgstr "Eemaldage failid, mis ebaõnnestusid, ja saatke uuesti."
@@ -1606,127 +1603,207 @@ msgstr "Eemaldage failid, mis ebaõnnestusid, ja saatke uuesti."
 msgid "Sending was interrupted. Check the sent mail before sending again."
 msgstr "Saatmine katkes. Kontrollige saadetud kirju enne uuesti saatmist."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1552
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1567
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1559
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1574
 #, elixir-autogen, elixir-format
 msgid "outside mail goes to %{addresses}"
 msgstr "väline kiri läheb aadressidele %{addresses}"
 
-#: lib/phoenix_kit_inbox/errors.ex:281
+#: lib/phoenix_kit_inbox/errors.ex:286
 #, elixir-autogen, elixir-format
 msgid "This form is not set up correctly, so nothing was sent."
 msgstr "Vorm on valesti seadistatud, seega midagi ei saadetud."
 
-#: lib/phoenix_kit_inbox/errors.ex:276
+#: lib/phoenix_kit_inbox/errors.ex:281
 #, elixir-autogen, elixir-format
 msgid "Choose which sender to use for the addresses outside this application."
 msgstr "Valige saatja rakendusest väljapoole jäävate aadresside jaoks."
 
-#: lib/phoenix_kit_inbox/errors.ex:278
+#: lib/phoenix_kit_inbox/errors.ex:283
 #, elixir-autogen, elixir-format
 msgid "The form has nothing to send."
 msgstr "Vormil pole midagi saata."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2521
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2528
 #, elixir-autogen, elixir-format
 msgid "A recipient here has no address, so nothing can be sent to them. Remove them to send."
 msgstr "Ühel adressaadil pole siin aadressi, seega talle ei saa midagi saata. Eemaldage ta, et saata."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:718
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:725
 #, elixir-autogen, elixir-format
 msgid "Unknown recipient"
 msgstr "Tundmatu adressaat"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1592
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1599
 #, elixir-autogen, elixir-format
 msgid "From %{from}"
 msgstr "Saatja %{from}"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1581
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1588
 #, elixir-autogen, elixir-format
 msgid "Where the outside mail goes could not be checked."
 msgstr "Ei õnnestunud kontrollida, kuhu väline kiri läheb."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1550
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1565
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1557
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1572
 #, elixir-autogen, elixir-format
 msgid "outside mail goes out as %{sender}"
 msgstr "väline kiri läheb saatjana %{sender}"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2194
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2201
 #, elixir-autogen, elixir-format
 msgid "This message was already sent earlier, with its earlier text. Nothing was sent again."
 msgstr "See kiri saadeti juba varem, varasema tekstiga. Uuesti midagi ei saadetud."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2961
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2968
 #, elixir-autogen, elixir-format
 msgid "Suggestions"
 msgstr "Soovitused"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2181
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2188
 #, elixir-autogen, elixir-format
 msgid "This message will not appear in the shared feed: only you will see it."
 msgstr "See kiri ei ilmu ühises voos: seda näete ainult teie."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2602
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2603
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2707
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2609
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2610
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2714
 #, elixir-autogen, elixir-format
 msgid "+ More addresses"
 msgstr "+ Veel aadresse"
 
-#: lib/phoenix_kit_inbox/errors.ex:202
+#: lib/phoenix_kit_inbox/errors.ex:207
 #, elixir-autogen, elixir-format
 msgid "The form could not be opened. Try again."
 msgstr "Vormi ei õnnestunud avada. Proovi uuesti."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2393
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2400
 #, elixir-autogen, elixir-format
 msgid "Some of the files this letter should carry could not be read, so it is not sent."
 msgstr "Mõnda kirjaga kaasa minevat faili ei õnnestunud lugeda, seega kirja ei saadeta."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2426
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2433
 #, elixir-autogen, elixir-format
 msgid "The letter was sent."
 msgstr "Kiri saadeti ära."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1590
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1597
 #, elixir-autogen, elixir-format
 msgid "The outside mail will not go out: the mail rules refuse it."
 msgstr "Väline kiri ei lähe teele: postireeglid keelavad selle."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:810
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:817
 #, elixir-autogen, elixir-format
 msgid "The sender you chose is no longer available. The letter will go from %{sender}."
 msgstr "Valitud saatja ei ole enam saadaval. Kiri saadetakse saatjalt %{sender}."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1584
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1591
 #, elixir-autogen, elixir-format
 msgid "Outside mail is not set up, so it will not go out."
 msgstr "Välispostitus ei ole seadistatud, seega väline kiri ei lähe teele."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1587
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1594
 #, elixir-autogen, elixir-format
 msgid "The mail rules leave nobody to send the outside mail to, so it will not go out."
 msgstr "Postireeglid ei jäta kedagi, kellele välist kirja saata, seega see ei lähe teele."
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1575
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:1582
 #, elixir-autogen, elixir-format
 msgctxt "compose button after a send"
 msgid "Sent"
 msgstr "Saadetud"
 
-#: lib/phoenix_kit_inbox/mailboxes.ex:435
+#: lib/phoenix_kit_inbox/mailboxes.ex:450
 #, elixir-autogen, elixir-format
 msgid "%{name} (shared mailbox)"
 msgstr "%{name} (jagatud postkast)"
 
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2900
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:1192
+#, elixir-autogen, elixir-format
+msgid "Outbox"
+msgstr "Väljuvad"
+
+#: lib/phoenix_kit_inbox/web/inbox_live.ex:874
+#, elixir-autogen, elixir-format
+msgid "queued"
+msgstr "saatmise ootel"
+
+#: lib/phoenix_kit_inbox/external_reason.ex:64
+#, elixir-autogen, elixir-format
+msgid "Sending failed."
+msgstr "Saatmine ebaõnnestus."
+
+#: lib/phoenix_kit_inbox/external_reason.ex:108
+#, elixir-autogen, elixir-format
+msgid "No recipient was left to send to."
+msgstr "Saajaid, kellele saata, ei jäänud."
+
+#: lib/phoenix_kit_inbox/external_reason.ex:109
+#, elixir-autogen, elixir-format
+msgid "The send could not be started."
+msgstr "Saatmist ei õnnestunud käivitada."
+
+#: lib/phoenix_kit_inbox/external_reason.ex:112
+#, elixir-autogen, elixir-format
+msgid "The sender is no longer allowed to send this email."
+msgstr "Saatjal ei ole enam luba seda kirja saata."
+
+#: lib/phoenix_kit_inbox/external_reason.ex:114
+#, elixir-autogen, elixir-format
+msgid "The sender has no email address to send from."
+msgstr "Saatjal ei ole e-posti aadressi, kust saata."
+
+#: lib/phoenix_kit_inbox/external_reason.ex:116
+#: lib/phoenix_kit_inbox/external_reason.ex:118
+#, elixir-autogen, elixir-format
+msgid "The mail server did not take the email."
+msgstr "Meiliserver ei võtnud kirja vastu."
+
+#: lib/phoenix_kit_inbox/external_reason.ex:119
+#, elixir-autogen, elixir-format
+msgid "The email could not be built."
+msgstr "Kirja ei õnnestunud koostada."
+
+#: lib/phoenix_kit_inbox/errors.ex:113
+#, elixir-autogen, elixir-format
+msgid "Messages can't be moved into Outbox by hand."
+msgstr "Sõnumeid ei saa käsitsi Väljuvatesse tõsta."
+
+#: lib/phoenix_kit_inbox.ex:160
+#, elixir-autogen, elixir-format
+msgid "Create shared mailboxes, set their addresses and senders, and turn mail inside the application on or off for everyone"
+msgstr "Loo jagatud postkaste, määra nende aadressid ja saatjad ning lülita rakendusesisene post kõigi jaoks sisse või välja"
+
+#: lib/phoenix_kit_inbox/errors.ex:149
+#, elixir-autogen, elixir-format
+msgid "Mail inside this application is turned off. Write to an email address instead."
+msgstr "Rakendusesisene post on välja lülitatud. Kirjuta e-posti aadressile."
+
+#: lib/phoenix_kit_inbox/web/settings_live.ex:142
+#, elixir-autogen, elixir-format
+msgid "Mail inside the application"
+msgstr "Rakendusesisene post"
+
+#: lib/phoenix_kit_inbox/web/settings_live.ex:156
+#, elixir-autogen, elixir-format
+msgid "Deliver mail between people and to shared mailboxes inside the application. When this is off, a colleague is written to by their email address and “@name” addresses are refused; letters already delivered stay readable."
+msgstr "Toimeta kirjad inimeste vahel ja ühispostkastidesse rakenduse sees. Kui see on väljas, kirjutatakse kolleegile tema e-posti aadressil ja „@nimi“ aadressid lükatakse tagasi; juba kohale jõudnud kirjad jäävad loetavaks."
+
+#: lib/phoenix_kit_inbox/web/settings_live.ex:101
+#, elixir-autogen, elixir-format
+msgid "The setting could not be saved. Try again."
+msgstr "Seadistust ei õnnestunud salvestada. Proovi uuesti."
+
+#: lib/phoenix_kit_inbox/web/compose_live.ex:1286
+#, elixir-autogen, elixir-format
+msgid "Email addresses — comma separated"
+msgstr "E-posti aadressid — komadega eraldatud"
+
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2907
 #, elixir-autogen, elixir-format
 msgid "Done"
 msgstr "Valmis"
-
-#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2873
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex:2880
 #, elixir-autogen, elixir-format
 msgid "No address"
 msgstr "Aadress puudub"

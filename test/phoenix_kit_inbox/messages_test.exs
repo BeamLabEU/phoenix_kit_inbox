@@ -927,6 +927,47 @@ defmodule PhoenixKitInbox.MessagesTest do
       assert [%{delivery: %{starred: false}}] = Messages.list_folder(ctx.carol_mb.uuid, "inbox")
     end
 
+    test "nobody files a message into Outbox by hand", ctx do
+      for {scope, mailbox} <- [{ctx.alice_scope, ctx.alice_mb}, {ctx.bob_scope, ctx.bob_mb}] do
+        assert Messages.move_to_folder(scope, mailbox, ctx.message.uuid, "outbox") ==
+                 {:error, :system_folder}
+      end
+
+      # Nothing moved; the sender's copy of an inside-only message is in Sent.
+      assert [_] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+      assert Messages.list_folder(ctx.alice_mb.uuid, "outbox") == []
+      assert [_] = Messages.list_folder(ctx.bob_mb.uuid, "inbox")
+      assert PhoenixKitInbox.Errors.message(:system_folder) =~ "Outbox"
+    end
+
+    test "the right to write is checked before Outbox is refused", ctx do
+      assert Messages.move_to_folder(
+               scope_for(ctx.carol),
+               ctx.alice_mb,
+               ctx.message.uuid,
+               "outbox"
+             ) ==
+               {:error, :mailbox_access_denied}
+
+      assert Messages.move_to_folder(
+               scope_for(ctx.alice, []),
+               ctx.alice_mb,
+               ctx.message.uuid,
+               "outbox"
+             ) ==
+               {:error, :forbidden}
+    end
+
+    test "a copy trashed from Sent can't be put into Outbox from the trash either", ctx do
+      assert {:ok, _} =
+               Messages.move_to_folder(ctx.alice_scope, ctx.alice_mb, ctx.message.uuid, "trash")
+
+      assert Messages.move_to_folder(ctx.alice_scope, ctx.alice_mb, ctx.message.uuid, "outbox") ==
+               {:error, :system_folder}
+
+      assert [_] = Messages.list_folder(ctx.alice_mb.uuid, "trash")
+    end
+
     test "moving to trash takes it out of the inbox listing", ctx do
       assert {:ok, _} =
                Messages.move_to_folder(ctx.bob_scope, ctx.bob_mb, ctx.message.uuid, "trash")

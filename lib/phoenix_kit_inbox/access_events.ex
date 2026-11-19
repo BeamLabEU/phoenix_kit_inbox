@@ -12,7 +12,10 @@ defmodule PhoenixKitInbox.AccessEvents do
       `:senders` when one of the user's personal senders changes
     * **senders** (`subscribe_senders/0`) — `:senders` when a shared sender
       is created, changed (its roles, its mailbox) or deleted: who may use a
-      common sender depends on roles, so every open page may be concerned
+      common sender depends on roles, so every open page may be concerned;
+      also when mail inside the application is turned on or off
+      (`PhoenixKitInbox.set_internal_enabled/1`), which changes what a
+      compose page offers
 
   Broadcast after the write committed. A failed broadcast is logged and
   never fails the write: a page that misses one is only as stale as it was

@@ -44,14 +44,16 @@ defmodule PhoenixKitInbox.RecordSentTest do
     )
   end
 
-  test "records the email in Sent with its recipients' outcome and no files", ctx do
+  test "records the email with its recipients' outcome and no files; a failed one waits in Outbox",
+       ctx do
     assert {:ok, %Message{} = message} =
              Messages.record_sent(scope_for(ctx.alice), ctx.alice_mb, attrs(%{}),
                host_ref: "send-42"
              )
 
-    assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.alice_mb.uuid, "outbox")
     assert uuid == message.uuid
+    assert Messages.list_folder(ctx.alice_mb.uuid, "sent") == []
 
     # The sender's copy and nothing else.
     assert [%Delivery{role: "from"}] =
@@ -72,6 +74,24 @@ defmodule PhoenixKitInbox.RecordSentTest do
       resource_uuid: message.uuid,
       metadata_has: %{"internal_recipients" => 0, "external_recipients" => 2, "attachments" => 1}
     )
+  end
+
+  test "a record in which every recipient was sent to goes to Sent", ctx do
+    assert {:ok, %Message{} = message} =
+             Messages.record_sent(
+               scope_for(ctx.alice),
+               ctx.alice_mb,
+               attrs(%{
+                 "external_recipients" => [
+                   %{"address" => "client@example.com", "status" => "sent"},
+                   %{"address" => "boss@example.com", "role" => "cc"}
+                 ]
+               })
+             )
+
+    assert [%{message: %{uuid: uuid}}] = Messages.list_folder(ctx.alice_mb.uuid, "sent")
+    assert uuid == message.uuid
+    assert Messages.list_folder(ctx.alice_mb.uuid, "outbox") == []
   end
 
   test "an internal address is refused and nothing is written", ctx do
