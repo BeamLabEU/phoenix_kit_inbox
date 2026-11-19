@@ -188,6 +188,23 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
 
   defp sent?(view), do: has_element?(view, "#compose-demo-sent")
 
+  # A second send of a letter that went is ignored: the wrapper is not asked.
+  defp resend_ignored?(view) do
+    flush_around()
+    submit(view)
+    asked? = receive(do: ({:around, _, _} -> true), after: (300 -> false))
+
+    not asked? and sent?(view)
+  end
+
+  defp flush_around do
+    receive do
+      {:around, _, _} -> flush_around()
+    after
+      0 -> :ok
+    end
+  end
+
   # The person adds an outside recipient (its send is not what these tests
   # are about: outside mail is not set up here) and types a text of their own.
   defp write(view) do
@@ -411,17 +428,53 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
       assert subject(view) == ["S1"]
     end
 
-    test "without a key the draft the letter was written from opens a new letter",
+    test "without a key the drafts the letter was written from keep it «Sent»",
          %{conn: conn} = ctx do
       view = mount_host(ctx, conn, three_drafts())
       host(view, "retext", "d1")
-      host(view, "assign", "d1")
       send_it(view)
 
-      host(view, "assign", "d0")
+      # The host goes on rendering the draft it always passed (flow a)…
+      render_click(view, "rerender", %{})
+      assert sent?(view)
+      assert subject(view) == ["S1"]
+      assert resend_ignored?(view)
+
+      # …or the one it retexted to (flow c).
+      host(view, "assign", "d1")
+      assert sent?(view)
+      assert resend_ignored?(view)
+    end
+
+    test "a text that waited for the send is one more of the letter's drafts",
+         %{conn: conn} = ctx do
+      mode(:hold)
+      view = mount_host(ctx, conn, three_drafts(), %{"letter_key" => "k"})
+      write_text(view)
+      submit(view)
+      assert_receive {:around, task, _}, 2000
+
+      host(view, "assign_and_retext", "d2")
+      mode(:pass)
+      send(task, :go)
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "typed"}}}, 3000
+
+      render_click(view, "rerender", %{})
+      assert sent?(view)
+      assert subject(view) == ["typed"]
+      assert resend_ignored?(view)
+    end
+
+    test "a draft the form never held opens a new letter, under the same key too",
+         %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts(), %{"letter_key" => "k"})
+      host(view, "retext", "d1")
+      send_it(view)
+
+      host(view, "assign", "d2")
 
       refute sent?(view)
-      assert subject(view) == ["S0"]
+      assert subject(view) == ["S2"]
     end
 
     test "a retext no longer changes a letter that went", %{conn: conn} = ctx do
@@ -432,6 +485,78 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
 
       assert sent?(view)
       assert subject(view) == ["S0"]
+    end
+  end
+
+  describe "what the form remembers of the drafts it replaced" do
+    test "the newest 32 and no more", %{conn: conn} = ctx do
+      drafts = for n <- 0..34, into: %{}, do: {"d#{n}", draft(subject: "S#{n}")}
+      view = mount_host(ctx, conn, drafts)
+      write(view)
+
+      # 34 retexts replace d0..d33; the form remembers d2..d33.
+      for n <- 1..34, do: host(view, "retext", "d#{n}")
+      assert subject(view) == ["S34"]
+
+      host(view, "assign", "d33")
+      assert subject(view) == ["S34"]
+      assert letter_kept?(view)
+
+      host(view, "assign", "d2")
+      assert subject(view) == ["S34"]
+      assert letter_kept?(view)
+
+      # d0 and d1 were forgotten: they are drafts the form never held.
+      host(view, "assign", "d0")
+      assert subject(view) == ["S0"]
+      refute letter_kept?(view)
+    end
+
+    test "a draft is the same when only the content of its files differs", %{conn: conn} = ctx do
+      file = %{id: "a", file_uuid: Ecto.UUID.generate(), name: "offer.pdf"}
+
+      drafts = %{
+        "d0" => draft(subject: "S0", attachments: [Map.put(file, :bytes, "AAAA")]),
+        "d1" => draft(subject: "S1"),
+        "d0 again" => draft(subject: "S0", attachments: [Map.put(file, :bytes, "BBBB")])
+      }
+
+      view = mount_host(ctx, conn, drafts)
+      write(view)
+      host(view, "retext", "d1")
+
+      host(view, "assign", "d0 again")
+
+      assert subject(view) == ["S1"]
+      assert letter_kept?(view)
+    end
+  end
+
+  describe "the key of a letter" do
+    test "an integer or an atom is its text; a blank one is no key", %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts(), %{"letter_key" => 42})
+      write(view)
+
+      host(view, "assign", "d1", "42")
+      assert subject(view) == ["S1"]
+      assert letter_kept?(view)
+
+      host(view, "assign", "d2", "43")
+      assert subject(view) == ["S2"]
+      refute letter_kept?(view)
+    end
+
+    test "no key (nil, blank, any other term) never makes another draft the same letter",
+         %{conn: conn} = ctx do
+      for key <- [nil, "  ", %{a: 1}] do
+        view = mount_host(ctx, conn, three_drafts(), %{"letter_key" => key})
+        write(view)
+
+        host(view, "assign", "d1")
+
+        assert subject(view) == ["S1"]
+        refute letter_kept?(view)
+      end
     end
   end
 

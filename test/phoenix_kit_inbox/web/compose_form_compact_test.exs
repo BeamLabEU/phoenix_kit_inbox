@@ -431,44 +431,45 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
       refute menu?(view, "to")
     end
 
-    # LiveView calls a `phx-keydown` only on the element the key was pressed
-    # on, never on an ancestor: so the binding is on what can hold the focus.
-    test "Escape closes it from every element that can have the focus", %{conn: conn} = ctx do
+    # LiveView runs every event of an element that has a binding through that
+    # element's own debounce cycle (`phx-debounce="300"` on the line's field and
+    # on the menu's search field): a key bound on them would push out the
+    # pending `phx-change` and lose the last typed characters. Escape is a
+    # window binding on the wrapper (no debounce of its own), only while a list
+    # is open. LiveViewTest does not emulate the debounce: the structure is
+    # what is checked.
+    test "Escape is bound on the wrapper, never on the debounced fields", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft(ctx))
-      refute has_element?(view, "[phx-key=Escape]")
+      refute has_element?(view, "[phx-window-keydown]")
+      refute has_element?(view, "[phx-key]")
 
-      focusable = [
-        "#compose-demo-to-menu-q",
-        ~s(#compose-demo-to-menu [role=tab][aria-selected=true]),
-        {"#compose-demo-to-menu button[role=option]", "Dave"},
-        "#compose-demo-to-menu-done",
-        "#compose-demo-to-input",
-        "#compose-demo-to-picker"
-      ]
+      open_menu(view, "to")
 
-      for target <- focusable do
-        {selector, text} = if is_tuple(target), do: target, else: {target, nil}
+      assert has_element?(
+               view,
+               ~s(#compose-demo-to > div[phx-window-keydown][phx-key=Escape][phx-click-away])
+             )
 
-        open_menu(view, "to")
-        assert menu?(view, "to")
-        assert has_element?(view, "#{selector}[phx-key=Escape][phx-keydown]", text), selector
-        refute has_element?(view, "#compose-demo-to [phx-click-away][phx-keydown]")
-
-        view |> element(selector, text) |> render_keydown(%{"key" => "Escape"})
-        refute menu?(view, "to"), "Escape on #{selector} left the menu open"
-        refute has_element?(view, "[phx-key=Escape]")
-      end
+      refute has_element?(view, "[phx-keydown]")
+      refute has_element?(view, "#compose-demo-to-input[phx-key]")
+      refute has_element?(view, "#compose-demo-to-menu-q[phx-key]")
+      assert attr(view, "#compose-demo-to-input", "phx-debounce") == ["300"]
+      assert attr(view, "#compose-demo-to-menu-q", "phx-debounce") == ["300"]
+      refute has_element?(view, "[phx-window-keydown][phx-debounce]")
     end
 
-    test "Escape closes it and what was ticked stays", %{conn: conn} = ctx do
+    test "Escape closes the menu and what was ticked stays", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft(ctx))
       open_menu(view, "to")
       tick(view, "to", "Dave")
 
-      view |> element("#compose-demo-to-menu-q") |> render_keydown(%{"key" => "Escape"})
+      view
+      |> element("#compose-demo-to [phx-window-keydown]")
+      |> render_keydown(%{"key" => "Escape"})
 
       refute menu?(view, "to")
       assert Enum.any?(chips(view, "to"), &(&1 =~ "Dave"))
+      refute has_element?(view, "[phx-window-keydown]")
     end
 
     test "a tab shows one group, the field searches", %{conn: conn} = ctx do
@@ -594,8 +595,13 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
       render_change(view |> form("#compose-demo-to-form"), %{"query" => "dav"})
       assert has_element?(view, "#compose-demo-to-suggestions")
 
-      assert has_element?(view, "#compose-demo-to-input[phx-key=Escape]")
-      view |> element("#compose-demo-to-input") |> render_keydown(%{"key" => "Escape"})
+      assert has_element?(view, ~s(#compose-demo-to > div[phx-window-keydown][phx-key=Escape]))
+      refute has_element?(view, "#compose-demo-to-input[phx-keydown]")
+
+      view
+      |> element("#compose-demo-to [phx-window-keydown]")
+      |> render_keydown(%{"key" => "Escape"})
+
       refute has_element?(view, "#compose-demo-to-suggestions")
       assert attr(view, "#compose-demo-to-input", "value") == ["dav"]
     end

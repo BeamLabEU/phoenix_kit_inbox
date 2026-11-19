@@ -66,11 +66,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       The lists open over the form, as a menu under their field, and move
       nothing; the list behind «+» is then a menu to tick people in: a press
       adds a person to the line or takes them off it, the menu stays open
-      until «Done», Escape (pressed on the line's field, «+», or anything in
-      the menu) or a press outside the field and the menu («+» itself closes
-      it); inside a dialog the same Escape also reaches the dialog, as this
-      module has no script to stop it. Its tabs show one of the sources' groups at a time
-      and its own field searches the sources (the field has the focus when
+      until «Done», Escape or a press outside the field and the menu («+»
+      itself closes it); inside a dialog the same Escape also reaches the
+      dialog, as this module has no script to stop it. Its tabs show one of
+      the sources' groups at a time and its own field searches the sources (the field has the focus when
       the menu opens and after a tab is chosen; the line's field after
       «Done» or Escape); every person is shown with the address the letter
       would go to and the source's `:note`; an account with no address is
@@ -130,10 +129,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     * anything else, and a draft with no key, is a new letter. A key given for
       the first time to a draft the form already holds only names it.
 
-  **After the letter went**, the drafts it was written from are forgotten, and
-  the next draft — under the same key too — is a new letter; a `retext` no
-  longer changes it. The same draft the form holds changes nothing: the form
-  stays «Sent» until the host gives another.
+  **After the letter went** the form stays «Sent» for the letter's own drafts:
+  the one it holds, those a `retext` replaced and the one a `retext` that
+  waited for the answer brought — a host that renders any of them again (its
+  next render, a `{:sent, _}` it has not answered yet) opens nothing and the
+  letter cannot go twice. The next letter is a new `letter_key`, or a draft the
+  form never held; with the same key too.
 
   While a letter is on its way the text waits for the answer: it is applied
   when the send failed or was interrupted and dropped when the letter went. A
@@ -400,7 +401,11 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # An update with no draft leaves the draft and the key as they are.
   defp reconcile_draft(socket, assigns) do
     draft = normalize_draft(assigns[:draft] || socket.assigns[:source_draft])
-    key = if assigns[:draft], do: assigns[:letter_key], else: socket.assigns[:letter_key]
+
+    key =
+      if assigns[:draft],
+        do: letter_key(assigns[:letter_key]),
+        else: socket.assigns[:letter_key]
 
     case draft_verdict(socket, draft, key) do
       :closed -> assign(socket, list: nil)
@@ -409,6 +414,16 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       :new -> new_letter(socket, draft, key)
     end
   end
+
+  # A letter's key is a string; an integer id or an atom is taken as its text,
+  # and nothing else (nil, a blank string, any other term) as no key.
+  defp letter_key(key) when is_binary(key), do: blank_to_nil(key)
+  defp letter_key(key) when is_integer(key), do: Integer.to_string(key)
+
+  defp letter_key(key) when is_atom(key) and key not in [nil, true, false],
+    do: Atom.to_string(key)
+
+  defp letter_key(_key), do: nil
 
   defp draft_verdict(socket, draft, key) do
     cond do
@@ -514,8 +529,19 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> refresh_summary()
   end
 
-  defp apply_pending_retext(%{assigns: %{sent: true}} = socket),
-    do: assign(socket, :pending_retext, nil)
+  # The letter went: a text that waited for it is dropped, and the draft that
+  # brought it is one more the letter was written from — a host that renders
+  # it later is not asking for a new letter.
+  defp apply_pending_retext(%{assigns: %{sent: true}} = socket) do
+    case socket.assigns[:pending_retext] do
+      {draft, _remember?} ->
+        seen = remember_replaced(socket.assigns[:retext_seen] || [], draft)
+        assign(socket, retext_seen: seen, pending_retext: nil)
+
+      nil ->
+        socket
+    end
+  end
 
   defp apply_pending_retext(socket) do
     case socket.assigns[:pending_retext] do
@@ -1425,8 +1451,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> assign(
       sending: false,
       sent: true,
-      # The letter went: the drafts it was written from no longer name it.
-      retext_seen: [],
       send_upload_refs: [],
       replayed: replayed?(message, socket.assigns[:send_started]),
       send_ref: nil,
@@ -2600,8 +2624,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   attr(:target, :any, required: true)
 
   defp recipients(%{compact: true} = assigns) do
-    assigns = assign(assigns, :esc, escape_attrs(assigns.line.list, assigns))
-
     ~H"""
     <div id={"compose-#{@id}-#{@role}"} class={compact_row_class()}>
       <label
@@ -2622,6 +2644,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       <div
         class="relative min-w-0"
         phx-click-away={@line.list && "close_picker"}
+        phx-window-keydown={@line.list && close_list(@target, @id, @role)}
+        phx-key={@line.list && "Escape"}
         phx-target={@target}
       >
       <div class={[
@@ -2655,7 +2679,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
               aria-expanded={to_string(@line.list != nil and @line.list.items != [])}
               aria-controls={"compose-#{@id}-#{@role}-suggestions"}
               class="h-6 min-w-0 flex-1 bg-transparent text-sm outline-none"
-              {@esc}
             />
           </form>
         </div>
@@ -2669,7 +2692,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           aria-haspopup="true"
           aria-expanded={to_string(@line.picker_open?)}
           aria-controls={@line.picker_open? && "compose-#{@id}-#{@role}-menu"}
-          {@esc}
           phx-click="toggle_picker"
           phx-value-role={@role}
           phx-target={@target}
@@ -2691,7 +2713,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         ticked={@line.ticked}
         elsewhere={@line.elsewhere}
         fit_height={@fit_height}
-        esc={@esc}
         target={@target}
       />
       </div>
@@ -2778,17 +2799,17 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     """
   end
 
-  # Escape closes an open list. LiveView calls an element's `phx-keydown` only
-  # when that element is the target of the key — it does not look at ancestors —
-  # so the binding goes on the elements that can hold the focus (the line's
-  # field, «+», and in the menu its field, tabs, rows and «Done»), and only
-  # while a list is open. Inside a dialog the same key also reaches the dialog:
-  # the module has no script of its own to stop it.
-  defp escape_attrs(nil, _assigns), do: %{}
-
-  defp escape_attrs(_list, %{target: target, id: id, role: role}),
-    do: %{"phx-keydown": close_list(target, id, role), "phx-key": "Escape"}
-
+  # Escape closes an open list, through a *window* binding on the wrapper that
+  # holds the field and the lists, only while one is open (one list at a time).
+  # Not a `phx-keydown` on the fields: LiveView runs every event of an element
+  # with a binding through that element's `phx-debounce` cycle, so a key
+  # pressed within 300 ms of the last typed character would push out the
+  # field's pending `phx-change` and the server would never hear the last
+  # characters. A key on an element without a binding goes to the window
+  # bindings, which are debounced on the wrapper — it has no `phx-debounce` —
+  # and the field's own cycle is left alone. Inside a dialog the same Escape
+  # also reaches the dialog: the module has no script to stop it.
+  #
   # Closes the open list (the menu, or the typed suggestions) and gives the
   # focus back to the line's field.
   defp close_list(target, id, role) do
@@ -2817,7 +2838,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   attr(:ticked, :any, required: true)
   attr(:elsewhere, :map, default: %{})
   attr(:fit_height, :boolean, default: false)
-  attr(:esc, :map, default: %{})
   attr(:target, :any, required: true)
 
   # The menu behind «+» of the compact layout: tabs of the sources' groups, a
@@ -2860,7 +2880,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           aria-selected={to_string(@tab == nil)}
           class={["btn btn-xs", if(@tab == nil, do: "btn-primary", else: "btn-ghost")]}
           phx-click={tab_click("", @target, @id, @role)}
-          {@esc}
         >
           {gettext("All")}
         </button>
@@ -2871,7 +2890,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           aria-selected={to_string(@tab == name)}
           class={["btn btn-xs", if(@tab == name, do: "btn-primary", else: "btn-ghost")]}
           phx-click={tab_click(name, @target, @id, @role)}
-          {@esc}
         >
           {name}
         </button>
@@ -2896,7 +2914,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             maxlength="320"
             phx-debounce="300"
             aria-label={gettext("Name or email")}
-            {@esc}
           />
         </label>
       </form>
@@ -2932,7 +2949,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             phx-click="tick"
             phx-value-id={item.id}
             phx-target={@target}
-            {@esc}
           >
             <span class={[
               "flex size-4 shrink-0 items-center justify-center rounded border",
@@ -2979,7 +2995,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           id={"compose-#{@id}-#{@role}-menu-done"}
           class="btn btn-primary btn-xs"
           phx-click={close_list(@target, @id, @role)}
-          {@esc}
         >
           {gettext("Done")}
         </button>
