@@ -19,7 +19,9 @@ defmodule PhoenixKitInbox.RecipientSource do
           language, or `nil`
         * `:note` (optional) — a word or two said beside the name, already in
           the viewer's language ("Designer", "Primary contact"): what tells
-          this person apart among the others of the group
+          this person apart among the others of the group; trimmed, cut to
+          40 characters, and left out when blank or not a string. The compact
+          menu of the compose form shows it as a neutral badge
         * `:route` — `:internal` (delivered inside the application) or
           `:email` (sent out). The source says what it expects; the send
           checks that this is how the address really resolves and refuses the

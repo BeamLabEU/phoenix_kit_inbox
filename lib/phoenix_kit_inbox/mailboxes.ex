@@ -347,6 +347,40 @@ defmodule PhoenixKitInbox.Mailboxes do
 
   def member_recipient_address(_user_uuid), do: {:error, :recipient_not_found}
 
+  @doc false
+  # `recipient_address/2` for many users in one query, for a list the form
+  # shows (a menu of fifty accounts is one lookup, not fifty): `%{uuid =>
+  # address}` keyed by the uuid as given, with no entry for one that is no
+  # user, is not a uuid, or has no address by that route.
+  @spec recipient_addresses([term()], :internal | :email) :: %{String.t() => String.t()}
+  def recipient_addresses(user_uuids, route)
+      when is_list(user_uuids) and route in [:internal, :email] do
+    named =
+      for given <- user_uuids,
+          is_binary(given),
+          {:ok, uuid} <- [Ecto.UUID.cast(given)],
+          do: {given, uuid}
+
+    users =
+      case named do
+        [] ->
+          %{}
+
+        _ ->
+          from(u in User, where: u.uuid in ^Enum.map(named, &elem(&1, 1)))
+          |> repo().all()
+          |> Map.new(&{&1.uuid, &1})
+      end
+
+    for {given, uuid} <- named,
+        user = users[uuid],
+        address when is_binary(address) <- [address_for(user, route)],
+        into: %{},
+        do: {given, address}
+  end
+
+  def recipient_addresses(_user_uuids, _route), do: %{}
+
   defp address_for(user, :internal), do: user_handle(user)
   defp address_for(user, :email), do: user.email
 

@@ -57,18 +57,32 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       the sender beside its label; a recipient line is its label, then one
       field holding the chips and the input, with the list of the host's
       people behind a «+» at the field's end; the subject has its label
-      beside it and the message none on screen; the line under the files
+      beside it and the message none on screen. The line under the files
       that says in words from whom and to whom the letter goes is left out
-      (the rows above say it). The lists open over the form, as a menu under
-      their field, and move nothing; the list behind «+» is then a menu to
-      tick people in: a press adds a person to the line or takes them off
-      it, the menu stays open until «Done» or a press outside it,
-      its tabs show one of the sources' groups at a time and its own field
-      searches the sources (the field has the focus when the menu opens and
-      after a tab is chosen); every person is shown with the address the
-      letter would go to and the source's `:note`; a person is in one line
-      at a time — ticked or typed into another, they move there. Anything else, or leaving it out, is today's
-      layout
+      (the rows above say it), but what they do not say is kept as one line
+      of its own, shown only when there is something to say: that outside mail
+      is not set up or the mail rules refuse it or leave nobody to send it
+      to, where the rules would send it, and the sender it goes out as.
+      The lists open over the form, as a menu under their field, and move
+      nothing; the list behind «+» is then a menu to tick people in: a press
+      adds a person to the line or takes them off it, the menu stays open
+      until «Done», Escape or a press outside the field and the menu («+»
+      itself closes it), its tabs show one of the sources' groups at a time
+      and its own field searches the sources (the field has the focus when
+      the menu opens and after a tab is chosen; the line's field after
+      «Done» or Escape); every person is shown with the address the letter
+      would go to and the source's `:note`; an account with no address is
+      shown and cannot be ticked; a person is in one line at a time —
+      ticked or typed into another, they move there. The suggestions that
+      come up while typing are an overlay under the field and close the same
+      way. Without `fit_height` the menu is no taller than half the screen.
+      Anything else, or leaving it out, is today's layout
+    * `fit_height` — `true` puts core's `PkFitHeight` hook on the compact
+      menu, so that it is never taller than the room left under its field in
+      the scrolling ancestor (a dialog). Off at first, and a host sets it
+      only when its core carries the hook (it is not in a released core yet;
+      on one without it the browser's console logs an unknown hook at every
+      menu). Governs the menu of `compact` and nothing else
     * `before_subject` — an optional slot rendered between the recipient
       lines and the subject, outside the form's own `<form>`: a host that
       fills the text from its templates puts the choice of one there
@@ -353,6 +367,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> assign_own_upload(assigns)
     |> assign_all_lines(assigns)
     |> assign_compact(assigns)
+    |> assign_fit_height(assigns)
     |> assign_list(assigns, :before_subject)
     |> assign_list(assigns, :attachment_picker)
     |> assign_list(assigns, :footer_start)
@@ -501,14 +516,21 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp resuggest(socket), do: socket
 
-  # Only `false` takes the form's own upload control away; a missing key keeps
-  # the value the form had (true at first), as the other attributes do.
   # `recipient_lines={:all}`: Cc and Bcc are always shown. Kept apart from
   # `open`, which a new draft rebuilds: the host's choice outlives a draft.
   defp assign_all_lines(socket, assigns) do
     if Map.has_key?(assigns, :recipient_lines),
       do: assign(socket, :all_lines, assigns.recipient_lines == :all),
       else: assign_new(socket, :all_lines, fn -> false end)
+  end
+
+  # `fit_height={true}`: the menu of the compact layout carries core's
+  # `PkFitHeight` hook. Off at first: a core that does not ship the hook logs
+  # an unknown hook for it.
+  defp assign_fit_height(socket, assigns) do
+    if Map.has_key?(assigns, :fit_height),
+      do: assign(socket, :fit_height, assigns.fit_height == true),
+      else: assign_new(socket, :fit_height, fn -> false end)
   end
 
   defp assign_compact(socket, assigns) do
@@ -519,6 +541,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp line_open?(assigns, role), do: assigns.all_lines or assigns.open[role]
 
+  # Only `false` takes the form's own upload control away; a missing key keeps
+  # the value the form had (true at first), as the other attributes do.
   defp assign_own_upload(socket, assigns) do
     if Map.has_key?(assigns, :own_upload),
       do: assign(socket, :own_upload, assigns.own_upload != false),
@@ -836,6 +860,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   def handle_event(_event, _params, %{assigns: %{allowed?: false}} = socket),
     do: {:noreply, socket}
 
+  # The menu and its tabs are the compact layout's: the other layout never
+  # offers them, and a forged event does nothing there.
+  def handle_event(event, _params, %{assigns: %{compact: false}} = socket)
+      when event in ~w(tick picker_tab picker_search),
+      do: {:noreply, socket}
+
   def handle_event("select_from", %{"from" => key}, socket) when is_binary(key) do
     if editable?(socket.assigns) and Enum.any?(socket.assigns.from_options, &(&1.key == key)),
       do:
@@ -941,7 +971,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
      assign(socket, :list, Map.merge(socket.assigns.list, %{tab: list[:tab], query: query}))}
   end
 
-  def handle_event("close_picker", _params, %{assigns: %{list: %{kind: :picker}}} = socket),
+  # A press outside the field and its lists, or Escape: the menu (or the
+  # overlay of typed suggestions) closes; what was typed stays in its field.
+  def handle_event("close_picker", _params, %{assigns: %{list: %{}}} = socket),
     do: {:noreply, assign(socket, list: nil)}
 
   def handle_event(event, _params, socket)
@@ -1524,6 +1556,21 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> Enum.join("; ")
   end
 
+  # What the compact layout keeps of the line above the button: only what the
+  # rows above do not say — the outside mail (not set up, refused, redirected)
+  # and the identity it goes out as. Empty when there is nothing to say.
+  defp notice_text(summary) do
+    [
+      summary.sender_as &&
+        gettext("outside mail goes out as %{sender}", sender: summary.sender_as),
+      summary.outside &&
+        gettext("outside mail goes to %{addresses}", addresses: Enum.join(summary.outside, ", ")),
+      problem_text(summary.problem)
+    ]
+    |> Enum.filter(& &1)
+    |> Enum.join("; ")
+  end
+
   defp send_label(true, _sent), do: gettext("Sending…")
   defp send_label(false, true), do: pgettext("compose button after a send", "Sent")
   defp send_label(false, false), do: gettext("Send")
@@ -1735,9 +1782,16 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # The menu shows where a letter to each person would go: an account's
   # address is looked up as the chip's will be.
   defp shown_addresses(%{assigns: %{compact: true, list: %{items: items} = list}} = socket) do
+    # One lookup per route for all the accounts of the list, not one per row.
+    found =
+      for route <- [:internal, :email], into: %{} do
+        users = for %{entry: %{user: user, route: ^route}} <- items, is_binary(user), do: user
+        {route, Mailboxes.recipient_addresses(users, route)}
+      end
+
     items =
       for %{entry: entry} = item <- items do
-        address = entry[:address] || (entry[:user] && resolved_address(entry.user, entry.route))
+        address = entry[:address] || (entry[:user] && found[entry.route][entry.user])
         Map.put(item, :address, address)
       end
 
@@ -1872,8 +1926,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     match?([%{route: :internal}], Messages.resolve_recipient_routes(scope, [text]))
   end
 
-  # `manual: true` marks an address the person typed (kept on its chip for
-  # the sources' `remember`), as against one picked or set by the host.
+  # A chip off its line; who gets the letter is said again.
   defp remove_chip(socket, role, key) do
     recipients = socket.assigns.recipients
     line = Enum.reject(recipients[role], &(&1.key == key))
@@ -1904,6 +1957,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     Enum.find(line, &same_person?(&1, candidate))
   end
 
+  # `manual: true` marks an address the person typed (kept on its chip for
+  # the sources' `remember`), as against one picked or set by the host.
   defp add_entry(socket, role, entry, opts \\ []) do
     case chip(entry) do
       [%{address: address} = chip] when is_binary(address) ->
@@ -1971,13 +2026,13 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp same_person?(_, _), do: false
 
-  # A block holding people stays open: closing it would hide who gets the letter.
   defp toggle(socket, :signature) do
     if socket.assigns.signatures == [],
       do: socket,
       else: update(socket, :open, &Map.update!(&1, :signature, fn open -> not open end))
   end
 
+  # A block holding people stays open: closing it would hide who gets the letter.
   defp toggle(socket, role) do
     cond do
       socket.assigns.all_lines -> socket
@@ -2151,6 +2206,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         label={gettext("To")}
         line={line(assigns, :to)}
         compact={@compact}
+        fit_height={@fit_height}
         target={@myself}
       />
 
@@ -2193,6 +2249,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         label={gettext("Cc")}
         line={line(assigns, :cc)}
         compact={@compact}
+        fit_height={@fit_height}
         target={@myself}
       />
       <.recipients
@@ -2202,6 +2259,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         label={gettext("Bcc")}
         line={line(assigns, :bcc)}
         compact={@compact}
+        fit_height={@fit_height}
         target={@myself}
       />
 
@@ -2375,6 +2433,15 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         >
           {summary_text(@summary)}
         </p>
+        <%!-- The compact layout's rows say who gets it; this says the rest. --%>
+        <p
+          :if={@summary && @compact && notice_text(@summary) != ""}
+          id={"compose-#{@id}-summary-notice"}
+          class="text-sm text-base-content/70"
+          data-sending={@sending || nil}
+        >
+          {notice_text(@summary)}
+        </p>
       </div>
 
       <div class="flex flex-wrap items-center justify-end gap-2">
@@ -2465,6 +2532,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   attr(:label, :string, required: true)
   attr(:line, :map, required: true)
   attr(:compact, :boolean, default: false)
+  attr(:fit_height, :boolean, default: false)
   attr(:target, :any, required: true)
 
   defp recipients(%{compact: true} = assigns) do
@@ -2480,14 +2548,25 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       <%!-- One field: the chips, the input after them, «+» at its end. The
            lists hang under it, over the form: they are out of the flow, so
            the form keeps its height to the pixel. --%>
-      <div class="relative min-w-0">
+      <%!-- One wrapper holds the field, «+» and the lists: a press anywhere in
+           it is inside. The click-away is its alone — LiveView sends it
+           before the click's own event, so on «+» (inside) it would close the
+           menu just before «+» opens it again. Only while a list is open, so
+           that a page is not told of every click. --%>
+      <div
+        class="relative min-w-0"
+        phx-click-away={@line.list && "close_picker"}
+        phx-keydown={@line.list && close_list(@target, @id, @role)}
+        phx-key={@line.list && "Escape"}
+        phx-target={@target}
+      >
       <div class={[
         "flex min-w-0 items-start gap-1 rounded-field border bg-base-100 px-1.5 py-1",
         "focus-within:border-primary",
         if(@line.error, do: "border-error", else: "border-base-300")
       ]}>
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-          <ul class="contents" aria-labelledby={"compose-#{@id}-#{@role}-label"}>
+          <ul class="contents" role="list" aria-labelledby={"compose-#{@id}-#{@role}-label"}>
             <.recipient_chip :for={chip <- @line.chips} id={@id} chip={chip} target={@target} />
           </ul>
           <form
@@ -2522,7 +2601,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           class={["btn btn-ghost btn-xs btn-square shrink-0", @line.picker_open? && "btn-active"]}
           aria-label={gettext("+ More addresses")}
           title={gettext("+ More addresses")}
+          aria-haspopup="true"
           aria-expanded={to_string(@line.picker_open?)}
+          aria-controls={"compose-#{@id}-#{@role}-menu"}
           phx-click="toggle_picker"
           phx-value-role={@role}
           phx-target={@target}
@@ -2543,6 +2624,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         list={@line.list}
         ticked={@line.ticked}
         elsewhere={@line.elsewhere}
+        fit_height={@fit_height}
         target={@target}
       />
       </div>
@@ -2629,11 +2711,23 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     """
   end
 
+  # Closes the open list (the menu, or the typed suggestions) and gives the
+  # focus back to the line's field.
+  defp close_list(target, id, role) do
+    "close_picker"
+    |> JS.push(target: target)
+    |> JS.focus(to: "#compose-#{id}-#{role}-input")
+  end
+
   defp tab_click(group, target, id, role) do
     "picker_tab"
     |> JS.push(value: %{group: group}, target: target)
     |> JS.focus(to: "#compose-#{id}-#{role}-menu-q")
   end
+
+  # An account the menu found no address for: a letter to it could not go, so
+  # its row is shown and cannot be ticked.
+  defp no_address?(item), do: is_nil(item[:address])
 
   defp role_label(:to), do: gettext("To")
   defp role_label(:cc), do: gettext("Cc")
@@ -2644,6 +2738,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   attr(:list, :map, required: true)
   attr(:ticked, :any, required: true)
   attr(:elsewhere, :map, default: %{})
+  attr(:fit_height, :boolean, default: false)
   attr(:target, :any, required: true)
 
   # The menu behind «+» of the compact layout: tabs of the sources' groups, a
@@ -2675,11 +2770,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     ~H"""
     <div
       id={"compose-#{@id}-#{@role}-menu"}
-      phx-hook="PkFitHeight"
-      data-fit-min="200"
+      phx-hook={@fit_height && "PkFitHeight"}
+      data-fit-min={@fit_height && "200"}
       class="absolute inset-x-0 top-full z-30 mt-1 flex max-h-[50dvh] flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
-      phx-click-away="close_picker"
-      phx-target={@target}
     >
       <div :if={@names != []} class="flex flex-wrap items-center gap-1" role="tablist">
         <button
@@ -2748,9 +2841,11 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             id={"compose-#{@id}-#{@role}-tick-#{item.id}"}
             role="option"
             aria-selected={to_string(MapSet.member?(@ticked, item.id))}
+            disabled={no_address?(item)}
             class={[
               "flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left text-sm hover:bg-base-200",
-              MapSet.member?(@ticked, item.id) && "bg-primary/10"
+              MapSet.member?(@ticked, item.id) && "bg-primary/10",
+              no_address?(item) && "cursor-not-allowed opacity-60"
             ]}
             phx-click="tick"
             phx-value-id={item.id}
@@ -2767,8 +2862,15 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             </span>
             <span class="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
               <span class="truncate">{item.entry.label || item[:address]}</span>
-              <span :if={item.entry[:note]} class="badge badge-warning badge-soft badge-sm">
+              <span :if={item.entry[:note]} class="badge badge-ghost badge-sm">
                 {item.entry.note}
+              </span>
+              <span
+                :if={no_address?(item)}
+                data-menu-no-address
+                class="text-xs text-error"
+              >
+                {gettext("No address")}
               </span>
               <span
                 :if={item.entry.label && item[:address]}
@@ -2793,8 +2895,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           type="button"
           id={"compose-#{@id}-#{@role}-menu-done"}
           class="btn btn-primary btn-xs"
-          phx-click="close_picker"
-          phx-target={@target}
+          phx-click={close_list(@target, @id, @role)}
         >
           {gettext("Done")}
         </button>
@@ -2817,7 +2918,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       title={@chip.address}
     >
       <.internal_marker :if={@chip.route == :internal} />
-      <span class={["min-w-0 truncate", labelled?(@chip) && "shrink-0"]}>{chip_text(@chip)}</span>
+      <span class="min-w-0 truncate">{chip_text(@chip)}</span>
       <span :if={labelled?(@chip)} data-chip-address class="min-w-0 truncate text-xs opacity-70">
         {@chip.address}
       </span>
