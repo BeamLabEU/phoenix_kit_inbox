@@ -29,6 +29,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       (a `ComposeDraft`) — required; a new draft starts the form afresh
     * `around_send`, `authorize_attachments` — the host's callbacks, as the
       pipeline takes them (`ComposePipeline.run/4`)
+    * `letter_key` — optional; names the letter a draft belongs to (see
+      "Another text for the same letter"). Without it a draft that differs
+      from the held one is a new letter
     * `recipient_sources` — the host's modules implementing
       `PhoenixKitInbox.RecipientSource`, asked next to the module's own
       members; the pipeline has no such option
@@ -82,12 +85,29 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   `send_update(ComposeForm, id: id, retext: draft)` takes the subject, the
   text and everything the person does not see (`:html_body`, `:body_format`,
-  `:context`, the sender's defaults) from `draft` and keeps what the person
-  did: the recipients as they stand, the files, what is typed in a recipient
-  field. It is how a host changes the template of a letter being written. The
-  host then renders the form with that same `draft` — the form takes it as
-  the one it has and starts nothing afresh. A signature that was inserted is
-  gone with the old text. While a letter is on its way the update is ignored.
+  `:context`, the sender's defaults — and with them the sender, when the draft
+  names one the person cannot change, so the line, the signatures and the
+  notes about the sender are read again) from `draft` and keeps what the
+  person did: the recipients as they stand, the files, the key, what is typed
+  in a recipient field. It is how a host changes the template of a letter
+  being written. A signature that was inserted is gone with the old text.
+
+  The form takes every draft a `retext` replaced, and the one it brought, as
+  the letter it holds: a host that goes on passing the first draft, or the
+  one it retexted before the last, starts nothing afresh. A host that sets
+  the new draft in the same callback as the `send_update/3` is rendered
+  *first*, and the form cannot know that a `retext` follows — it is a new
+  draft. Such a host (and any host that would rather change the draft than
+  send an update) gives the optional attribute `letter_key`, a string naming
+  the letter: a draft that differs from the one the form holds, with the same
+  `letter_key`, is another text for the same letter, as a `retext` is; another
+  key, or none, is a new letter, as ever. With a `letter_key` the host may
+  also go back to an earlier draft; without one a draft a `retext` replaced
+  cannot be brought back, only retexted again.
+
+  While a letter is on its way the text waits for the answer: it is applied
+  when the send failed or was interrupted and dropped when the letter went
+  (that letter is over; a new one is a new draft).
 
   An attribute left out of a later update keeps its value, so a host may
   `send_update/3` the form with only what changed. Inbox's own access events
@@ -276,14 +296,17 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # The send task answers the component that started it, by send_update. An
   # answer to an attempt that is no longer the current one is not for this page.
   def update(%{send_result: {ref, result}}, %{assigns: %{send_ref: ref}} = socket),
-    do: {:ok, socket |> finish_send(result) |> open_pending_draft()}
+    do: {:ok, socket |> finish_send(result) |> open_pending_draft() |> apply_pending_retext()}
 
   def update(%{send_lost: ref}, %{assigns: %{send_ref: ref, sending: true}} = socket) do
-    {:ok,
-     assign(socket,
-       sending: false,
-       error: gettext("Sending was interrupted. Check the sent mail before sending again.")
-     )}
+    socket =
+      assign(socket,
+        sending: false,
+        error: gettext("Sending was interrupted. Check the sent mail before sending again.")
+      )
+
+    # A retext keeps the key, so it may be applied: the retry is the same letter.
+    {:ok, apply_pending_retext(socket)}
   end
 
   def update(%{send_result: _}, socket), do: {:ok, socket}
@@ -296,23 +319,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   def update(%{refresh: true}, socket), do: {:ok, socket}
 
-  def update(%{retext: _draft}, %{assigns: %{sending: true}} = socket), do: {:ok, socket}
-
-  def update(%{retext: draft}, %{assigns: %{source_draft: %ComposeDraft{}}} = socket) do
-    draft = normalize_draft(draft)
-
-    {:ok,
-     assign(socket,
-       source_draft: draft,
-       retext_origin: socket.assigns[:retext_origin] || socket.assigns.source_draft,
-       pending_draft: nil,
-       subject: text(draft.subject),
-       body: text(draft.body),
-       signature_uuid: "",
-       signature_block: "",
-       error: nil
-     )}
-  end
+  def update(%{retext: draft}, %{assigns: %{source_draft: %ComposeDraft{}}} = socket),
+    do: {:ok, retext(socket, normalize_draft(draft), true)}
 
   def update(%{retext: _draft}, socket), do: {:ok, socket}
 
@@ -322,7 +330,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     socket =
       socket
       |> assign_options(assigns)
-      |> reconcile_draft(normalize_draft(assigns[:draft] || socket.assigns[:source_draft]))
+      |> reconcile_draft(
+        normalize_draft(assigns[:draft] || socket.assigns[:source_draft]),
+        assigns[:letter_key]
+      )
 
     # Ask only after the scope gate and draft have been updated. An old list
     # must not survive a source or permission change with selectable ids.
@@ -349,32 +360,93 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   # The draft the host offers against the one the form holds.
-  defp reconcile_draft(socket, draft) do
-    # The draft a `retext` replaced is still the letter the form holds.
-    draft =
-      if draft == socket.assigns[:retext_origin], do: socket.assigns.source_draft, else: draft
-
+  defp reconcile_draft(socket, draft, letter_key) do
+    # A draft a `retext` replaced is still the letter the form holds.
+    draft = if replaced_by_retext?(socket, draft), do: socket.assigns.source_draft, else: draft
     socket = forget_pending_draft(socket, draft)
-    scope_changed? = socket.assigns[:options_scope] != socket.assigns.scope
+    source = socket.assigns[:source_draft]
 
     cond do
       not socket.assigns.allowed? ->
         assign(socket, list: nil)
 
+      draft == source ->
+        refresh_for_scope(socket)
+
+      same_letter?(socket, letter_key) ->
+        retext(socket, draft, false)
+
       # A letter on its way is not the parent's to take back: its text, its
       # key and its answer stay until it is over. The draft is kept for then,
       # for a parent that does not say it twice.
-      draft != socket.assigns[:source_draft] and socket.assigns[:sending] == true ->
-        assign(socket, :pending_draft, draft)
-
-      draft != socket.assigns[:source_draft] ->
-        open_draft(socket, draft)
-
-      scope_changed? ->
-        socket |> assign_sender(socket.assigns.from) |> refresh_summary()
+      socket.assigns[:sending] == true ->
+        assign(socket, pending_draft: draft, pending_key: letter_key)
 
       true ->
-        socket
+        socket |> open_draft(draft) |> assign(letter_key: letter_key)
+    end
+  end
+
+  defp refresh_for_scope(socket) do
+    if socket.assigns[:options_scope] != socket.assigns.scope,
+      do: socket |> assign_sender(socket.assigns.from) |> refresh_summary(),
+      else: socket
+  end
+
+  # `letter_key`: the host says which letter a draft is. The same key with
+  # another draft is another text for the letter the form holds (what a
+  # `retext` does); a new key, or none, is a new letter.
+  defp same_letter?(socket, letter_key),
+    do: is_binary(letter_key) and letter_key == socket.assigns[:letter_key]
+
+  # Digests of the drafts a `retext` took the letter from; compared only when
+  # there are any, as a draft may carry the bytes of its files.
+  defp replaced_by_retext?(%{assigns: %{retext_seen: [_ | _] = seen}}, draft),
+    do: draft_digest(draft) in seen
+
+  defp replaced_by_retext?(_socket, _draft), do: false
+
+  defp draft_digest(draft), do: :erlang.md5(:erlang.term_to_binary(draft))
+
+  # Another text for the letter the form holds: the person's recipients, files,
+  # key and typed text stay; the draft's own text and defaults come in. While a
+  # letter is on its way it waits for the answer (and is dropped if the letter
+  # went: that letter is over).
+  defp retext(%{assigns: %{sending: true}} = socket, draft, remember?),
+    do: assign(socket, :pending_retext, {draft, remember?})
+
+  defp retext(socket, draft, remember?) do
+    %{source_draft: old, from: from} = socket.assigns
+    seen = socket.assigns[:retext_seen] || []
+
+    key =
+      if draft.from_editable == true and draft.from == old.from,
+        do: from,
+        else: choice_key(draft.from)
+
+    socket
+    |> assign(
+      source_draft: draft,
+      retext_seen: if(remember?, do: [draft_digest(old) | seen], else: seen),
+      pending_draft: nil,
+      pending_retext: nil,
+      subject: text(draft.subject),
+      body: text(draft.body),
+      signature_uuid: "",
+      signature_block: "",
+      error: nil
+    )
+    |> assign_sender(key)
+    |> refresh_summary()
+  end
+
+  defp apply_pending_retext(%{assigns: %{sent: true}} = socket),
+    do: assign(socket, :pending_retext, nil)
+
+  defp apply_pending_retext(socket) do
+    case socket.assigns[:pending_retext] do
+      {draft, remember?} -> retext(socket, draft, remember?)
+      nil -> socket
     end
   end
 
@@ -396,7 +468,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   defp open_pending_draft(socket) do
     case socket.assigns[:pending_draft] do
       nil -> socket
-      draft -> open_draft(socket, draft)
+      draft -> socket |> open_draft(draft) |> assign(letter_key: socket.assigns[:pending_key])
     end
   end
 
@@ -474,8 +546,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> drop_uploads(:all)
     |> assign(
       source_draft: draft,
-      retext_origin: nil,
+      retext_seen: [],
       pending_draft: nil,
+      pending_key: nil,
+      pending_retext: nil,
       send_upload_refs: [],
       subject: text(draft.subject),
       body: text(draft.body),
