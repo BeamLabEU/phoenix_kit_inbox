@@ -8,6 +8,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
 
   use PhoenixKitInbox.LiveCase
 
+  alias PhoenixKitInbox.Identities
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Schemas.Message
   alias PhoenixKitInbox.Test.ComponentHostLive
@@ -73,8 +74,10 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
 
     @impl true
     # The host says the draft (a render with it), the letter, or both.
-    def handle_event("assign", %{"draft" => key}, socket),
-      do: {:noreply, assign(socket, draft: socket.assigns.drafts[key])}
+    def handle_event("assign", %{"draft" => key} = params, socket) do
+      socket = assign(socket, draft: socket.assigns.drafts[key])
+      {:noreply, if(params["key"], do: assign(socket, letter_key: params["key"]), else: socket)}
+    end
 
     def handle_event("retext", %{"draft" => key}, socket) do
       send_update(ComposeForm, id: "demo", retext: socket.assigns.drafts[key])
@@ -115,7 +118,22 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
     {:ok, _} = Mailboxes.ensure_user_mailbox(alice)
     {:ok, _} = Mailboxes.ensure_user_mailbox(bob)
     senders = grant_role!(alice, @external)
-    %{alice: alice, bob: bob, scope: scope_for(alice, @external, [senders])}
+    smtp = mail_integration_fixture(:system, username: "noreply@company.test")
+    manager = scope_for(user_fixture(), ["inbox", "inbox.manage_shared"])
+
+    {:ok, common} =
+      Identities.create_shared(manager, %{
+        "label" => "Common",
+        "from_name" => "Company",
+        "integration_uuid" => smtp
+      })
+
+    %{
+      alice: alice,
+      bob: bob,
+      common: common,
+      scope: scope_for(alice, @external, [senders])
+    }
   end
 
   defp mode(mode), do: Application.put_env(:phoenix_kit_inbox, :retext_mode, mode)
@@ -141,10 +159,14 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
     }
   end
 
-  defp mount_host(ctx, conn, drafts, session \\ %{}) do
+  defp mount_host(ctx, conn, drafts, session \\ %{}, scope \\ nil) do
     session =
       Map.merge(
-        %{"scope" => stash(ctx.scope), "drafts" => stash(drafts), "test_pid" => self()},
+        %{
+          "scope" => stash(scope || ctx.scope),
+          "drafts" => stash(drafts),
+          "test_pid" => self()
+        },
         session
       )
 
@@ -160,6 +182,11 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
   defp body(view), do: texts(view, "#compose-demo-body")
   defp chips(view), do: texts(view, "#compose-demo-to li[id^=compose-demo-chip-]")
   defp host(view, event, draft), do: render_click(view, event, %{"draft" => draft})
+
+  defp host(view, event, draft, key),
+    do: render_click(view, event, %{"draft" => draft, "key" => key})
+
+  defp sent?(view), do: has_element?(view, "#compose-demo-sent")
 
   # The person adds an outside recipient (its send is not what these tests
   # are about: outside mail is not set up here) and types a text of their own.
@@ -215,10 +242,20 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
       assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "S1", body: "B1"}}}, 3000
     end
 
-    test "a retext of a form that holds no draft yet is ignored", %{conn: conn} = ctx do
+    test "a retext applies to the draft the form holds", %{conn: conn} = ctx do
       view = mount_host(ctx, conn, three_drafts())
+      assert subject(view) == ["S0"]
+
       host(view, "retext", "d1")
       assert subject(view) == ["S1"]
+    end
+
+    test "a form that holds no draft (no access) has nothing to retext", %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts(), %{}, scope_for(ctx.alice, [], []))
+
+      host(view, "retext", "d1")
+
+      refute has_element?(view, "#compose-demo-form")
     end
   end
 
@@ -295,7 +332,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
       refute letter_kept?(view)
     end
 
-    test "with a letter_key another draft is another text; a new key is a new letter",
+    test "with a letter_key another draft is another text of the same letter",
          %{conn: conn} = ctx do
       view = mount_host(ctx, conn, three_drafts(), %{"letter_key" => "letter-1"})
       write(view)
@@ -308,6 +345,93 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
       host(view, "assign", "d0")
       assert subject(view) == ["S0"]
       assert letter_kept?(view)
+    end
+
+    test "a new letter_key is a new letter, even for a draft the form had replaced",
+         %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts(), %{"letter_key" => "a"})
+      write(view)
+      host(view, "retext", "d1")
+      assert letter_kept?(view)
+
+      host(view, "assign", "d0", "b")
+
+      assert subject(view) == ["S0"]
+      refute letter_kept?(view)
+    end
+
+    test "a new letter_key with the very draft the form holds is a new letter",
+         %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts(), %{"letter_key" => "a"})
+      write(view)
+
+      host(view, "assign", "d0", "b")
+      refute letter_kept?(view)
+      assert subject(view) == ["S0"]
+
+      # The form holds the new key now: this is the same letter.
+      write(view)
+      host(view, "assign", "d1", "b")
+      assert subject(view) == ["S1"]
+      assert letter_kept?(view)
+    end
+
+    test "a key given for the first time names the letter the form holds", %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts())
+      write(view)
+
+      host(view, "assign", "d0", "a")
+      assert letter_kept?(view)
+
+      host(view, "assign", "d1", "a")
+      assert subject(view) == ["S1"]
+      assert letter_kept?(view)
+    end
+  end
+
+  describe "after the letter went" do
+    defp send_it(view) do
+      submit(view)
+      assert_receive {:inbox_compose, "demo", {:sent, %Message{}}}, 3000
+      assert sent?(view)
+    end
+
+    test "the same letter_key with another draft is a new letter", %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts(), %{"letter_key" => "k"})
+      write_text(view)
+      send_it(view)
+
+      # The host still renders what it had: the letter stays as it is.
+      render_click(view, "rerender", %{})
+      assert sent?(view)
+
+      host(view, "assign", "d1")
+
+      refute sent?(view)
+      assert subject(view) == ["S1"]
+    end
+
+    test "without a key the draft the letter was written from opens a new letter",
+         %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts())
+      host(view, "retext", "d1")
+      host(view, "assign", "d1")
+      send_it(view)
+
+      host(view, "assign", "d0")
+
+      refute sent?(view)
+      assert subject(view) == ["S0"]
+    end
+
+    test "a retext no longer changes a letter that went", %{conn: conn} = ctx do
+      view = mount_host(ctx, conn, three_drafts())
+      send_it(view)
+
+      host(view, "retext", "d1")
+
+      assert sent?(view)
+      assert subject(view) == ["S0"]
     end
   end
 
@@ -328,6 +452,30 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
       assert chips(view) != []
     end
 
+    test "a new draft that waits too wins over a retext, in either order", %{conn: conn} = ctx do
+      for order <- [:retext_first, :draft_first] do
+        mode(:hold)
+        view = mount_host(ctx, conn, three_drafts())
+        write_text(view)
+        submit(view)
+        assert_receive {:around, task, _}, 2000
+
+        case order do
+          :retext_first ->
+            host(view, "retext", "d1")
+            host(view, "assign", "d2")
+
+          :draft_first ->
+            host(view, "assign", "d2")
+            host(view, "retext", "d1")
+        end
+
+        send(task, :stop)
+        eventually(fn -> subject(view) == ["S2"] end)
+        assert chips(view) != []
+      end
+    end
+
     test "is dropped when the letter went", %{conn: conn} = ctx do
       mode(:hold)
       view = mount_host(ctx, conn, three_drafts())
@@ -340,6 +488,44 @@ defmodule PhoenixKitInbox.Web.ComposeFormRetextTest do
 
       assert_receive {:inbox_compose, "demo", {:sent, %Message{subject: "typed"}}}, 3000
       assert subject(view) == ["typed"]
+    end
+  end
+
+  describe "the sender after a retext, when the person may choose it" do
+    defp chosen(view),
+      do: view |> q("#compose-demo-from-select option[selected]") |> LazyHTML.attribute("value")
+
+    defp choose(view, key),
+      do: view |> form("#compose-demo-from-form") |> render_change(%{"from" => key})
+
+    test "keeps the person's choice while the draft's sender is the same", %{conn: conn} = ctx do
+      drafts = %{
+        "d0" => draft(subject: "S0", from: :user_default, from_editable: true),
+        "d1" => draft(subject: "S1", from: :user_default, from_editable: true)
+      }
+
+      view = mount_host(ctx, conn, drafts)
+      choose(view, "identity:" <> ctx.common.uuid)
+      assert chosen(view) == ["identity:" <> ctx.common.uuid]
+
+      host(view, "retext", "d1")
+
+      assert subject(view) == ["S1"]
+      assert chosen(view) == ["identity:" <> ctx.common.uuid]
+    end
+
+    test "follows the draft when its sender changed", %{conn: conn} = ctx do
+      drafts = %{
+        "d0" => draft(subject: "S0", from: :user_default, from_editable: true),
+        "d1" => draft(subject: "S1", from: {:identity, ctx.common.uuid}, from_editable: true)
+      }
+
+      view = mount_host(ctx, conn, drafts)
+      assert chosen(view) == ["user_default"]
+
+      host(view, "retext", "d1")
+
+      assert chosen(view) == ["identity:" <> ctx.common.uuid]
     end
   end
 

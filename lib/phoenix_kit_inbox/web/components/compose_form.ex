@@ -66,8 +66,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       The lists open over the form, as a menu under their field, and move
       nothing; the list behind «+» is then a menu to tick people in: a press
       adds a person to the line or takes them off it, the menu stays open
-      until «Done», Escape or a press outside the field and the menu («+»
-      itself closes it), its tabs show one of the sources' groups at a time
+      until «Done», Escape (pressed on the line's field, «+», or anything in
+      the menu) or a press outside the field and the menu («+» itself closes
+      it); inside a dialog the same Escape also reaches the dialog, as this
+      module has no script to stop it. Its tabs show one of the sources' groups at a time
       and its own field searches the sources (the field has the focus when
       the menu opens and after a tab is chosen; the line's field after
       «Done» or Escape); every person is shown with the address the letter
@@ -99,29 +101,43 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   `send_update(ComposeForm, id: id, retext: draft)` takes the subject, the
   text and everything the person does not see (`:html_body`, `:body_format`,
-  `:context`, the sender's defaults — and with them the sender, when the draft
-  names one the person cannot change, so the line, the signatures and the
-  notes about the sender are read again) from `draft` and keeps what the
-  person did: the recipients as they stand, the files, the key, what is typed
-  in a recipient field. It is how a host changes the template of a letter
-  being written. A signature that was inserted is gone with the old text.
+  `:context`, the sender's defaults) from `draft` and keeps what the person
+  did: the recipients as they stand, the files, the key, what is typed in a
+  recipient field. It is how a host changes the template of a letter being
+  written. A signature that was inserted is gone with the old text. The sender
+  is read again — the line, the signatures, the notes about it — and is the
+  draft's when the person cannot change it (`from_editable` not `true`) or
+  when the draft's `from` is another than the one the form held; for a draft
+  the person may change whose `from` is the same, their own choice stays.
 
-  The form takes every draft a `retext` replaced, and the one it brought, as
-  the letter it holds: a host that goes on passing the first draft, or the
-  one it retexted before the last, starts nothing afresh. A host that sets
-  the new draft in the same callback as the `send_update/3` is rendered
-  *first*, and the form cannot know that a `retext` follows — it is a new
-  draft. Such a host (and any host that would rather change the draft than
+  The form takes every draft a `retext` replaced (the newest 32), and the one
+  it brought, as the letter it holds: a host that goes on passing the first
+  draft, or the one it retexted before the last, starts nothing afresh. A host
+  that sets the new draft in the same callback as the `send_update/3` is
+  rendered *first*, and the form cannot know that a `retext` follows — it is a
+  new draft. Such a host (and any host that would rather change the draft than
   send an update) gives the optional attribute `letter_key`, a string naming
-  the letter: a draft that differs from the one the form holds, with the same
-  `letter_key`, is another text for the same letter, as a `retext` is; another
-  key, or none, is a new letter, as ever. With a `letter_key` the host may
-  also go back to an earlier draft; without one a draft a `retext` replaced
-  cannot be brought back, only retexted again.
+  **the letter** — an object's id, the id of one opening of the window — never
+  the template, as a change of template is what it is there to survive. The
+  rules, in this order:
+
+    * a `letter_key` that differs from the one the form holds is a new letter,
+      whatever the draft (the same draft, or one a retext replaced, included);
+    * the draft the form holds, or one a `retext` replaced, is the same letter;
+    * another draft under the same key is another text for the same letter, as
+      a `retext` is — and going back to an earlier draft is allowed unless a
+      `retext` replaced it;
+    * anything else, and a draft with no key, is a new letter. A key given for
+      the first time to a draft the form already holds only names it.
+
+  **After the letter went**, the drafts it was written from are forgotten, and
+  the next draft — under the same key too — is a new letter; a `retext` no
+  longer changes it. The same draft the form holds changes nothing: the form
+  stays «Sent» until the host gives another.
 
   While a letter is on its way the text waits for the answer: it is applied
-  when the send failed or was interrupted and dropped when the letter went
-  (that letter is over; a new one is a new draft).
+  when the send failed or was interrupted and dropped when the letter went. A
+  new draft that waits too wins over a `retext`, in either order.
 
   An attribute left out of a later update keeps its value, so a host may
   `send_update/3` the form with only what changed. Inbox's own access events
@@ -395,16 +411,24 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   defp draft_verdict(socket, draft, key) do
-    held = socket.assigns[:letter_key]
-
     cond do
       not socket.assigns.allowed? -> :closed
-      is_binary(key) and is_binary(held) and key != held -> :new
-      draft == socket.assigns[:source_draft] or replaced_by_retext?(socket, draft) -> :same
-      is_binary(key) and key == held and socket.assigns[:sent] != true -> :retext
+      new_key?(socket, key) -> :new
+      held_draft?(socket, draft) -> :same
+      same_key?(socket, key) and socket.assigns[:sent] != true -> :retext
       true -> :new
     end
   end
+
+  defp new_key?(socket, key) do
+    held = socket.assigns[:letter_key]
+    is_binary(key) and is_binary(held) and key != held
+  end
+
+  defp same_key?(socket, key), do: is_binary(key) and key == socket.assigns[:letter_key]
+
+  defp held_draft?(socket, draft),
+    do: draft == socket.assigns[:source_draft] or replaced_by_retext?(socket, draft)
 
   # A key given for the first time to a letter the form already holds names it.
   defp adopt_key(socket, key) do
