@@ -1710,3 +1710,8 @@ msgstr "Отправлено"
 #, elixir-autogen, elixir-format
 msgid "%{name} (shared mailbox)"
 msgstr "%{name} (общий ящик)"
+
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex
+#, elixir-autogen, elixir-format
+msgid "Done"
+msgstr "Готово"

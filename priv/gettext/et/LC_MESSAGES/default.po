@@ -1705,3 +1705,8 @@ msgstr "Saadetud"
 #, elixir-autogen, elixir-format
 msgid "%{name} (shared mailbox)"
 msgstr "%{name} (jagatud postkast)"
+
+#: lib/phoenix_kit_inbox/web/components/compose_form.ex
+#, elixir-autogen, elixir-format
+msgid "Done"
+msgstr "Valmis"
