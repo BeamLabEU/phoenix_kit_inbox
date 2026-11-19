@@ -124,6 +124,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
       |> assign(:signature_block, "")
       |> assign(:reply_to_options, [])
       |> assign(:identities, [])
+      |> assign(:internal_mail, true)
       |> assign(:show_media_selector, false)
       |> allow_upload(:attachments,
         accept: :any,
@@ -322,6 +323,10 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
     socket
     |> assign(:mailboxes, mailboxes)
+    # Read with everything else the page offers, so a flip of the switch
+    # (`AccessEvents.senders_changed/1`, sent by the settings page) reaches
+    # an open form through the same refresh.
+    |> assign(:internal_mail, PhoenixKitInbox.internal_enabled?())
     |> assign(
       :recipients,
       if(mailbox, do: recipient_suggestions(socket.assigns.current_user), else: [])
@@ -417,13 +422,17 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   # only" is not a choice.
   defp default_identity(socket) do
     case socket.assigns.identities do
-      [first | _] -> if PhoenixKitInbox.internal_enabled?(), do: "", else: first.identity_uuid
+      [first | _] -> if socket.assigns.internal_mail, do: "", else: first.identity_uuid
       [] -> ""
     end
   end
 
-  # A blank choice is never announced as lost: `keep_identity/1` puts the
-  # default in its place.
+  # A blank choice ("inside the application only") is on offer while internal
+  # mail is on, or while there is no identity to put in its place.
+  defp identity_offered?(%{assigns: %{internal_mail: false, identities: [_ | _]}}, value)
+       when value in [nil, ""],
+       do: false
+
   defp identity_offered?(socket, value),
     do: offered?(socket.assigns.identities, :identity_uuid, value)
 
@@ -969,6 +978,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
         signature_uuid={@signature_uuid}
         reply_to_options={@reply_to_options}
         identities={@identities}
+        internal_mail={@internal_mail}
         saving={@saving}
         sending={@sending}
       />
@@ -1002,6 +1012,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
   attr(:signature_uuid, :string, required: true)
   attr(:reply_to_options, :list, required: true)
   attr(:identities, :list, required: true)
+  attr(:internal_mail, :boolean, required: true)
   attr(:saving, :boolean, required: true)
   attr(:sending, :boolean, required: true)
 
@@ -1034,7 +1045,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
               id="compose-identity"
               name="identity_uuid"
               value={@form.params["identity_uuid"] || ""}
-              options={identity_choices(@identities)}
+              options={identity_choices(@identities, @internal_mail)}
               class="select-sm"
             />
           </div>
@@ -1043,7 +1054,7 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
             field={@form[:to]}
             type="text"
             label={gettext("To")}
-            placeholder={to_placeholder()}
+            placeholder={to_placeholder(@internal_mail)}
             list="phoenix-kit-inbox-recipients"
           />
           <.input
@@ -1260,17 +1271,17 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   # "Inside only" first: an external send is a choice, never the default —
   # and not a choice at all while internal mail is off.
-  defp identity_choices(identities) do
+  defp identity_choices(identities, internal_mail?) do
     choices = Enum.map(identities, &{"#{&1.label} <#{&1.from_address}>", &1.identity_uuid})
 
-    if PhoenixKitInbox.internal_enabled?(),
+    if internal_mail?,
       do: [{gettext("Inside the application only"), ""} | choices],
       else: choices
   end
 
   # While internal mail is off nobody is written to by handle or shared name.
-  defp to_placeholder do
-    if PhoenixKitInbox.internal_enabled?(),
+  defp to_placeholder(internal_mail?) do
+    if internal_mail?,
       do: gettext("@username, email or shared mailbox — comma separated"),
       else: gettext("Email addresses — comma separated")
   end

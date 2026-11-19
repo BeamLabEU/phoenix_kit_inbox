@@ -446,10 +446,21 @@ defmodule PhoenixKitInbox do
     Application.get_env(:phoenix_kit_inbox, :internal_mail_default, true) != false
   end
 
-  @doc "Turns delivery inside the application on or off (see `internal_enabled?/0`)."
+  @doc """
+  Turns delivery inside the application on or off (see `internal_enabled?/0`).
+
+  A saved change is broadcast like a change of the shared senders
+  (`PhoenixKitInbox.AccessEvents.senders_changed/1`): an open compose page
+  reads the switch again with what it offers — the "inside only" sender, the
+  suggestions, the To hint.
+  """
   @spec set_internal_enabled(boolean()) :: term()
   def set_internal_enabled(enabled) when is_boolean(enabled) do
-    Settings.update_boolean_setting_with_module(@internal_settings_key, enabled, module_key())
+    result =
+      Settings.update_boolean_setting_with_module(@internal_settings_key, enabled, module_key())
+
+    with {:ok, _setting} <- result, do: PhoenixKitInbox.AccessEvents.senders_changed(nil)
+    result
   end
 
   @doc """

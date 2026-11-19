@@ -122,6 +122,29 @@ defmodule PhoenixKitInbox.Web.ComposeExternalTest do
     assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
   end
 
+  test "an open page follows the switch: the choices, the default sender, the To hint", ctx do
+    {:ok, view, _html} = live(as_alice(ctx), "/en/admin/inbox/compose")
+
+    assert has_element?(view, "#compose-identity option[selected][value='']")
+    assert has_element?(view, ~s(input[name=to][placeholder*="@username"]))
+
+    {:ok, _} = PhoenixKitInbox.set_internal_enabled(false)
+    # The broadcast went before this call: the page has handled it.
+    _ = :sys.get_state(view.pid)
+
+    refute has_element?(view, "#compose-identity option[value='']")
+    assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
+    assert has_element?(view, ~s(input[name=to][placeholder^="Email addresses"]))
+
+    {:ok, _} = PhoenixKitInbox.set_internal_enabled(true)
+    _ = :sys.get_state(view.pid)
+
+    # Inside-only is a choice again; the sender chosen meanwhile stays.
+    assert has_element?(view, "#compose-identity option[value='']")
+    assert has_element?(view, "#compose-identity option[selected][value='#{ctx.common.uuid}']")
+    assert has_element?(view, ~s(input[name=to][placeholder*="@username"]))
+  end
+
   test "without anything to send as, there is no picker", ctx do
     {:ok, view, _html} = live(as_alice(ctx, ["inbox"]), "/en/admin/inbox/compose")
     refute has_element?(view, "#compose-identity")
