@@ -378,6 +378,30 @@ The optional `footer_start` slot puts a control of the host's at the start of th
 </.live_component>
 ```
 
+`recipient_lines={:all}` (optional) keeps the Cc and Bcc lines on the form at all times and takes their «+ Cc» / «+ Bcc» buttons away; anything else is today's behaviour. Text typed in either line and not yet added goes with the send.
+
+`compact={true}` (optional) lays the form out in rows of a label and a field: one field per recipient line, with a «+» at its end that opens a menu to tick people in (tabs by the sources' groups, a search field, each person with the address the letter would go to and the source's `:note`; it stays open until «Done», Escape (inside a dialog the same Escape also reaches the dialog) or a press outside, and a person is in one line at a time). The suggestions that come up while typing close the same way. The «from … to …» line under the files is left out; what the rows do not say stays as one line, shown only when there is something to say: outside mail not set up or refused by the mail rules, where the rules send it, and the sender it goes out as. Without `fit_height` the menu is no taller than half the screen.
+
+`fit_height={true}` (optional, default off) puts core's `PkFitHeight` hook on the compact menu so it is never taller than the room left in its scrolling ancestor. Set it only when your core ships that hook: it is not in a released core yet, and on one without it the browser console logs an unknown hook at every menu.
+
+The optional `:note` of a suggestion (`RecipientSource`) is a word or two said beside the name; it is trimmed, cut to 40 characters, and left out when blank. The compact menu shows it as a neutral badge.
+
+The optional `before_subject` slot is rendered between the recipient lines and the subject, outside the form's own `<form>`, with `%{sending: sending?}`: a host that fills the text from templates puts the choice of one there. It is not rendered for a viewer without access.
+
+`send_update(ComposeForm, id: id, retext: new_draft)` gives the letter another text — subject, text, `html_body`, `context`, and the sender's defaults — and keeps the recipients, files, what is typed and the idempotency key. The form takes every draft it replaced this way as the letter it holds, so a host that goes on passing an older draft starts nothing afresh. A host that sets the new `draft` in the same callback as the `send_update/3` (the render comes first) passes the optional `letter_key`, which names **the letter** (an object's id, the id of one opening of the window), never the template: the same key with another draft is another text for the same letter; a different key is a new letter, whatever the draft. After the letter went the form stays «Sent» for the letter's own drafts (a host that renders one of them again opens nothing); a new letter is a new `letter_key` or a draft the form never held, under the same key too. A key may be a string, an integer or an atom. While a send runs a retext waits for the answer and is dropped if the letter went; a new draft that waits too wins over it.
+
+```heex
+<.live_component
+  module={PhoenixKitInbox.Web.Components.ComposeForm}
+  id="order-letter" scope={@scope} draft={@draft} letter_key={"order-#{@order.id}"}
+  recipient_lines={:all} compact={true} fit_height={false}
+>
+  <:before_subject :let={state}>
+    <.template_picker disabled={state.sending} />
+  </:before_subject>
+</.live_component>
+```
+
 `ComposeForm` is a view over `PhoenixKitInbox.Web.Components.ComposePipeline`; its moduledoc lists what the host must do (handle `{:inbox_compose, id, _}`, close the form after `{:sent, message}`, build the draft outside `render`, and after `{:inbox_access_changed, _}` send it `send_update(ComposeForm, id: id, refresh: true)` so it reads its senders and open recipient list again). Changing `scope` or `recipient_sources` also rebuilds an open list and invalidates its old suggestion IDs. Each form has an upload of its own (`"inbox_compose_<id>"`), so several can share a page. `PhoenixKitInbox.TaskSupervisor` is started by PhoenixKit itself: do not add it to your tree.
 
 - `ComposeDraft` is the host's side: recipients, subject, text, files, `links`, `html_body`, `reply_to_trusted`, `context`. What it sets is the host's word; what the browser sends is checked against it.

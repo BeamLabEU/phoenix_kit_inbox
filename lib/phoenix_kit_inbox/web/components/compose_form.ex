@@ -29,6 +29,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       (a `ComposeDraft`) — required; a new draft starts the form afresh
     * `around_send`, `authorize_attachments` — the host's callbacks, as the
       pipeline takes them (`ComposePipeline.run/4`)
+    * `letter_key` — optional; names the letter a draft belongs to (see
+      "Another text for the same letter"). Without it a draft that differs
+      from the held one is a new letter
     * `recipient_sources` — the host's modules implementing
       `PhoenixKitInbox.RecipientSource`, asked next to the module's own
       members; the pipeline has no such option
@@ -45,6 +48,45 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       behaviour. It governs what the form *shows*: the slot is rendered
       either way, the files the host's picker names are checked as ever, and
       the limits of the send are the pipeline's
+    * `recipient_lines` — `:all` keeps the Cc and Bcc lines on the form at
+      all times, under To, and takes their «+ Cc» / «+ Bcc» buttons away (a
+      host whose letters often go to several people shows where each address
+      can go without a press); anything else, or leaving it out, is today's
+      behaviour: the two lines wait behind their buttons
+    * `compact` — `true` lays the form out in rows of a label and its field:
+      the sender beside its label; a recipient line is its label, then one
+      field holding the chips and the input, with the list of the host's
+      people behind a «+» at the field's end; the subject has its label
+      beside it and the message none on screen. The line under the files
+      that says in words from whom and to whom the letter goes is left out
+      (the rows above say it), but what they do not say is kept as one line
+      of its own, shown only when there is something to say: that outside mail
+      is not set up or the mail rules refuse it or leave nobody to send it
+      to, where the rules would send it, and the sender it goes out as.
+      The lists open over the form, as a menu under their field, and move
+      nothing; the list behind «+» is then a menu to tick people in: a press
+      adds a person to the line or takes them off it, the menu stays open
+      until «Done», Escape or a press outside the field and the menu («+»
+      itself closes it); inside a dialog the same Escape also reaches the
+      dialog, as this module has no script to stop it. Its tabs show one of
+      the sources' groups at a time and its own field searches the sources (the field has the focus when
+      the menu opens and after a tab is chosen; the line's field after
+      «Done» or Escape); every person is shown with the address the letter
+      would go to and the source's `:note`; an account with no address is
+      shown and cannot be ticked; a person is in one line at a time —
+      ticked or typed into another, they move there. The suggestions that
+      come up while typing are an overlay under the field and close the same
+      way. Without `fit_height` the menu is no taller than half the screen.
+      Anything else, or leaving it out, is today's layout
+    * `fit_height` — `true` puts core's `PkFitHeight` hook on the compact
+      menu, so that it is never taller than the room left under its field in
+      the scrolling ancestor (a dialog). Off at first, and a host sets it
+      only when its core carries the hook (it is not in a released core yet;
+      on one without it the browser's console logs an unknown hook at every
+      menu). Governs the menu of `compact` and nothing else
+    * `before_subject` — an optional slot rendered between the recipient
+      lines and the subject, outside the form's own `<form>`: a host that
+      fills the text from its templates puts the choice of one there
     * `attachment_picker` — an optional slot for the host's file picker
     * `footer_start` — an optional slot rendered at the start of the form's
       last row, on the other side from Cancel and Send: a host that opens the
@@ -53,6 +95,49 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       control while a send runs; what the control does is the host's (the
       form only shows it). It is rendered for a viewer without access too
       (`sending: false`), alone in the otherwise empty form
+
+  ## Another text for the same letter
+
+  `send_update(ComposeForm, id: id, retext: draft)` takes the subject, the
+  text and everything the person does not see (`:html_body`, `:body_format`,
+  `:context`, the sender's defaults) from `draft` and keeps what the person
+  did: the recipients as they stand, the files, the key, what is typed in a
+  recipient field. It is how a host changes the template of a letter being
+  written. A signature that was inserted is gone with the old text. The sender
+  is read again — the line, the signatures, the notes about it — and is the
+  draft's when the person cannot change it (`from_editable` not `true`) or
+  when the draft's `from` is another than the one the form held; for a draft
+  the person may change whose `from` is the same, their own choice stays.
+
+  The form takes every draft a `retext` replaced (the newest 32), and the one
+  it brought, as the letter it holds: a host that goes on passing the first
+  draft, or the one it retexted before the last, starts nothing afresh. A host
+  that sets the new draft in the same callback as the `send_update/3` is
+  rendered *first*, and the form cannot know that a `retext` follows — it is a
+  new draft. Such a host (and any host that would rather change the draft than
+  send an update) gives the optional attribute `letter_key`, a string naming
+  **the letter** — an object's id, the id of one opening of the window — never
+  the template, as a change of template is what it is there to survive. The
+  rules, in this order:
+
+    * a `letter_key` that differs from the one the form holds is a new letter,
+      whatever the draft (the same draft, or one a retext replaced, included);
+    * the draft the form holds, or one a `retext` replaced, is the same letter;
+    * another draft under the same key is another text for the same letter, as
+      a `retext` is — and going back to an earlier draft is allowed unless a
+      `retext` replaced it;
+    * anything else, and a draft with no key, is a new letter. A key given for
+      the first time to a draft the form already holds only names it.
+
+  **After the letter went** the form stays «Sent» for the letter's own drafts:
+  the current draft, the newest 32 templates replaced by keyed renders,
+  those a `retext` replaced and the draft queued during the send. Rendering
+  any of these again leaves the send button disabled. The next letter is a new `letter_key`, or a draft the
+  form never held; with the same key too.
+
+  While a letter is on its way the text waits for the answer: it is applied
+  when the send failed or was interrupted and dropped when the letter went. A
+  new draft that waits too wins over a `retext`, in either order.
 
   An attribute left out of a later update keeps its value, so a host may
   `send_update/3` the form with only what changed. Inbox's own access events
@@ -166,6 +251,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   use PhoenixKitWeb, :live_component
   use Gettext, backend: PhoenixKitInbox.Gettext
 
+  alias Phoenix.LiveView.JS
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitInbox.Attachments
   alias PhoenixKitInbox.Errors
@@ -195,6 +281,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   @query_max 320
   @typed_shown 8
   @picker_shown 30
+  # The menu of the compact layout scrolls: all a source may answer with.
+  @menu_shown 50
   @email_shape ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/u
 
   # ── the component ───────────────────────────────────────────────────────────
@@ -238,14 +326,17 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # The send task answers the component that started it, by send_update. An
   # answer to an attempt that is no longer the current one is not for this page.
   def update(%{send_result: {ref, result}}, %{assigns: %{send_ref: ref}} = socket),
-    do: {:ok, socket |> finish_send(result) |> open_pending_draft()}
+    do: {:ok, socket |> finish_send(result) |> open_pending_draft() |> apply_pending_retext()}
 
   def update(%{send_lost: ref}, %{assigns: %{send_ref: ref, sending: true}} = socket) do
-    {:ok,
-     assign(socket,
-       sending: false,
-       error: gettext("Sending was interrupted. Check the sent mail before sending again.")
-     )}
+    socket =
+      assign(socket,
+        sending: false,
+        error: gettext("Sending was interrupted. Check the sent mail before sending again.")
+      )
+
+    # A retext keeps the key, so it may be applied: the retry is the same letter.
+    {:ok, apply_pending_retext(socket)}
   end
 
   def update(%{send_result: _}, socket), do: {:ok, socket}
@@ -258,44 +349,18 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   def update(%{refresh: true}, socket), do: {:ok, socket}
 
+  def update(%{retext: draft}, %{assigns: %{source_draft: %ComposeDraft{}}} = socket),
+    do: {:ok, retext(socket, normalize_draft(draft), true)}
+
+  def update(%{retext: _draft}, socket), do: {:ok, socket}
+
   def update(assigns, socket) do
     previous_suggestions = suggestion_options(socket)
 
     socket =
       socket
-      |> assign(Map.take(assigns, ~w(id scope around_send authorize_attachments)a))
-      |> ensure_upload()
-      |> assign_list(assigns, :recipient_sources)
-      |> assign_member_suggestions(assigns)
-      |> assign_own_upload(assigns)
-      |> assign_list(assigns, :attachment_picker)
-      |> assign_list(assigns, :footer_start)
-      |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
-
-    draft = normalize_draft(assigns[:draft] || socket.assigns[:source_draft])
-    socket = forget_pending_draft(socket, draft)
-    scope_changed? = socket.assigns[:options_scope] != socket.assigns.scope
-
-    socket =
-      cond do
-        not socket.assigns.allowed? ->
-          assign(socket, list: nil)
-
-        # A letter on its way is not the parent's to take back: its text, its
-        # key and its answer stay until it is over. The draft is kept for then,
-        # for a parent that does not say it twice.
-        draft != socket.assigns[:source_draft] and socket.assigns[:sending] == true ->
-          assign(socket, :pending_draft, draft)
-
-        draft != socket.assigns[:source_draft] ->
-          open_draft(socket, draft)
-
-        scope_changed? ->
-          socket |> assign_sender(socket.assigns.from) |> refresh_summary()
-
-        true ->
-          socket
-      end
+      |> assign_options(assigns)
+      |> reconcile_draft(assigns)
 
     # Ask only after the scope gate and draft have been updated. An old list
     # must not survive a source or permission change with selectable ids.
@@ -304,16 +369,204 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       else: {:ok, socket}
   end
 
+  # What the host sets on the form besides the draft; an attribute it leaves
+  # out keeps its value.
+  defp assign_options(socket, assigns) do
+    socket
+    |> assign(Map.take(assigns, ~w(id scope around_send authorize_attachments)a))
+    |> ensure_upload()
+    |> assign_list(assigns, :recipient_sources)
+    |> assign_member_suggestions(assigns)
+    |> assign_own_upload(assigns)
+    |> assign_all_lines(assigns)
+    |> assign_compact(assigns)
+    |> assign_fit_height(assigns)
+    |> assign_list(assigns, :before_subject)
+    |> assign_list(assigns, :attachment_picker)
+    |> assign_list(assigns, :footer_start)
+    |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
+  end
+
+  # The draft the host offers against the one the form holds. What it is:
+  #
+  #   * a new `letter_key` (a binary that differs from the one held) is a new
+  #     letter, whatever the draft — it is compared first;
+  #   * the draft the form holds, or one a `retext` replaced, is the same
+  #     letter and nothing is started;
+  #   * another draft under the same key is another text for the same letter
+  #     (`retext/3`) — unless the letter went: then it is a new letter;
+  #   * anything else is a new letter.
+  #
+  # An update with no draft leaves the draft and the key as they are.
+  defp reconcile_draft(
+         %{assigns: %{allowed?: true, source_draft: %ComposeDraft{}}} = socket,
+         assigns
+       )
+       when not is_map_key(assigns, :draft),
+       do: refresh_for_scope(socket)
+
+  defp reconcile_draft(socket, assigns) do
+    draft = normalize_draft(assigns[:draft] || socket.assigns[:source_draft])
+
+    key =
+      if assigns[:draft],
+        do: letter_key(assigns[:letter_key]),
+        else: socket.assigns[:letter_key]
+
+    case draft_verdict(socket, draft, key) do
+      :closed -> assign(socket, list: nil)
+      :same -> socket |> forget_pending_draft() |> adopt_key(key) |> refresh_for_scope()
+      :retext -> retext(socket, draft, false)
+      :new -> new_letter(socket, draft, key)
+    end
+  end
+
+  # A letter's key is a string; an integer id or an atom is taken as its text,
+  # and nothing else (nil, a blank string, any other term) as no key.
+  defp letter_key(key) when is_binary(key), do: blank_to_nil(key)
+  defp letter_key(key) when is_integer(key), do: Integer.to_string(key)
+
+  defp letter_key(key) when is_atom(key) and key not in [nil, true, false],
+    do: Atom.to_string(key)
+
+  defp letter_key(_key), do: nil
+
+  defp draft_verdict(socket, draft, key) do
+    cond do
+      not socket.assigns.allowed? -> :closed
+      new_key?(socket, key) -> :new
+      held_draft?(socket, draft) -> :same
+      same_key?(socket, key) and socket.assigns[:sent] != true -> :retext
+      true -> :new
+    end
+  end
+
+  defp new_key?(socket, key) do
+    held = socket.assigns[:letter_key]
+    is_binary(key) and is_binary(held) and key != held
+  end
+
+  defp same_key?(socket, key), do: is_binary(key) and key == socket.assigns[:letter_key]
+
+  defp held_draft?(socket, draft) do
+    draft == socket.assigns[:source_draft] or replaced_by_retext?(socket, draft) or
+      (socket.assigns[:sent] == true and draft_digest(draft) in socket.assigns.keyed_drafts)
+  end
+
+  # A key given for the first time to a letter the form already holds names it.
+  defp adopt_key(socket, key) do
+    if is_binary(key) and is_nil(socket.assigns[:letter_key]),
+      do: assign(socket, :letter_key, key),
+      else: socket
+  end
+
+  # A letter on its way is not the parent's to take back: its text, its key and
+  # its answer stay until it is over. The draft is kept for then, for a parent
+  # that does not say it twice (and it wins over a retext that waits too).
+  defp new_letter(%{assigns: %{sending: true}} = socket, draft, key),
+    do: assign(socket, pending_draft: draft, pending_key: key, pending_retext: nil)
+
+  defp new_letter(socket, draft, key),
+    do: socket |> open_draft(draft) |> assign(letter_key: key)
+
+  defp refresh_for_scope(socket) do
+    if socket.assigns[:options_scope] != socket.assigns.scope,
+      do: socket |> assign_sender(socket.assigns.from) |> refresh_summary(),
+      else: socket
+  end
+
+  # Digests of the drafts a `retext` took the letter from; compared only when
+  # there are any. The digest leaves out what a draft carries for its files
+  # (their bytes may be big): the text, the people and the host's data say
+  # which letter it is.
+  defp replaced_by_retext?(%{assigns: %{retext_seen: [_ | _] = seen}}, draft),
+    do: draft_digest(draft) in seen
+
+  defp replaced_by_retext?(_socket, _draft), do: false
+
+  defp draft_digest(%ComposeDraft{} = draft) do
+    files =
+      for file <- List.wrap(draft.attachments),
+          is_map(file),
+          do: Map.take(file, [:id, :file_uuid, :name, :filename])
+
+    :erlang.md5(:erlang.term_to_binary(%{draft | attachments: files}))
+  end
+
+  # How many replaced drafts the form remembers (the newest).
+  @retext_seen_max 32
+
+  defp remember_replaced(seen, old),
+    do: Enum.take(Enum.uniq([draft_digest(old) | seen]), @retext_seen_max)
+
+  # Another text for the letter the form holds: the person's recipients, files,
+  # key and typed text stay; the draft's own text and defaults come in. While a
+  # letter is on its way it waits for the answer (applied after an error, and
+  # dropped if the letter went: that letter is over); one that was sent takes
+  # no other text.
+  defp retext(%{assigns: %{sent: true}} = socket, _draft, _remember?), do: socket
+
+  defp retext(%{assigns: %{sending: true, pending_draft: %ComposeDraft{}}} = socket, _d, _r),
+    do: socket
+
+  defp retext(%{assigns: %{sending: true}} = socket, draft, remember?),
+    do: assign(socket, :pending_retext, {draft, remember?})
+
+  defp retext(socket, draft, remember?) do
+    %{source_draft: old, from: from} = socket.assigns
+    # A parent may switch back to a keyed template while editing. Once sent,
+    # rendering that same template must leave the send button disabled.
+    history = if remember?, do: :retext_seen, else: :keyed_drafts
+
+    key =
+      if draft.from_editable == true and draft.from == old.from,
+        do: from,
+        else: choice_key(draft.from)
+
+    socket
+    |> assign(history, remember_replaced(socket.assigns[history], old))
+    |> assign(
+      source_draft: draft,
+      list: nil,
+      pending_draft: nil,
+      pending_retext: nil,
+      subject: text(draft.subject),
+      body: text(draft.body),
+      signature_uuid: "",
+      signature_block: "",
+      error: nil
+    )
+    |> assign_sender(key)
+    |> refresh_summary()
+  end
+
+  # The letter went: a text that waited for it is dropped, and the draft that
+  # brought it is one more the letter was written from — a host that renders
+  # it later is not asking for a new letter.
+  defp apply_pending_retext(%{assigns: %{sent: true}} = socket) do
+    case socket.assigns[:pending_retext] do
+      {draft, _remember?} ->
+        seen = remember_replaced(socket.assigns[:retext_seen] || [], draft)
+        assign(socket, retext_seen: seen, pending_retext: nil)
+
+      nil ->
+        socket
+    end
+  end
+
+  defp apply_pending_retext(socket) do
+    case socket.assigns[:pending_retext] do
+      {draft, remember?} -> retext(socket, draft, remember?)
+      nil -> socket
+    end
+  end
+
   defp suggestion_options(socket),
-    do: Map.take(socket.assigns, [:scope, :recipient_sources, :member_suggestions])
+    do: Map.take(socket.assigns, [:scope, :recipient_sources, :member_suggestions, :compact])
 
   # A parent that is back to the draft the form has has taken back what it
   # offered during the send.
-  defp forget_pending_draft(socket, draft) do
-    if draft == socket.assigns[:source_draft],
-      do: assign(socket, :pending_draft, nil),
-      else: socket
-  end
+  defp forget_pending_draft(socket), do: assign(socket, :pending_draft, nil)
 
   # The draft the parent offered while a send ran, once the answer is in (the
   # letter went, or it failed): the form opens it as it would have then. Not
@@ -322,7 +575,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   defp open_pending_draft(socket) do
     case socket.assigns[:pending_draft] do
       nil -> socket
-      draft -> open_draft(socket, draft)
+      draft -> socket |> open_draft(draft) |> assign(letter_key: socket.assigns[:pending_key])
     end
   end
 
@@ -355,6 +608,31 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp resuggest(socket), do: socket
 
+  # `recipient_lines={:all}`: Cc and Bcc are always shown. Kept apart from
+  # `open`, which a new draft rebuilds: the host's choice outlives a draft.
+  defp assign_all_lines(socket, assigns) do
+    if Map.has_key?(assigns, :recipient_lines),
+      do: assign(socket, :all_lines, assigns.recipient_lines == :all),
+      else: assign_new(socket, :all_lines, fn -> false end)
+  end
+
+  # `fit_height={true}`: the menu of the compact layout carries core's
+  # `PkFitHeight` hook. Off at first: a core that does not ship the hook logs
+  # an unknown hook for it.
+  defp assign_fit_height(socket, assigns) do
+    if Map.has_key?(assigns, :fit_height),
+      do: assign(socket, :fit_height, assigns.fit_height == true),
+      else: assign_new(socket, :fit_height, fn -> false end)
+  end
+
+  defp assign_compact(socket, assigns) do
+    if Map.has_key?(assigns, :compact),
+      do: assign(socket, :compact, assigns.compact == true),
+      else: assign_new(socket, :compact, fn -> false end)
+  end
+
+  defp line_open?(assigns, role), do: assigns.all_lines or assigns.open[role]
+
   # Only `false` takes the form's own upload control away; a missing key keeps
   # the value the form had (true at first), as the other attributes do.
   defp assign_own_upload(socket, assigns) do
@@ -385,7 +663,11 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> drop_uploads(:all)
     |> assign(
       source_draft: draft,
+      retext_seen: [],
+      keyed_drafts: [],
       pending_draft: nil,
+      pending_key: nil,
+      pending_retext: nil,
       send_upload_refs: [],
       subject: text(draft.subject),
       body: text(draft.body),
@@ -678,6 +960,12 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   def handle_event(_event, _params, %{assigns: %{allowed?: false}} = socket),
     do: {:noreply, socket}
 
+  # The menu and its tabs are the compact layout's: the other layout never
+  # offers them, and a forged event does nothing there.
+  def handle_event(event, _params, %{assigns: %{compact: false}} = socket)
+      when event in ~w(tick picker_tab picker_search),
+      do: {:noreply, socket}
+
   def handle_event("select_from", %{"from" => key}, socket) when is_binary(key) do
     if editable?(socket.assigns) and Enum.any?(socket.assigns.from_options, &(&1.key == key)),
       do:
@@ -741,14 +1029,56 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         {:noreply, socket}
 
       role ->
-        line = Enum.reject(recipients[role], &(&1.key == key))
-
-        {:noreply,
-         socket
-         |> assign(recipients: Map.put(recipients, role, line), recipient_error: nil)
-         |> refresh_summary()}
+        {:noreply, remove_chip(socket, role, key)}
     end
   end
+
+  # The menu of the compact layout: a press ticks a person into the line or
+  # out of it, and the menu stays as it is.
+  def handle_event("tick", %{"id" => id}, socket) when is_binary(id) do
+    with %{role: role, kind: :picker, items: items} = list <- socket.assigns.list,
+         %{entry: entry, address: address} = item when is_binary(address) <-
+           Enum.find(items, &(&1.id == id)) do
+      inputs = socket.assigns.inputs
+
+      socket =
+        case ticked_chip(socket.assigns.recipients[role], shown_entry(item)) do
+          nil -> add_entry(socket, role, entry)
+          chip -> remove_chip(socket, role, chip.key)
+        end
+
+      {:noreply, assign(socket, list: list, inputs: inputs)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("picker_tab", params, %{assigns: %{list: %{kind: :picker} = list}} = socket) do
+    tab = if is_binary(params["group"]) and params["group"] != "", do: params["group"]
+    {:noreply, assign(socket, :list, Map.put(list, :tab, tab))}
+  end
+
+  def handle_event(
+        "picker_search",
+        %{"q" => query},
+        %{assigns: %{list: %{kind: :picker, role: role} = list}} = socket
+      )
+      when is_binary(query) do
+    query = String.slice(query, 0, @query_max)
+    socket = open_picker(socket, role, query)
+
+    {:noreply,
+     assign(socket, :list, Map.merge(socket.assigns.list, %{tab: list[:tab], query: query}))}
+  end
+
+  # A press outside the field and its lists, or Escape: the menu (or the
+  # overlay of typed suggestions) closes; what was typed stays in its field.
+  def handle_event("close_picker", _params, %{assigns: %{list: %{}}} = socket),
+    do: {:noreply, assign(socket, list: nil)}
+
+  def handle_event(event, _params, socket)
+      when event in ~w(picker_tab picker_search close_picker),
+      do: {:noreply, socket}
 
   def handle_event("toggle_picker", %{"role" => role}, socket) when is_binary(role) do
     with {:ok, role} <- role_atom(role),
@@ -860,7 +1190,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # What sits in the field of a line the person cannot see is not theirs to
   # have sent, nor to be stopped by.
   defp shown_roles(socket) do
-    [:to | Enum.filter([:cc, :bcc], &socket.assigns.open[&1])]
+    [:to | Enum.filter([:cc, :bcc], &line_open?(socket.assigns, &1))]
   end
 
   # Everything the pipeline gets is made here from the server's state: the
@@ -1326,6 +1656,21 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> Enum.join("; ")
   end
 
+  # What the compact layout keeps of the line above the button: only what the
+  # rows above do not say — the outside mail (not set up, refused, redirected)
+  # and the identity it goes out as. Empty when there is nothing to say.
+  defp notice_text(summary) do
+    [
+      summary.sender_as &&
+        gettext("outside mail goes out as %{sender}", sender: summary.sender_as),
+      summary.outside &&
+        gettext("outside mail goes to %{addresses}", addresses: Enum.join(summary.outside, ", ")),
+      problem_text(summary.problem)
+    ]
+    |> Enum.filter(& &1)
+    |> Enum.join("; ")
+  end
+
   defp send_label(true, _sent), do: gettext("Sending…")
   defp send_label(false, true), do: pgettext("compose button after a send", "Sent")
   defp send_label(false, false), do: gettext("Send")
@@ -1520,14 +1865,40 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     socket |> assign(recipient_error: nil) |> assign_list(role, :typed, entries)
   end
 
-  defp open_picker(socket, role) do
+  defp open_picker(socket, role, query \\ "") do
+    shown = if socket.assigns.compact, do: @menu_shown, else: @picker_shown
+
     entries =
       socket.assigns.recipient_sources
-      |> RecipientSource.suggest_all(socket.assigns.scope, context(socket), "")
-      |> Enum.take(@picker_shown)
+      |> RecipientSource.suggest_all(socket.assigns.scope, context(socket), query)
+      |> Enum.take(shown)
 
-    socket |> assign(recipient_error: nil) |> assign_list(role, :picker, entries)
+    socket
+    |> assign(recipient_error: nil)
+    |> assign_list(role, :picker, entries)
+    |> shown_addresses()
   end
+
+  # The menu shows where a letter to each person would go: an account's
+  # address is looked up as the chip's will be.
+  defp shown_addresses(%{assigns: %{compact: true, list: %{items: items} = list}} = socket) do
+    # One lookup per route for all the accounts of the list, not one per row.
+    found =
+      for route <- [:internal, :email], into: %{} do
+        users = for %{entry: %{user: user, route: ^route}} <- items, is_binary(user), do: user
+        {route, Mailboxes.recipient_addresses(users, route)}
+      end
+
+    items =
+      for %{entry: entry} = item <- items do
+        address = entry[:address] || (entry[:user] && found[entry.route][entry.user])
+        Map.put(item, :address, address)
+      end
+
+    assign(socket, :list, %{list | items: items})
+  end
+
+  defp shown_addresses(socket), do: socket
 
   # Every suggestion gets an id of this list only; a new list voids the old ids.
   defp assign_list(socket, _role, :typed, []), do: assign(socket, list: nil)
@@ -1655,42 +2026,87 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     match?([%{route: :internal}], Messages.resolve_recipient_routes(scope, [text]))
   end
 
+  # A chip off its line; who gets the letter is said again.
+  defp remove_chip(socket, role, key) do
+    recipients = socket.assigns.recipients
+    line = Enum.reject(recipients[role], &(&1.key == key))
+
+    socket
+    |> assign(recipients: Map.put(recipients, role, line), recipient_error: nil)
+    |> refresh_summary()
+  end
+
+  # The compact layout keeps a person in one line: the other two let go of them.
+  defp elsewhere_off(recipients, role, chip) do
+    for {other, line} <- recipients, into: %{} do
+      if other == role,
+        do: {other, line},
+        else: {other, Enum.reject(line, &same_person?(&1, chip))}
+    end
+  end
+
+  # A menu item's entry with the address the menu shows for it: a chip made
+  # from the draft may know the person by the address alone.
+  defp shown_entry(%{entry: entry} = item),
+    do: Map.put(entry, :address, item[:address] || entry[:address])
+
+  # The chip of the line that is this suggestion's person, if they are in it:
+  # the same account, or the same address.
+  defp ticked_chip(line, entry) do
+    candidate = %{user: entry[:user], address: entry[:address]}
+    Enum.find(line, &same_person?(&1, candidate))
+  end
+
   # `manual: true` marks an address the person typed (kept on its chip for
   # the sources' `remember`), as against one picked or set by the host.
   defp add_entry(socket, role, entry, opts \\ []) do
-    %{recipients: recipients, chip_seq: seq} = socket.assigns
-    line = recipients[role]
-    max = ComposePipeline.max_recipients(role)
-
     case chip(entry, PhoenixKitInbox.internal_enabled?()) do
       [%{address: address} = chip] when is_binary(address) ->
-        cond do
-          Enum.any?(line, &same_person?(&1, chip)) ->
-            finish_add(socket, role)
-
-          length(line) >= max ->
-            assign(socket,
-              recipient_error: {role, Errors.message({:too_many_recipients, role, max})}
-            )
-
-          true ->
-            chip =
-              chip
-              |> Map.put(:key, "#{role}-#{seq}")
-              |> Map.put(:manual, opts[:manual] == true)
-
-            socket
-            |> assign(
-              recipients: Map.put(recipients, role, line ++ [chip]),
-              chip_seq: seq + 1,
-              open: Map.replace(socket.assigns.open, role, true)
-            )
-            |> finish_add(role)
-        end
+        add_chip(socket, role, chip, opts)
 
       _ ->
         socket
     end
+  end
+
+  defp add_chip(socket, role, chip, opts) do
+    line = socket.assigns.recipients[role]
+    max = ComposePipeline.max_recipients(role)
+
+    cond do
+      Enum.any?(line, &same_person?(&1, chip)) ->
+        finish_add(socket, role)
+
+      length(line) >= max ->
+        assign(socket,
+          recipient_error: {role, Errors.message({:too_many_recipients, role, max})}
+        )
+
+      true ->
+        append_chip(socket, role, chip, opts)
+    end
+  end
+
+  defp append_chip(socket, role, chip, opts) do
+    %{recipients: recipients, chip_seq: seq} = socket.assigns
+
+    chip =
+      chip
+      |> Map.put(:key, "#{role}-#{seq}")
+      |> Map.put(:manual, opts[:manual] == true)
+
+    recipients =
+      if socket.assigns.compact,
+        do: elsewhere_off(recipients, role, chip),
+        else: recipients
+
+    socket
+    |> assign(
+      recipients: Map.put(recipients, role, recipients[role] ++ [chip]),
+      chip_seq: seq + 1,
+      open: Map.replace(socket.assigns.open, role, true)
+    )
+    |> finish_add(role)
   end
 
   defp finish_add(socket, role) do
@@ -1710,15 +2126,16 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp same_person?(_, _), do: false
 
-  # A block holding people stays open: closing it would hide who gets the letter.
   defp toggle(socket, :signature) do
     if socket.assigns.signatures == [],
       do: socket,
       else: update(socket, :open, &Map.update!(&1, :signature, fn open -> not open end))
   end
 
+  # A block holding people stays open: closing it would hide who gets the letter.
   defp toggle(socket, role) do
     cond do
+      socket.assigns.all_lines -> socket
       socket.assigns.recipients[role] != [] -> socket
       socket.assigns.open[role] -> close_line(socket, role)
       true -> update(socket, :open, &Map.put(&1, role, true))
@@ -1820,11 +2237,29 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             class="select-sm"
           />
         </form>
-        <div :if={not (@editable? and length(@from_options) > 1)} class="flex flex-col gap-1">
-          <span class="text-sm font-medium">{gettext("From")}</span>
-          <span class="text-sm">{@option && @option.label}</span>
+        <div
+          :if={not (@editable? and length(@from_options) > 1)}
+          class={if(@compact, do: compact_row_class(), else: "flex flex-col gap-1")}
+        >
+          <span class={if(@compact, do: compact_label_class(), else: "text-sm font-medium")}>
+            {gettext("From")}
+          </span>
+          <span class={["text-sm", @compact && "min-w-0 pt-1.5"]}>
+            {@option && @option.label}
+            <span
+              :if={@compact and @reply_to}
+              id={"compose-#{@id}-reply-to"}
+              class="text-xs text-base-content/60"
+            >
+              · {gettext("Replies go to %{address}", address: @reply_to)}
+            </span>
+          </span>
         </div>
-        <p :if={@reply_to} id={"compose-#{@id}-reply-to"} class="text-xs text-base-content/60">
+        <p
+          :if={@reply_to && not (@compact and not (@editable? and length(@from_options) > 1))}
+          id={"compose-#{@id}-reply-to"}
+          class="text-xs text-base-content/60"
+        >
           {gettext("Replies go to %{address}", address: @reply_to)}
         </p>
         <p
@@ -1870,12 +2305,27 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         role="to"
         label={gettext("To")}
         line={line(assigns, :to)}
+        compact={@compact}
+        fit_height={@fit_height}
         target={@myself}
       />
 
-      <div class="flex flex-wrap items-center gap-1" role="group" aria-label={gettext("More fields")}>
-        <.block_button id={@id} block="cc" label={gettext("+ Cc")} open={@open.cc} target={@myself} />
+      <div
+        :if={not @all_lines or @signatures != []}
+        class="flex flex-wrap items-center gap-1"
+        role="group"
+        aria-label={gettext("More fields")}
+      >
         <.block_button
+          :if={not @all_lines}
+          id={@id}
+          block="cc"
+          label={gettext("+ Cc")}
+          open={@open.cc}
+          target={@myself}
+        />
+        <.block_button
+          :if={not @all_lines}
           id={@id}
           block="bcc"
           label={gettext("+ Bcc")}
@@ -1893,19 +2343,23 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       </div>
 
       <.recipients
-        :if={@open.cc}
+        :if={line_open?(assigns, :cc)}
         id={@id}
         role="cc"
         label={gettext("Cc")}
         line={line(assigns, :cc)}
+        compact={@compact}
+        fit_height={@fit_height}
         target={@myself}
       />
       <.recipients
-        :if={@open.bcc}
+        :if={line_open?(assigns, :bcc)}
         id={@id}
         role="bcc"
         label={gettext("Bcc")}
         line={line(assigns, :bcc)}
+        compact={@compact}
+        fit_height={@fit_height}
         target={@myself}
       />
 
@@ -1927,6 +2381,10 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         </div>
       </form>
 
+      <div :if={@before_subject != []} id={"compose-#{@id}-before-subject"}>
+        {render_slot(@before_subject, %{sending: @sending})}
+      </div>
+
       <.form
         for={%{}}
         id={"compose-#{@id}-form"}
@@ -1936,6 +2394,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         class="flex flex-col gap-3"
       >
         <.input
+          :if={not @compact}
           id={"compose-#{@id}-subject"}
           name="subject"
           type="text"
@@ -1943,10 +2402,24 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           value={@subject}
           maxlength={@subject_max}
         />
+        <div :if={@compact} class={compact_row_class()}>
+          <label class={compact_label_class()} for={"compose-#{@id}-subject"}>
+            {gettext("Subject")}
+          </label>
+          <.input
+            id={"compose-#{@id}-subject"}
+            name="subject"
+            type="text"
+            value={@subject}
+            maxlength={@subject_max}
+            class="input-sm"
+          />
+        </div>
         <.textarea
           id={"compose-#{@id}-body"}
           name="body"
-          label={gettext("Message")}
+          label={if(@compact, do: nil, else: gettext("Message"))}
+          aria-label={gettext("Message")}
           value={@body}
           rows="10"
         />
@@ -2053,17 +2526,26 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           {gettext("The letter was sent.")}
         </p>
         <p
-          :if={@summary}
+          :if={@summary && not @compact}
           id={"compose-#{@id}-summary"}
           class="text-sm text-base-content/70"
           data-sending={@sending || nil}
         >
           {summary_text(@summary)}
         </p>
+        <%!-- The compact layout's rows say who gets it; this says the rest. --%>
+        <p
+          :if={@summary && @compact && notice_text(@summary) != ""}
+          id={"compose-#{@id}-summary-notice"}
+          class="text-sm text-base-content/70"
+          data-sending={@sending || nil}
+        >
+          {notice_text(@summary)}
+        </p>
       </div>
 
-      <div class="flex items-center gap-2">
-        <div :if={@footer_start != []} id={"compose-#{@id}-footer-start"}>
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <div :if={@footer_start != []} id={"compose-#{@id}-footer-start"} class="min-w-0">
           {render_slot(@footer_start, %{sending: @sending})}
         </div>
         <span class="flex-1"></span>
@@ -2107,7 +2589,30 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       list: list,
       error: error,
       picker?: assigns.recipient_sources != [],
-      picker_open?: match?(%{kind: :picker}, list)
+      picker_open?: match?(%{kind: :picker}, list),
+      ticked:
+        if(match?(%{kind: :picker}, list),
+          do:
+            for(
+              %{id: id} = item <- list.items,
+              ticked_chip(assigns.recipients[role], shown_entry(item)),
+              into: MapSet.new(),
+              do: id
+            ),
+          else: MapSet.new()
+        ),
+      elsewhere:
+        if(match?(%{kind: :picker}, list),
+          do:
+            for(
+              %{id: id} = item <- list.items,
+              other <- [:to, :cc, :bcc] -- [role],
+              ticked_chip(assigns.recipients[other], shown_entry(item)),
+              into: %{},
+              do: {id, other}
+            ),
+          else: %{}
+        )
     }
   end
 
@@ -2117,11 +2622,123 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         "A recipient here has no address, so nothing can be sent to them. Remove them to send."
       )
 
+  # A row of the compact layout: the label in a column of its own width on
+  # every row, so the fields line up; on a narrow screen the same.
+  defp compact_row_class, do: "grid grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-x-2 gap-y-1"
+  defp compact_label_class, do: "pt-1.5 text-sm font-medium text-base-content/70"
+
   attr(:id, :string, required: true)
   attr(:role, :string, required: true)
   attr(:label, :string, required: true)
   attr(:line, :map, required: true)
+  attr(:compact, :boolean, default: false)
+  attr(:fit_height, :boolean, default: false)
   attr(:target, :any, required: true)
+
+  defp recipients(%{compact: true} = assigns) do
+    ~H"""
+    <div id={"compose-#{@id}-#{@role}"} class={compact_row_class()}>
+      <label
+        class={compact_label_class()}
+        id={"compose-#{@id}-#{@role}-label"}
+        for={"compose-#{@id}-#{@role}-input"}
+      >
+        {@label}
+      </label>
+      <%!-- One field: the chips, the input after them, «+» at its end. The
+           lists hang under it, over the form: they are out of the flow, so
+           the form keeps its height to the pixel. --%>
+      <%!-- One wrapper holds the field, «+» and the lists: a press anywhere in
+           it is inside. The click-away is its alone — LiveView sends it
+           before the click's own event, so on «+» (inside) it would close the
+           menu just before «+» opens it again. Only while a list is open, so
+           that a page is not told of every click. --%>
+      <div
+        class="relative min-w-0"
+        phx-click-away={@line.list && "close_picker"}
+        phx-window-keydown={@line.list && close_list(@target, @id, @role)}
+        phx-key={@line.list && "Escape"}
+        phx-target={@target}
+      >
+      <div class={[
+        "flex min-w-0 items-start gap-1 rounded-field border bg-base-100 px-1.5 py-1",
+        "focus-within:border-primary",
+        if(@line.error, do: "border-error", else: "border-base-300")
+      ]}>
+        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+          <ul class="contents" role="list" aria-labelledby={"compose-#{@id}-#{@role}-label"}>
+            <.recipient_chip :for={chip <- @line.chips} id={@id} chip={chip} target={@target} />
+          </ul>
+          <form
+            id={"compose-#{@id}-#{@role}-form"}
+            class="flex min-w-16 flex-1 items-center gap-1"
+            phx-change="suggest"
+            phx-submit="add"
+            phx-target={@target}
+          >
+            <input type="hidden" name="role" value={@role} />
+            <input
+              id={"compose-#{@id}-#{@role}-input"}
+              name="query"
+              type="text"
+              value={@line.query}
+              placeholder={if(@line.chips == [], do: gettext("Name or email"))}
+              autocomplete="off"
+              maxlength="320"
+              phx-debounce="300"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={to_string(@line.list != nil and @line.list.items != [])}
+              aria-controls={"compose-#{@id}-#{@role}-suggestions"}
+              class="h-6 min-w-0 flex-1 bg-transparent text-sm outline-none"
+            />
+          </form>
+        </div>
+        <button
+          :if={@line.picker?}
+          type="button"
+          id={"compose-#{@id}-#{@role}-picker"}
+          class={["btn btn-ghost btn-xs btn-square shrink-0", @line.picker_open? && "btn-active"]}
+          aria-label={gettext("+ More addresses")}
+          title={gettext("+ More addresses")}
+          aria-haspopup="true"
+          aria-expanded={to_string(@line.picker_open?)}
+          aria-controls={@line.picker_open? && "compose-#{@id}-#{@role}-menu"}
+          phx-click="toggle_picker"
+          phx-value-role={@role}
+          phx-target={@target}
+        >
+          <.icon name="hero-plus" class="size-4" />
+        </button>
+      </div>
+      <div
+        :if={@line.list && @line.list.kind != :picker}
+        class="absolute inset-x-0 top-full z-30 mt-1 rounded-box bg-base-100 shadow-lg"
+      >
+        <.suggestions id={@id} role={@role} list={@line.list} target={@target} />
+      </div>
+      <.tick_menu
+        :if={@line.list && @line.list.kind == :picker}
+        id={@id}
+        role={@role}
+        list={@line.list}
+        ticked={@line.ticked}
+        elsewhere={@line.elsewhere}
+        fit_height={@fit_height}
+        target={@target}
+      />
+      </div>
+      <p
+        :if={@line.error}
+        id={"compose-#{@id}-#{@role}-error"}
+        role="alert"
+        class="col-start-2 text-xs text-error"
+      >
+        {@line.error}
+      </p>
+    </div>
+    """
+  end
 
   defp recipients(assigns) do
     ~H"""
@@ -2137,30 +2754,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         class="flex flex-wrap items-center gap-1"
         aria-labelledby={"compose-#{@id}-#{@role}-label"}
       >
-        <li
-          :for={chip <- @line.chips}
-          id={"compose-#{@id}-chip-#{chip.key}"}
-          class={["badge badge-outline gap-1", unresolved?(chip) && "badge-error"]}
-          data-route={chip.route}
-          data-unresolved={unresolved?(chip) || nil}
-          title={chip.address}
-        >
-          <.internal_marker :if={chip.route == :internal} />
-          {chip_text(chip)}
-          <span :if={labelled?(chip)} data-chip-address class="text-xs opacity-70">
-            {chip.address}
-          </span>
-          <button
-            type="button"
-            class="btn btn-ghost btn-circle btn-xs size-4 min-h-0"
-            aria-label={gettext("Remove %{name}", name: chip_name(chip))}
-            phx-click="remove"
-            phx-value-key={chip.key}
-            phx-target={@target}
-          >
-            <.icon name="hero-x-mark" class="w-3 h-3" />
-          </button>
-        </li>
+        <.recipient_chip :for={chip <- @line.chips} id={@id} chip={chip} target={@target} />
       </ul>
       <form
         id={"compose-#{@id}-#{@role}-form"}
@@ -2214,6 +2808,242 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         </.button>
       </div>
     </div>
+    """
+  end
+
+  # Escape closes an open list, through a *window* binding on the wrapper that
+  # holds the field and the lists, only while one is open (one list at a time).
+  # Not a `phx-keydown` on the fields: LiveView runs every event of an element
+  # with a binding through that element's `phx-debounce` cycle, so a key
+  # pressed within 300 ms of the last typed character would push out the
+  # field's pending `phx-change` and the server would never hear the last
+  # characters. A key on an element without a binding goes to the window
+  # bindings, which are debounced on the wrapper — it has no `phx-debounce` —
+  # and the field's own cycle is left alone. Inside a dialog the same Escape
+  # also reaches the dialog: the module has no script to stop it.
+  #
+  # Closes the open list (the menu, or the typed suggestions) and gives the
+  # focus back to the line's field.
+  defp close_list(target, id, role) do
+    "close_picker"
+    |> JS.push(target: target)
+    |> JS.focus(to: "#compose-#{id}-#{role}-input")
+  end
+
+  defp tab_click(group, target, id, role) do
+    "picker_tab"
+    |> JS.push(value: %{group: group}, target: target)
+    |> JS.focus(to: "#compose-#{id}-#{role}-menu-q")
+  end
+
+  # An account the menu found no address for: a letter to it could not go, so
+  # its row is shown and cannot be ticked.
+  defp no_address?(item), do: is_nil(item[:address])
+
+  defp role_label(:to), do: gettext("To")
+  defp role_label(:cc), do: gettext("Cc")
+  defp role_label(:bcc), do: gettext("Bcc")
+
+  attr(:id, :string, required: true)
+  attr(:role, :string, required: true)
+  attr(:list, :map, required: true)
+  attr(:ticked, :any, required: true)
+  attr(:elsewhere, :map, default: %{})
+  attr(:fit_height, :boolean, default: false)
+  attr(:target, :any, required: true)
+
+  # The menu behind «+» of the compact layout: tabs of the sources' groups, a
+  # field that searches the sources, and the people — a press ticks one into
+  # the line or out of it. Core's `PkFitHeight` hook keeps it no taller than
+  # the room left under its field in the dialog (half the screen without the
+  # hook). It stays open until «Done» or a press outside it
+  # (Escape is the dialog's, when the form stands in one).
+  defp tick_menu(assigns) do
+    tab = assigns.list[:tab]
+
+    names =
+      assigns.list.items |> Enum.map(& &1.entry.group) |> Enum.uniq() |> Enum.reject(&is_nil/1)
+
+    tab = if tab in names, do: tab
+
+    items =
+      if tab,
+        do: Enum.filter(assigns.list.items, &(&1.entry.group == tab)),
+        else: assigns.list.items
+
+    assigns =
+      assigns
+      |> assign(:tab, tab)
+      |> assign(:names, names)
+      |> assign(:groups, groups(items))
+      |> assign(:query, assigns.list[:query] || "")
+
+    ~H"""
+    <div
+      id={"compose-#{@id}-#{@role}-menu"}
+      phx-hook={@fit_height && "PkFitHeight"}
+      data-fit-min={@fit_height && "200"}
+      class="absolute inset-x-0 top-full z-30 mt-1 flex max-h-[50dvh] flex-col gap-2 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+    >
+      <div :if={@names != []} class="flex flex-wrap items-center gap-1" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={to_string(@tab == nil)}
+          class={["btn btn-xs", if(@tab == nil, do: "btn-primary", else: "btn-ghost")]}
+          phx-click={tab_click("", @target, @id, @role)}
+        >
+          {gettext("All")}
+        </button>
+        <button
+          :for={name <- @names}
+          type="button"
+          role="tab"
+          aria-selected={to_string(@tab == name)}
+          class={["btn btn-xs", if(@tab == name, do: "btn-primary", else: "btn-ghost")]}
+          phx-click={tab_click(name, @target, @id, @role)}
+        >
+          {name}
+        </button>
+      </div>
+      <form
+        id={"compose-#{@id}-#{@role}-menu-search"}
+        phx-change="picker_search"
+        phx-submit="picker_search"
+        phx-target={@target}
+      >
+        <label class="input input-sm flex w-full items-center gap-2">
+          <.icon name="hero-magnifying-glass" class="size-4 opacity-60" />
+          <input
+            type="search"
+            id={"compose-#{@id}-#{@role}-menu-q"}
+            name="q"
+            value={@query}
+            phx-mounted={JS.focus()}
+            class="grow"
+            placeholder={gettext("Name or email")}
+            autocomplete="off"
+            maxlength="320"
+            phx-debounce="300"
+            aria-label={gettext("Name or email")}
+          />
+        </label>
+      </form>
+      <p :if={@groups == []} role="status" class="px-1 text-sm text-base-content/60">
+        {gettext("No addresses found.")}
+      </p>
+      <div
+        :if={@groups != []}
+        id={"compose-#{@id}-#{@role}-suggestions"}
+        class="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        role="listbox"
+        aria-multiselectable="true"
+      >
+        <div :for={{group, items} <- @groups} role="group" aria-label={group}>
+          <div
+            :if={group && @tab == nil}
+            class="px-2 pt-1 text-xs font-semibold uppercase tracking-wide text-base-content/60"
+          >
+            {group}
+          </div>
+          <button
+            :for={item <- items}
+            type="button"
+            id={"compose-#{@id}-#{@role}-tick-#{item.id}"}
+            role="option"
+            aria-selected={to_string(MapSet.member?(@ticked, item.id))}
+            disabled={no_address?(item)}
+            class={[
+              "flex w-full items-center gap-2 rounded-field px-2 py-1.5 text-left text-sm hover:bg-base-200",
+              MapSet.member?(@ticked, item.id) && "bg-primary/10",
+              no_address?(item) && "cursor-not-allowed opacity-60"
+            ]}
+            phx-click="tick"
+            phx-value-id={item.id}
+            phx-target={@target}
+          >
+            <span class={[
+              "flex size-4 shrink-0 items-center justify-center rounded border",
+              if(MapSet.member?(@ticked, item.id),
+                do: "border-primary bg-primary text-primary-content",
+                else: "border-base-content/30"
+              )
+            ]}>
+              <.icon :if={MapSet.member?(@ticked, item.id)} name="hero-check" class="size-3" />
+            </span>
+            <span class="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
+              <span class="truncate">{item.entry.label || item[:address]}</span>
+              <span :if={item.entry[:note]} class="badge badge-ghost badge-sm">
+                {item.entry.note}
+              </span>
+              <span
+                :if={no_address?(item)}
+                data-menu-no-address
+                class="text-xs text-error"
+              >
+                {gettext("No address")}
+              </span>
+              <span
+                :if={item.entry.label && item[:address]}
+                data-menu-address
+                class="truncate text-xs text-base-content/60"
+              >
+                {item[:address]}
+              </span>
+            </span>
+            <span
+              :if={@elsewhere[item.id]}
+              class="shrink-0 text-xs text-base-content/50"
+              data-menu-elsewhere
+            >
+              {role_label(@elsewhere[item.id])}
+            </span>
+          </button>
+        </div>
+      </div>
+      <div class="flex justify-end">
+        <button
+          type="button"
+          id={"compose-#{@id}-#{@role}-menu-done"}
+          class="btn btn-primary btn-xs"
+          phx-click={close_list(@target, @id, @role)}
+        >
+          {gettext("Done")}
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:id, :string, required: true)
+  attr(:chip, :map, required: true)
+  attr(:target, :any, required: true)
+
+  defp recipient_chip(assigns) do
+    ~H"""
+    <li
+      id={"compose-#{@id}-chip-#{@chip.key}"}
+      class={["badge badge-outline max-w-full gap-1", unresolved?(@chip) && "badge-error"]}
+      data-route={@chip.route}
+      data-unresolved={unresolved?(@chip) || nil}
+      title={@chip.address}
+    >
+      <.internal_marker :if={@chip.route == :internal} />
+      <span class="min-w-0 truncate">{chip_text(@chip)}</span>
+      <span :if={labelled?(@chip)} data-chip-address class="min-w-0 truncate text-xs opacity-70">
+        {@chip.address}
+      </span>
+      <button
+        type="button"
+        class="btn btn-ghost btn-circle btn-xs size-4 min-h-0 shrink-0"
+        aria-label={gettext("Remove %{name}", name: chip_name(@chip))}
+        phx-click="remove"
+        phx-value-key={@chip.key}
+        phx-target={@target}
+      >
+        <.icon name="hero-x-mark" class="w-3 h-3" />
+      </button>
+    </li>
     """
   end
 
@@ -2311,6 +3141,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   defp block_button(assigns) do
     ~H"""
     <.button
+      id={"compose-#{@id}-toggle-#{@block}"}
       type="button"
       variant="outline"
       size="xs"
