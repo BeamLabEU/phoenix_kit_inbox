@@ -268,11 +268,13 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
 
       assert has_element?(view, "#compose-demo-to ul[role=list]")
       assert attr(view, "#compose-demo-to-picker", "aria-haspopup") == ["true"]
-      assert attr(view, "#compose-demo-to-picker", "aria-controls") == ["compose-demo-to-menu"]
       assert attr(view, "#compose-demo-to-picker", "aria-expanded") == ["false"]
+      assert attr(view, "#compose-demo-to-picker", "aria-controls") == []
 
       open_menu(view, "to")
       assert attr(view, "#compose-demo-to-picker", "aria-expanded") == ["true"]
+      assert attr(view, "#compose-demo-to-picker", "aria-controls") == ["compose-demo-to-menu"]
+      assert has_element?(view, "#compose-demo-to-menu")
     end
   end
 
@@ -422,27 +424,61 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
       refute has_element?(view, "[phx-click-away]")
     end
 
-    test "a press outside closes it, and Escape too; the typed text stays", %{conn: conn} = ctx do
+    test "a press outside closes it", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft(ctx))
       open_menu(view, "to")
       forge(view, "close_picker", %{})
       refute menu?(view, "to")
+    end
 
+    # LiveView calls a `phx-keydown` only on the element the key was pressed
+    # on, never on an ancestor: so the binding is on what can hold the focus.
+    test "Escape closes it from every element that can have the focus", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(ctx))
+      refute has_element?(view, "[phx-key=Escape]")
+
+      focusable = [
+        "#compose-demo-to-menu-q",
+        ~s(#compose-demo-to-menu [role=tab][aria-selected=true]),
+        {"#compose-demo-to-menu button[role=option]", "Dave"},
+        "#compose-demo-to-menu-done",
+        "#compose-demo-to-input",
+        "#compose-demo-to-picker"
+      ]
+
+      for target <- focusable do
+        {selector, text} = if is_tuple(target), do: target, else: {target, nil}
+
+        open_menu(view, "to")
+        assert menu?(view, "to")
+        assert has_element?(view, "#{selector}[phx-key=Escape][phx-keydown]", text), selector
+        refute has_element?(view, "#compose-demo-to [phx-click-away][phx-keydown]")
+
+        view |> element(selector, text) |> render_keydown(%{"key" => "Escape"})
+        refute menu?(view, "to"), "Escape on #{selector} left the menu open"
+        refute has_element?(view, "[phx-key=Escape]")
+      end
+    end
+
+    test "Escape closes it and what was ticked stays", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(ctx))
       open_menu(view, "to")
-      assert has_element?(view, ~s(#compose-demo-to [phx-key=Escape][phx-keydown]))
+      tick(view, "to", "Dave")
 
-      view
-      |> element("#compose-demo-to [phx-keydown]")
-      |> render_keydown(%{"key" => "Escape"})
+      view |> element("#compose-demo-to-menu-q") |> render_keydown(%{"key" => "Escape"})
 
       refute menu?(view, "to")
+      assert Enum.any?(chips(view, "to"), &(&1 =~ "Dave"))
     end
 
     test "a tab shows one group, the field searches", %{conn: conn} = ctx do
       view = mount_form(ctx, conn, draft(ctx))
       open_menu(view, "to")
 
-      view |> element("#compose-demo-to-menu [role=tab]", "Client") |> render_click()
+      view
+      |> element("#compose-demo-to-menu [role=tab]", "Client")
+      |> render_click()
+
       rows = texts(view, "#compose-demo-to-menu button[role=option]")
       assert length(rows) == 2
       assert Enum.all?(rows, &(&1 =~ ~r/Carol|Dave/))
@@ -489,7 +525,7 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
       assert has_element?(view, "#compose-demo-to-menu button[disabled]", "Ghost")
       assert has_element?(view, "#compose-demo-to-menu [data-menu-no-address]", "No address")
 
-      [id] = attr(view, "#compose-demo-to-menu button[role=option]", "id")
+      [id] = attr(view, "#compose-demo-to-menu button[role=option]:first-of-type", "id")
       forge(view, "tick", %{"id" => String.replace_prefix(id, "compose-demo-to-tick-", "")})
 
       assert chips(view, "to") == []
@@ -558,8 +594,10 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
       render_change(view |> form("#compose-demo-to-form"), %{"query" => "dav"})
       assert has_element?(view, "#compose-demo-to-suggestions")
 
-      view |> element("#compose-demo-to [phx-keydown]") |> render_keydown(%{"key" => "Escape"})
+      assert has_element?(view, "#compose-demo-to-input[phx-key=Escape]")
+      view |> element("#compose-demo-to-input") |> render_keydown(%{"key" => "Escape"})
       refute has_element?(view, "#compose-demo-to-suggestions")
+      assert attr(view, "#compose-demo-to-input", "value") == ["dav"]
     end
   end
 

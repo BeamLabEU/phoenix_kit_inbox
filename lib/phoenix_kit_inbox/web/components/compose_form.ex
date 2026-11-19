@@ -344,10 +344,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     socket =
       socket
       |> assign_options(assigns)
-      |> reconcile_draft(
-        normalize_draft(assigns[:draft] || socket.assigns[:source_draft]),
-        assigns[:letter_key]
-      )
+      |> reconcile_draft(assigns)
 
     # Ask only after the scope gate and draft have been updated. An old list
     # must not survive a source or permission change with selectable ids.
@@ -374,33 +371,56 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
   end
 
-  # The draft the host offers against the one the form holds.
-  defp reconcile_draft(socket, draft, letter_key) do
-    # A draft a `retext` replaced is still the letter the form holds.
-    draft = if replaced_by_retext?(socket, draft), do: socket.assigns.source_draft, else: draft
-    socket = forget_pending_draft(socket, draft)
-    source = socket.assigns[:source_draft]
+  # The draft the host offers against the one the form holds. What it is:
+  #
+  #   * a new `letter_key` (a binary that differs from the one held) is a new
+  #     letter, whatever the draft — it is compared first;
+  #   * the draft the form holds, or one a `retext` replaced, is the same
+  #     letter and nothing is started;
+  #   * another draft under the same key is another text for the same letter
+  #     (`retext/3`) — unless the letter went: then it is a new letter;
+  #   * anything else is a new letter.
+  #
+  # An update with no draft leaves the draft and the key as they are.
+  defp reconcile_draft(socket, assigns) do
+    draft = normalize_draft(assigns[:draft] || socket.assigns[:source_draft])
+    key = if assigns[:draft], do: assigns[:letter_key], else: socket.assigns[:letter_key]
 
-    cond do
-      not socket.assigns.allowed? ->
-        assign(socket, list: nil)
-
-      draft == source ->
-        refresh_for_scope(socket)
-
-      same_letter?(socket, letter_key) ->
-        retext(socket, draft, false)
-
-      # A letter on its way is not the parent's to take back: its text, its
-      # key and its answer stay until it is over. The draft is kept for then,
-      # for a parent that does not say it twice.
-      socket.assigns[:sending] == true ->
-        assign(socket, pending_draft: draft, pending_key: letter_key)
-
-      true ->
-        socket |> open_draft(draft) |> assign(letter_key: letter_key)
+    case draft_verdict(socket, draft, key) do
+      :closed -> assign(socket, list: nil)
+      :same -> socket |> forget_pending_draft() |> adopt_key(key) |> refresh_for_scope()
+      :retext -> retext(socket, draft, false)
+      :new -> new_letter(socket, draft, key)
     end
   end
+
+  defp draft_verdict(socket, draft, key) do
+    held = socket.assigns[:letter_key]
+
+    cond do
+      not socket.assigns.allowed? -> :closed
+      is_binary(key) and is_binary(held) and key != held -> :new
+      draft == socket.assigns[:source_draft] or replaced_by_retext?(socket, draft) -> :same
+      is_binary(key) and key == held and socket.assigns[:sent] != true -> :retext
+      true -> :new
+    end
+  end
+
+  # A key given for the first time to a letter the form already holds names it.
+  defp adopt_key(socket, key) do
+    if is_binary(key) and is_nil(socket.assigns[:letter_key]),
+      do: assign(socket, :letter_key, key),
+      else: socket
+  end
+
+  # A letter on its way is not the parent's to take back: its text, its key and
+  # its answer stay until it is over. The draft is kept for then, for a parent
+  # that does not say it twice (and it wins over a retext that waits too).
+  defp new_letter(%{assigns: %{sending: true}} = socket, draft, key),
+    do: assign(socket, pending_draft: draft, pending_key: key, pending_retext: nil)
+
+  defp new_letter(socket, draft, key),
+    do: socket |> open_draft(draft) |> assign(letter_key: key)
 
   defp refresh_for_scope(socket) do
     if socket.assigns[:options_scope] != socket.assigns.scope,
@@ -408,25 +428,40 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       else: socket
   end
 
-  # `letter_key`: the host says which letter a draft is. The same key with
-  # another draft is another text for the letter the form holds (what a
-  # `retext` does); a new key, or none, is a new letter.
-  defp same_letter?(socket, letter_key),
-    do: is_binary(letter_key) and letter_key == socket.assigns[:letter_key]
-
   # Digests of the drafts a `retext` took the letter from; compared only when
-  # there are any, as a draft may carry the bytes of its files.
+  # there are any. The digest leaves out what a draft carries for its files
+  # (their bytes may be big): the text, the people and the host's data say
+  # which letter it is.
   defp replaced_by_retext?(%{assigns: %{retext_seen: [_ | _] = seen}}, draft),
     do: draft_digest(draft) in seen
 
   defp replaced_by_retext?(_socket, _draft), do: false
 
-  defp draft_digest(draft), do: :erlang.md5(:erlang.term_to_binary(draft))
+  defp draft_digest(%ComposeDraft{} = draft) do
+    files =
+      for file <- List.wrap(draft.attachments),
+          is_map(file),
+          do: Map.take(file, [:id, :file_uuid, :name, :filename])
+
+    :erlang.md5(:erlang.term_to_binary(%{draft | attachments: files}))
+  end
+
+  # How many replaced drafts the form remembers (the newest).
+  @retext_seen_max 32
+
+  defp remember_replaced(seen, old),
+    do: Enum.take(Enum.uniq([draft_digest(old) | seen]), @retext_seen_max)
 
   # Another text for the letter the form holds: the person's recipients, files,
   # key and typed text stay; the draft's own text and defaults come in. While a
-  # letter is on its way it waits for the answer (and is dropped if the letter
-  # went: that letter is over).
+  # letter is on its way it waits for the answer (applied after an error, and
+  # dropped if the letter went: that letter is over); one that was sent takes
+  # no other text.
+  defp retext(%{assigns: %{sent: true}} = socket, _draft, _remember?), do: socket
+
+  defp retext(%{assigns: %{sending: true, pending_draft: %ComposeDraft{}}} = socket, _d, _r),
+    do: socket
+
   defp retext(%{assigns: %{sending: true}} = socket, draft, remember?),
     do: assign(socket, :pending_retext, {draft, remember?})
 
@@ -442,7 +477,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     socket
     |> assign(
       source_draft: draft,
-      retext_seen: if(remember?, do: [draft_digest(old) | seen], else: seen),
+      retext_seen: if(remember?, do: remember_replaced(seen, old), else: seen),
       pending_draft: nil,
       pending_retext: nil,
       subject: text(draft.subject),
@@ -470,11 +505,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   # A parent that is back to the draft the form has has taken back what it
   # offered during the send.
-  defp forget_pending_draft(socket, draft) do
-    if draft == socket.assigns[:source_draft],
-      do: assign(socket, :pending_draft, nil),
-      else: socket
-  end
+  defp forget_pending_draft(socket), do: assign(socket, :pending_draft, nil)
 
   # The draft the parent offered while a send ran, once the answer is in (the
   # letter went, or it failed): the form opens it as it would have then. Not
@@ -1370,6 +1401,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     |> assign(
       sending: false,
       sent: true,
+      # The letter went: the drafts it was written from no longer name it.
+      retext_seen: [],
       send_upload_refs: [],
       replayed: replayed?(message, socket.assigns[:send_started]),
       send_ref: nil,
@@ -2543,6 +2576,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   attr(:target, :any, required: true)
 
   defp recipients(%{compact: true} = assigns) do
+    assigns = assign(assigns, :esc, escape_attrs(assigns.line.list, assigns))
+
     ~H"""
     <div id={"compose-#{@id}-#{@role}"} class={compact_row_class()}>
       <label
@@ -2563,8 +2598,6 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       <div
         class="relative min-w-0"
         phx-click-away={@line.list && "close_picker"}
-        phx-keydown={@line.list && close_list(@target, @id, @role)}
-        phx-key={@line.list && "Escape"}
         phx-target={@target}
       >
       <div class={[
@@ -2598,6 +2631,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
               aria-expanded={to_string(@line.list != nil and @line.list.items != [])}
               aria-controls={"compose-#{@id}-#{@role}-suggestions"}
               class="h-6 min-w-0 flex-1 bg-transparent text-sm outline-none"
+              {@esc}
             />
           </form>
         </div>
@@ -2610,7 +2644,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           title={gettext("+ More addresses")}
           aria-haspopup="true"
           aria-expanded={to_string(@line.picker_open?)}
-          aria-controls={"compose-#{@id}-#{@role}-menu"}
+          aria-controls={@line.picker_open? && "compose-#{@id}-#{@role}-menu"}
+          {@esc}
           phx-click="toggle_picker"
           phx-value-role={@role}
           phx-target={@target}
@@ -2632,6 +2667,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
         ticked={@line.ticked}
         elsewhere={@line.elsewhere}
         fit_height={@fit_height}
+        esc={@esc}
         target={@target}
       />
       </div>
@@ -2718,6 +2754,17 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     """
   end
 
+  # Escape closes an open list. LiveView calls an element's `phx-keydown` only
+  # when that element is the target of the key — it does not look at ancestors —
+  # so the binding goes on the elements that can hold the focus (the line's
+  # field, «+», and in the menu its field, tabs, rows and «Done»), and only
+  # while a list is open. Inside a dialog the same key also reaches the dialog:
+  # the module has no script of its own to stop it.
+  defp escape_attrs(nil, _assigns), do: %{}
+
+  defp escape_attrs(_list, %{target: target, id: id, role: role}),
+    do: %{"phx-keydown": close_list(target, id, role), "phx-key": "Escape"}
+
   # Closes the open list (the menu, or the typed suggestions) and gives the
   # focus back to the line's field.
   defp close_list(target, id, role) do
@@ -2746,6 +2793,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   attr(:ticked, :any, required: true)
   attr(:elsewhere, :map, default: %{})
   attr(:fit_height, :boolean, default: false)
+  attr(:esc, :map, default: %{})
   attr(:target, :any, required: true)
 
   # The menu behind «+» of the compact layout: tabs of the sources' groups, a
@@ -2788,6 +2836,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           aria-selected={to_string(@tab == nil)}
           class={["btn btn-xs", if(@tab == nil, do: "btn-primary", else: "btn-ghost")]}
           phx-click={tab_click("", @target, @id, @role)}
+          {@esc}
         >
           {gettext("All")}
         </button>
@@ -2798,6 +2847,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           aria-selected={to_string(@tab == name)}
           class={["btn btn-xs", if(@tab == name, do: "btn-primary", else: "btn-ghost")]}
           phx-click={tab_click(name, @target, @id, @role)}
+          {@esc}
         >
           {name}
         </button>
@@ -2822,6 +2872,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             maxlength="320"
             phx-debounce="300"
             aria-label={gettext("Name or email")}
+            {@esc}
           />
         </label>
       </form>
@@ -2857,6 +2908,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             phx-click="tick"
             phx-value-id={item.id}
             phx-target={@target}
+            {@esc}
           >
             <span class={[
               "flex size-4 shrink-0 items-center justify-center rounded border",
@@ -2903,6 +2955,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           id={"compose-#{@id}-#{@role}-menu-done"}
           class="btn btn-primary btn-xs"
           phx-click={close_list(@target, @id, @role)}
+          {@esc}
         >
           {gettext("Done")}
         </button>
