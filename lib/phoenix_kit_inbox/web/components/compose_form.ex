@@ -321,19 +321,35 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
     socket =
       socket
-      |> assign(Map.take(assigns, ~w(id scope around_send authorize_attachments)a))
-      |> ensure_upload()
-      |> assign_list(assigns, :recipient_sources)
-      |> assign_member_suggestions(assigns)
-      |> assign_own_upload(assigns)
-      |> assign_all_lines(assigns)
-      |> assign_compact(assigns)
-      |> assign_list(assigns, :before_subject)
-      |> assign_list(assigns, :attachment_picker)
-      |> assign_list(assigns, :footer_start)
-      |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
+      |> assign_options(assigns)
+      |> reconcile_draft(normalize_draft(assigns[:draft] || socket.assigns[:source_draft]))
 
-    draft = normalize_draft(assigns[:draft] || socket.assigns[:source_draft])
+    # Ask only after the scope gate and draft have been updated. An old list
+    # must not survive a source or permission change with selectable ids.
+    if previous_suggestions != suggestion_options(socket),
+      do: {:ok, resuggest(socket)},
+      else: {:ok, socket}
+  end
+
+  # What the host sets on the form besides the draft; an attribute it leaves
+  # out keeps its value.
+  defp assign_options(socket, assigns) do
+    socket
+    |> assign(Map.take(assigns, ~w(id scope around_send authorize_attachments)a))
+    |> ensure_upload()
+    |> assign_list(assigns, :recipient_sources)
+    |> assign_member_suggestions(assigns)
+    |> assign_own_upload(assigns)
+    |> assign_all_lines(assigns)
+    |> assign_compact(assigns)
+    |> assign_list(assigns, :before_subject)
+    |> assign_list(assigns, :attachment_picker)
+    |> assign_list(assigns, :footer_start)
+    |> then(&assign(&1, :allowed?, Scope.can?(&1.assigns.scope, "inbox")))
+  end
+
+  # The draft the host offers against the one the form holds.
+  defp reconcile_draft(socket, draft) do
     # The draft a `retext` replaced is still the letter the form holds.
     draft =
       if draft == socket.assigns[:retext_origin], do: socket.assigns.source_draft, else: draft
@@ -341,32 +357,25 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
     socket = forget_pending_draft(socket, draft)
     scope_changed? = socket.assigns[:options_scope] != socket.assigns.scope
 
-    socket =
-      cond do
-        not socket.assigns.allowed? ->
-          assign(socket, list: nil)
+    cond do
+      not socket.assigns.allowed? ->
+        assign(socket, list: nil)
 
-        # A letter on its way is not the parent's to take back: its text, its
-        # key and its answer stay until it is over. The draft is kept for then,
-        # for a parent that does not say it twice.
-        draft != socket.assigns[:source_draft] and socket.assigns[:sending] == true ->
-          assign(socket, :pending_draft, draft)
+      # A letter on its way is not the parent's to take back: its text, its
+      # key and its answer stay until it is over. The draft is kept for then,
+      # for a parent that does not say it twice.
+      draft != socket.assigns[:source_draft] and socket.assigns[:sending] == true ->
+        assign(socket, :pending_draft, draft)
 
-        draft != socket.assigns[:source_draft] ->
-          open_draft(socket, draft)
+      draft != socket.assigns[:source_draft] ->
+        open_draft(socket, draft)
 
-        scope_changed? ->
-          socket |> assign_sender(socket.assigns.from) |> refresh_summary()
+      scope_changed? ->
+        socket |> assign_sender(socket.assigns.from) |> refresh_summary()
 
-        true ->
-          socket
-      end
-
-    # Ask only after the scope gate and draft have been updated. An old list
-    # must not survive a source or permission change with selectable ids.
-    if previous_suggestions != suggestion_options(socket),
-      do: {:ok, resuggest(socket)},
-      else: {:ok, socket}
+      true ->
+        socket
+    end
   end
 
   defp suggestion_options(socket),
@@ -1822,44 +1831,53 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   defp add_entry(socket, role, entry, opts \\ []) do
-    %{recipients: recipients, chip_seq: seq} = socket.assigns
-    line = recipients[role]
-    max = ComposePipeline.max_recipients(role)
-
     case chip(entry) do
       [%{address: address} = chip] when is_binary(address) ->
-        cond do
-          Enum.any?(line, &same_person?(&1, chip)) ->
-            finish_add(socket, role)
-
-          length(line) >= max ->
-            assign(socket,
-              recipient_error: {role, Errors.message({:too_many_recipients, role, max})}
-            )
-
-          true ->
-            chip =
-              chip
-              |> Map.put(:key, "#{role}-#{seq}")
-              |> Map.put(:manual, opts[:manual] == true)
-
-            recipients =
-              if socket.assigns.compact,
-                do: elsewhere_off(recipients, role, chip),
-                else: recipients
-
-            socket
-            |> assign(
-              recipients: Map.put(recipients, role, line ++ [chip]),
-              chip_seq: seq + 1,
-              open: Map.replace(socket.assigns.open, role, true)
-            )
-            |> finish_add(role)
-        end
+        add_chip(socket, role, chip, opts)
 
       _ ->
         socket
     end
+  end
+
+  defp add_chip(socket, role, chip, opts) do
+    line = socket.assigns.recipients[role]
+    max = ComposePipeline.max_recipients(role)
+
+    cond do
+      Enum.any?(line, &same_person?(&1, chip)) ->
+        finish_add(socket, role)
+
+      length(line) >= max ->
+        assign(socket,
+          recipient_error: {role, Errors.message({:too_many_recipients, role, max})}
+        )
+
+      true ->
+        append_chip(socket, role, chip, opts)
+    end
+  end
+
+  defp append_chip(socket, role, chip, opts) do
+    %{recipients: recipients, chip_seq: seq} = socket.assigns
+
+    chip =
+      chip
+      |> Map.put(:key, "#{role}-#{seq}")
+      |> Map.put(:manual, opts[:manual] == true)
+
+    recipients =
+      if socket.assigns.compact,
+        do: elsewhere_off(recipients, role, chip),
+        else: recipients
+
+    socket
+    |> assign(
+      recipients: Map.put(recipients, role, recipients[role] ++ [chip]),
+      chip_seq: seq + 1,
+      open: Map.replace(socket.assigns.open, role, true)
+    )
+    |> finish_add(role)
   end
 
   defp finish_add(socket, role) do

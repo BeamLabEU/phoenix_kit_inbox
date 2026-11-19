@@ -75,13 +75,18 @@ defmodule PhoenixKitInbox.Web.ComposeFormRecipientLinesTest do
     refute button?(view, "bcc")
   end
 
-  test "with :all a forged toggle closes nothing", %{conn: conn} = ctx do
+  test "with :all a forged toggle closes nothing and keeps what is typed", %{conn: conn} = ctx do
     view = mount_form(ctx, conn, %{recipient_lines: :all})
+    form = view |> with_target("#compose-form-demo")
 
-    render_click(view, "toggle", %{"block" => "cc"})
-    render_hook(element(view, "#compose-form-demo"), "toggle", %{"block" => "cc"})
+    render_click(form, "suggest", %{"role" => "cc", "query" => "typed@example.com"})
+    assert render(view) =~ ~s(value="typed@example.com")
+
+    render_click(form, "toggle", %{"block" => "cc"})
+    render_click(form, "toggle", %{"block" => "cc"})
 
     assert line?(view, "cc")
+    assert render(view) =~ ~s(value="typed@example.com")
   end
 
   test "any other value is today's behaviour", %{conn: conn} = ctx do
