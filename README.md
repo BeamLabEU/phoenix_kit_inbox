@@ -24,7 +24,7 @@ Neighbouring modules, so you pick the right one:
 
 - **Personal mailboxes** — one per user, created lazily on first visit; no signup hook, works for users who predate the install
 - **Shared mailboxes** — `support@`, `sales@`, … with per-user `read` / `write` / `admin` grants
-- **Six folders** — Inbox, Sent, Drafts, Spam, Trash, Archive
+- **Seven folders** — Inbox, Outbox, Sent, Drafts, Spam, Trash, Archive
 - **Per-recipient state** — seen/unseen, starred, and folder are per mailbox, so marking a group thread read doesn't mark it read for everyone else
 - **Compose, reply, forward** — with quoted bodies, `Re:`/`Fwd:` subjects, and inherited threading
 - **Drafts** — saved as real messages and *promoted* on send, so the uuid stays stable
@@ -209,7 +209,7 @@ Reply-To choices are the user's own email and the address of every shared mailbo
 })
 message.external_status                     #=> :pending (:none without external recipients)
 
-Messages.list_external_recipients(message.uuid, viewer_mailbox_uuid)  # Bcc only for the sender
+Messages.list_external_recipients(message.uuid, viewer_mailbox_uuid)  # Bcc only for the sender; rows as stored — `error` is the raw transport text, render ExternalReason.label(row.error)
 External.display_status(row)                #=> :pending | :sent | :failed | :unknown
 External.subscribe(from_mailbox.uuid)       # {:inbox_external_updated, message_uuid}
 Messages.retry_external(scope, from_mailbox, message.uuid)            #=> {:ok, :pending}
@@ -226,9 +226,11 @@ Without both, `{:error, :external_disabled}`. Every email the module sends — a
 
 The message, its deliveries and its external recipients (`pending`) are written in one transaction; the email goes after the commit, in a task under the module's `PhoenixKitInbox.TaskSupervisor`, and the rows become `sent` or `failed`. A failure there never touches the internal part. A row still pending after 15 minutes reads as `:unknown` — check the email log. The body is the Markdown rendered as in the reading pane, plus a plain-text part; attachments travel as real attachments, read from Storage, up to `inbox_external_max_bytes` in total as base64 (25 MB by default) — a larger message is refused before anything is stored.
 
+**Outbox**: while an email to external addresses is queued, failed or unknown, the sender's copy of the message waits in the Outbox folder (with the reason in words for a failed one) and moves to Sent when every external recipient has been sent to. Nobody files a message into Outbox by hand.
+
 **Retry** re-sends the failed rows, from the sending mailbox only, with the identity and the right to write externally checked again, and only when `phoenix_kit_emails` runs and every log row of the message's email is `failed` or `rejected`; the rows are taken in one statement, so two retries at once send one email.
 
-A host that sent an email itself records it in the sender's Sent folder:
+A host that sent an email itself records it in the sender's Sent folder (in Outbox, if a recipient is recorded as failed):
 
 ```elixir
 Messages.record_sent(scope, mailbox, %{

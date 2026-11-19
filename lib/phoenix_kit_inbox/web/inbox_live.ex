@@ -51,6 +51,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   alias PhoenixKitInbox.Body
   alias PhoenixKitInbox.Errors
   alias PhoenixKitInbox.External
+  alias PhoenixKitInbox.ExternalReason
   alias PhoenixKitInbox.Mailboxes
   alias PhoenixKitInbox.Messages
   alias PhoenixKitInbox.Paths
@@ -59,6 +60,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   @folder_icons %{
     "inbox" => "hero-inbox-arrow-down",
+    "outbox" => "hero-clock",
     "sent" => "hero-paper-airplane",
     "drafts" => "hero-document",
     "spam" => "hero-exclamation-triangle",
@@ -67,6 +69,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   }
 
   @per_page 50
+  @no_outbox %{count: 0, attention?: false}
 
   # ── Mount / params ──────────────────────────────────────────────────────────
 
@@ -88,6 +91,8 @@ defmodule PhoenixKitInbox.Web.InboxLive do
       |> assign(:total, 0)
       |> assign(:page, 1)
       |> assign(:unseen_counts, %{})
+      |> assign(:outbox_summary, @no_outbox)
+      |> assign(:outbox_states, %{})
       |> assign(:selected, nil)
       |> assign(:recipients, [])
       |> assign(:attachments, [])
@@ -256,7 +261,15 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   defp clear_mailbox(socket) do
     socket
     |> close_selected()
-    |> assign(mailbox: nil, access: nil, entries: [], total: 0, unseen_counts: %{})
+    |> assign(
+      mailbox: nil,
+      access: nil,
+      entries: [],
+      total: 0,
+      unseen_counts: %{},
+      outbox_summary: @no_outbox,
+      outbox_states: %{}
+    )
   end
 
   defp resolve_mailbox(socket, nil) do
@@ -268,10 +281,9 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   defp resolve_mailbox(_socket, uuid), do: Mailboxes.fetch_mailbox(uuid)
 
-  defp normalize_folder(folder) when folder in ~w(inbox sent drafts spam trash archive),
-    do: folder
-
-  defp normalize_folder(_), do: "inbox"
+  defp normalize_folder(folder) do
+    if folder in Delivery.folders(), do: folder, else: "inbox"
+  end
 
   defp parse_page(nil), do: 1
 
@@ -301,11 +313,41 @@ defmodule PhoenixKitInbox.Web.InboxLive do
       search: assigns.search
     ]
 
+    entries = Messages.list_folder(assigns.mailbox.uuid, assigns.folder, opts)
+    socket = assign_counts(socket)
+
     socket
-    |> assign(:entries, Messages.list_folder(assigns.mailbox.uuid, assigns.folder, opts))
-    |> assign(:total, Messages.count_folder(assigns.mailbox.uuid, assigns.folder, opts))
-    |> assign(:unseen_counts, Mailboxes.unseen_counts(assigns.mailbox.uuid))
+    |> assign(:entries, entries)
+    |> assign(:outbox_states, outbox_states(assigns.folder, entries))
+    |> assign(:total, folder_total(socket, opts))
   end
+
+  # The Outbox total is the sidebar's count, already read — unless a search
+  # or the unseen filter narrows the list.
+  defp folder_total(%{assigns: %{folder: "outbox"} = assigns}, opts) do
+    if opts[:search] in [nil, ""] and not opts[:unseen_only],
+      do: assigns.outbox_summary.count,
+      else: Messages.count_folder(assigns.mailbox.uuid, "outbox", opts)
+  end
+
+  defp folder_total(%{assigns: assigns}, opts),
+    do: Messages.count_folder(assigns.mailbox.uuid, assigns.folder, opts)
+
+  # The sidebar's numbers: unseen per folder, and what waits in Outbox.
+  defp assign_counts(%{assigns: %{mailbox: nil}} = socket), do: socket
+
+  defp assign_counts(%{assigns: %{mailbox: mailbox}} = socket) do
+    socket
+    |> assign(:unseen_counts, Mailboxes.unseen_counts(mailbox.uuid))
+    |> assign(:outbox_summary, External.outbox_summary(mailbox.uuid))
+  end
+
+  # How each letter of the Outbox list stands: queued, not delivered (with the
+  # reason) or unknown.
+  defp outbox_states("outbox", entries),
+    do: entries |> Enum.map(& &1.message.uuid) |> External.outbox_states()
+
+  defp outbox_states(_folder, _entries), do: %{}
 
   defp select_message(socket, nil), do: close_selected(socket)
 
@@ -339,8 +381,9 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   end
 
   # How the external part went is the sender's business: the sending mailbox
-  # sees each status (and error), its writers get Retry; a recipient sees
-  # only the To and Cc addresses.
+  # sees each status and the reason in words (never the stored error text, see
+  # `reason_text/1`), its writers get Retry; a recipient sees only the To and
+  # Cc addresses.
   defp assign_externals(socket, message) do
     mailbox = socket.assigns.mailbox
     externals = Messages.list_external_recipients(message.uuid, mailbox.uuid)
@@ -451,10 +494,20 @@ defmodule PhoenixKitInbox.Web.InboxLive do
 
   @impl true
   def handle_info({:inbox_external_updated, message_uuid}, socket) do
-    case socket.assigns.selected do
-      %{message: %{uuid: ^message_uuid}} -> {:noreply, refresh_externals(socket)}
-      _ -> {:noreply, socket}
-    end
+    socket =
+      case socket.assigns.selected do
+        %{message: %{uuid: ^message_uuid}} -> refresh_externals(socket)
+        _ -> socket
+      end
+
+    # The copy may have just left Outbox for Sent, or stayed with a reason: the
+    # sidebar's Outbox badge changes whichever folder is open, the list only
+    # when it is one of those two.
+    {:noreply,
+     if(socket.assigns.folder in ~w(outbox sent),
+       do: load_messages(socket),
+       else: assign_counts(socket)
+     )}
   end
 
   def handle_info({:inbox_access_changed, _what}, socket),
@@ -549,6 +602,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
               folder={@folder}
               unseen_only={@unseen_only}
               unseen_counts={@unseen_counts}
+              outbox_summary={@outbox_summary}
             />
           </div>
 
@@ -560,6 +614,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
               folder={@folder}
               total={@total}
               page={@page}
+              outbox_states={@outbox_states}
             />
           </div>
 
@@ -635,6 +690,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   attr(:folder, :string, required: true)
   attr(:unseen_only, :boolean, required: true)
   attr(:unseen_counts, :map, required: true)
+  attr(:outbox_summary, :map, required: true)
 
   defp folder_sidebar(assigns) do
     assigns = assign(assigns, :folders, Delivery.folders())
@@ -666,7 +722,21 @@ defmodule PhoenixKitInbox.Web.InboxLive do
             >
               <.icon name={folder_icon(folder)} class="w-4 h-4 shrink-0" />
               <span class="flex-1 text-left">{folder_label(folder)}</span>
-              <span :if={unseen_count(@unseen_counts, folder) > 0} class="badge badge-primary badge-sm">
+              <span
+                :if={folder == "outbox" and @outbox_summary.count > 0}
+                id="outbox-count"
+                class={[
+                  "badge badge-sm",
+                  if(@outbox_summary.attention?, do: "badge-error", else: "badge-ghost")
+                ]}
+              >
+                {@outbox_summary.count}
+              </span>
+              <span
+                :if={unseen_count(@unseen_counts, folder) > 0}
+                id={"unseen-count-#{folder}"}
+                class="badge badge-primary badge-sm"
+              >
                 {unseen_count(@unseen_counts, folder)}
               </span>
             </button>
@@ -697,6 +767,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   attr(:folder, :string, required: true)
   attr(:total, :integer, required: true)
   attr(:page, :integer, required: true)
+  attr(:outbox_states, :map, default: %{})
 
   defp message_list(assigns) do
     ~H"""
@@ -760,6 +831,11 @@ defmodule PhoenixKitInbox.Web.InboxLive do
               <div class="truncate text-xs text-base-content/60">
                 {Body.preview(entry.message)}
               </div>
+              <.outbox_status
+                :if={@folder == "outbox"}
+                uuid={entry.message.uuid}
+                state={Map.get(@outbox_states, entry.message.uuid)}
+              />
             </div>
 
             <div class="text-xs text-base-content/50 shrink-0 whitespace-nowrap">
@@ -773,6 +849,31 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     </div>
     """
   end
+
+  attr(:uuid, :string, required: true)
+  attr(:state, :map, default: nil)
+
+  # Where an Outbox letter stands, and for a failed one why.
+  defp outbox_status(%{state: nil} = assigns), do: ~H""
+
+  defp outbox_status(assigns) do
+    ~H"""
+    <div id={"outbox-state-#{@uuid}"} class="flex flex-wrap items-center gap-1 text-xs">
+      <span class={["badge badge-xs", outbox_badge(@state.state)]}>
+        {outbox_label(@state.state)}
+      </span>
+      <span :if={@state.reason} class="text-error">{@state.reason}</span>
+    </div>
+    """
+  end
+
+  defp outbox_badge(:pending), do: "badge-warning badge-outline"
+  defp outbox_badge(:failed), do: "badge-error badge-outline"
+  defp outbox_badge(:unknown), do: "badge-ghost"
+
+  defp outbox_label(:pending), do: gettext("queued")
+  defp outbox_label(:failed), do: gettext("not delivered")
+  defp outbox_label(:unknown), do: gettext("unknown — check the email log")
 
   attr(:total, :integer, required: true)
   attr(:page, :integer, required: true)
@@ -925,7 +1026,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
           "badge badge-sm gap-1",
           if(@sender, do: external_badge(External.display_status(row, @now)), else: "badge-ghost")
         ]}
-        title={@sender && row.error}
+        title={@sender && row.error && reason_text(row)}
       >
         <span class="uppercase opacity-60">{row.role}</span>
         {row.name || row.address}
@@ -933,6 +1034,11 @@ defmodule PhoenixKitInbox.Web.InboxLive do
           · {external_label(External.display_status(row, @now))}
         </span>
       </span>
+      <div :if={@sender and failed_rows(@externals) != []} id="external-reasons" class="w-full">
+        <p :for={row <- failed_rows(@externals)} id={"external-reason-#{row.uuid}"} class="text-error">
+          {row.name || row.address}: {reason_text(row)}
+        </p>
+      </div>
       <button
         :if={@retry_available}
         id="retry-external"
@@ -946,6 +1052,14 @@ defmodule PhoenixKitInbox.Web.InboxLive do
     </div>
     """
   end
+
+  defp failed_rows(externals), do: Enum.filter(externals, &(&1.status == "failed"))
+
+  # The reason in words, and only that — in the pane and in the badge's
+  # tooltip: the stored text of a failure can carry the relay's host and the
+  # remote server's words (addresses, account data), and every reader of the
+  # sending mailbox, a read-only grant included, sees this page.
+  defp reason_text(row), do: ExternalReason.label(row.error)
 
   defp external_badge(:sent), do: "badge-success badge-outline"
   defp external_badge(:failed), do: "badge-error badge-outline"
@@ -1075,6 +1189,7 @@ defmodule PhoenixKitInbox.Web.InboxLive do
   defp folder_icon(folder), do: Map.get(@folder_icons, folder, "hero-folder")
 
   defp folder_label("inbox"), do: gettext("Inbox")
+  defp folder_label("outbox"), do: gettext("Outbox")
   defp folder_label("sent"), do: gettext("Sent")
   defp folder_label("drafts"), do: gettext("Drafts")
   defp folder_label("spam"), do: gettext("Spam")

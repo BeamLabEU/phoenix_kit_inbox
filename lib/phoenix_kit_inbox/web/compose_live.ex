@@ -413,6 +413,10 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
 
   defp sent_flash(_message), do: gettext("Message sent.")
 
+  # A message with an email on its way waits in Outbox until it has gone.
+  defp sent_folder(%Message{external_status: :pending}), do: "outbox"
+  defp sent_folder(_message), do: "sent"
+
   defp put_form_params(socket, params) do
     assign(socket, :form, to_form(Map.merge(socket.assigns.form.params, params)))
   end
@@ -638,7 +642,9 @@ defmodule PhoenixKitInbox.Web.ComposeLive do
     {:noreply,
      socket
      |> put_flash(:info, sent_flash(message))
-     |> push_navigate(to: Paths.inbox(mailbox: message.sender_mailbox_uuid, folder: "sent"))}
+     |> push_navigate(
+       to: Paths.inbox(mailbox: message.sender_mailbox_uuid, folder: sent_folder(message))
+     )}
   end
 
   # The form, its uploads and its chips stay as they are for the next try.

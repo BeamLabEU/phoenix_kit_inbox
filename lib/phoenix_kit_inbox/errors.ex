@@ -110,6 +110,8 @@ defmodule PhoenixKitInbox.Errors do
 
   def message(:not_found), do: gettext("Not found.")
 
+  def message(:system_folder), do: gettext("Messages can't be moved into Outbox by hand.")
+
   def message(:reply_to_not_allowed),
     do: gettext("You can't use that Reply-To address.")
 
