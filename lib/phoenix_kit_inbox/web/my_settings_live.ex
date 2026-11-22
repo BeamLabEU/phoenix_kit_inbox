@@ -26,7 +26,6 @@ defmodule PhoenixKitInbox.Web.MySettingsLive do
   use PhoenixKitWeb, :live_view
   use Gettext, backend: PhoenixKitInbox.Gettext
 
-  alias PhoenixKit.Settings
   alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitInbox.Errors
   alias PhoenixKitInbox.Identities
@@ -41,7 +40,6 @@ defmodule PhoenixKitInbox.Web.MySettingsLive do
     socket =
       socket
       |> assign(:page_title, gettext("Mail settings"))
-      |> assign(:project_title, project_title())
       |> assign(:url_path, Paths.my_settings())
       |> ScopeRefresh.assign_scope()
       |> assign_gates()
@@ -131,12 +129,6 @@ defmodule PhoenixKitInbox.Web.MySettingsLive do
     |> IdentityEditor.assign_editor(:personal)
   end
 
-  defp project_title do
-    Settings.get_project_title()
-  rescue
-    _ -> nil
-  end
-
   # ── Events ──────────────────────────────────────────────────────────────────
 
   @impl true
@@ -179,10 +171,9 @@ defmodule PhoenixKitInbox.Web.MySettingsLive do
          `LayoutWrapper.app_layout` gives the admin shell to admin paths only:
          for this path it handed the page to the host's layout, and a host
          whose layout is a bare `<main>` showed it with no header and no
-         sidebar. The scope is the page's own (`ScopeRefresh`), which follows
-         access changes. --%>
-    <PhoenixKitWeb.Layouts.dashboard {dashboard_assigns(assigns)} phoenix_kit_current_scope={@scope}>
-      <div id="inbox-my-settings" class="flex flex-col px-4 py-6 gap-4">
+         sidebar. --%>
+    <PhoenixKitWeb.Layouts.dashboard {dashboard_assigns(assigns)}>
+      <div id="inbox-my-settings" class="flex flex-col gap-4">
         <div :if={not @module_access} class="alert alert-warning">
           <.icon name="hero-lock-closed" class="w-5 h-5" />
           <span>{gettext("You don't have permission to use Inbox.")}</span>

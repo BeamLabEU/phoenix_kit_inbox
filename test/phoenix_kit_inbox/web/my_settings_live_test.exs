@@ -42,6 +42,12 @@ defmodule PhoenixKitInbox.Web.MySettingsLiveTest do
     assert Signatures.list(ctx.alice_mb.uuid) == []
   end
 
+  test "the page is drawn inside the user dashboard shell", ctx do
+    {:ok, view, _html} = live(as(ctx.conn, ctx.alice), @path)
+
+    assert has_element?(view, "#dashboard-theme-dropdown")
+  end
+
   test "the page links to the inbox", ctx do
     {:ok, view, _html} = live(as(ctx.conn, ctx.alice), @path)
 
