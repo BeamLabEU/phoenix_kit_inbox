@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 0.7.0 - 2026-11-23
+
+PRs #19–#21 and their review fixes.
+
+### Upgrade notes
+
+- No new migration. Core pin unchanged (`>= 3.5.0 and < 4.0.0`).
+- **New switch for mail inside the application** (`inbox_internal_enabled`,
+  default on, or `config :phoenix_kit_inbox, internal_mail_default:`). Off,
+  every email address is an outside address and `@name` addresses are refused.
+
+### Added
+
+- **Outbox folder** (#19). The sender's copy of a message with outside
+  recipients waits in Outbox until every email went, then moves to Sent. A
+  failed or long-pending recipient is flagged in the sidebar; Retry stays on
+  the letter. Nobody can file a message into Outbox by hand
+  (`{:error, :system_folder}`).
+- **Failure reasons in words** (`PhoenixKitInbox.ExternalReason`). Pages show
+  a label, never the transport's stored text (relay host, remote answer).
+- **Internal-mail switch** (#20) on the Mail settings page, kept in step across
+  open pages; compose, the recipient checks, `resolve_recipient_routes/2` and
+  `record_sent/4` follow it.
+- **`ComposeForm`** (#21): `recipient_lines`, a `compact` layout (lists hang
+  under their field, a «+» menu to tick people in, `fit_height`), a
+  `before_subject` slot, `retext` for another text of the same letter,
+  `letter_key`, and click-away/Escape closing for menus.
+
+### Fixed
+
+- Escape debounce clash in the compact lists; a new letter after a send is a
+  new draft; integer and atom `letter_key` accepted.
+- The open settings switch re-reads a saved flip; pending keystrokes of the
+  compact menu.
+- Compose recipient and draft handling after PR #21.
+
 ## 0.6.0 - 2026-11-15
 
 PRs #16–#18 and their Claude, Codex and Grok review fixes.

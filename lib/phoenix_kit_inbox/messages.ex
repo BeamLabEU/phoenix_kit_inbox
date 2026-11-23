@@ -1933,8 +1933,9 @@ defmodule PhoenixKitInbox.Messages do
   Trash, and Restore in the UI. Needs `"write"` on the mailbox.
 
   `"outbox"` is the system's own: nobody files a message there by hand
-  (`{:error, :system_folder}`, once the caller's right to write is checked). Moving a copy *out* of Outbox is allowed, and
-  it stays where it was put when the email goes.
+  (`{:error, :system_folder}`, once the caller's right to write is checked).
+  Moving a copy *out* of Outbox is allowed, and it stays where it was put
+  when the email goes.
   """
   @spec move_to_folder(Scope.t(), Mailbox.t(), binary(), String.t()) ::
           {:ok, Delivery.t()}
