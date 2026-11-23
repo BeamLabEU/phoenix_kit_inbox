@@ -1011,7 +1011,9 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   end
 
   # A suggestion of the list the server made, named by its id and nothing else:
-  # the person, the route and the line all come from the server's side.
+  # the person, the route and the line all come from the server's side. A new
+  # list voids the old ids, so a click from a list that has already been
+  # replaced does nothing.
   def handle_event("pick", %{"id" => id}, socket) when is_binary(id) do
     with %{role: role, items: items} <- socket.assigns.list,
          %{entry: entry} <- Enum.find(items, &(&1.id == id)) do
@@ -2818,16 +2820,21 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
   # pressed within 300 ms of the last typed character would push out the
   # field's pending `phx-change` and the server would never hear the last
   # characters. A key on an element without a binding goes to the window
-  # bindings, which are debounced on the wrapper — it has no `phx-debounce` —
-  # and the field's own cycle is left alone. Inside a dialog the same Escape
-  # also reaches the dialog: the module has no script to stop it.
+  # bindings, which are debounced on the wrapper — it has no `phx-debounce`.
   #
-  # Closes the open list (the menu, or the typed suggestions) and gives the
-  # focus back to the line's field.
+  # The line's field is blurred first, which flushes that pending change, and
+  # the close is the next event, so the list the change opened is closed again
+  # and a timer still waiting cannot open it afterwards. Then the focus comes
+  # back to the line's field (and a menu's search field blurs, so its own
+  # pending search is sent after the close and ignored). Inside a dialog the
+  # same Escape also reaches the dialog: the module has no script to stop it.
   defp close_list(target, id, role) do
-    "close_picker"
-    |> JS.push(target: target)
-    |> JS.focus(to: "#compose-#{id}-#{role}-input")
+    input = "#compose-#{id}-#{role}-input"
+
+    %JS{}
+    |> JS.dispatch("blur", to: input)
+    |> JS.push("close_picker", target: target)
+    |> JS.focus(to: input)
   end
 
   defp tab_click(group, target, id, role) do
@@ -2946,6 +2953,8 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
           >
             {group}
           </div>
+          <%!-- mousedown must not move focus: the search field would blur, its
+               debounce would rebuild this list, and this click's id would miss. --%>
           <button
             :for={item <- items}
             type="button"
@@ -2961,6 +2970,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             phx-click="tick"
             phx-value-id={item.id}
             phx-target={@target}
+            onmousedown="event.preventDefault()"
           >
             <span class={[
               "flex size-4 shrink-0 items-center justify-center rounded border",
@@ -3098,6 +3108,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
 
   defp suggestion(assigns) do
     ~H"""
+    <%!-- mousedown must not move focus, or the field's debounce rebuilds the list before the click. --%>
     <button
       type="button"
       role="option"
@@ -3106,6 +3117,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       phx-click="pick"
       phx-value-id={@item.id}
       phx-target={@target}
+      onmousedown="event.preventDefault()"
     >
       <.internal_marker :if={@item.entry.route == :internal} />
       {chip_text(@item.entry)}

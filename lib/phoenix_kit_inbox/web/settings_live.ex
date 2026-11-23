@@ -12,6 +12,11 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
   contexts refuse a forged event anyway. A shared mailbox's signatures are
   on `Web.MailboxesLive`, by the mailbox; a user's own signatures, Reply-To
   and personal senders are on `Web.MySettingsLive`.
+
+  The switch for mail inside the application is on this page too. A saved
+  change is broadcast (`set_internal_enabled/1`); an open page re-reads only
+  that switch, so a second manager sees the value that was saved and an
+  open sender form is left as it is.
   """
 
   use PhoenixKitWeb, :live_view
@@ -33,6 +38,7 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
       |> assign_gates()
       |> assign(:internal_enabled, PhoenixKitInbox.internal_enabled?())
       |> assign(:toggle_nonce, 0)
+      |> ScopeRefresh.subscribe([:senders])
 
     {:ok, load(socket, socket.assigns.can_manage_shared)}
   end
@@ -96,8 +102,7 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
         # be told by an unchanged assign.
         {:noreply,
          socket
-         |> assign(:internal_enabled, PhoenixKitInbox.internal_enabled?())
-         |> update(:toggle_nonce, &(&1 + 1))
+         |> renew_internal(PhoenixKitInbox.internal_enabled?())
          |> put_flash(:error, gettext("The setting could not be saved. Try again."))}
     end
   end
@@ -117,6 +122,33 @@ defmodule PhoenixKitInbox.Web.SettingsLive do
 
   def handle_event("ident_" <> _, _params, socket),
     do: {:noreply, put_flash(socket, :error, Errors.message(:forbidden))}
+
+  @impl true
+  # Another manager saved the switch, or a shared sender changed. Only the
+  # switch is re-read: loading the sender editor again would discard a form
+  # this page has open. The element is renewed when the value changed, the
+  # same way a save that did not stick puts the box back.
+  def handle_info({:inbox_access_changed, _what}, socket) do
+    {:noreply, refresh_internal(socket)}
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
+
+  defp refresh_internal(socket) do
+    enabled = PhoenixKitInbox.internal_enabled?()
+
+    if enabled == socket.assigns.internal_enabled do
+      socket
+    else
+      renew_internal(socket, enabled)
+    end
+  end
+
+  defp renew_internal(socket, enabled) do
+    socket
+    |> assign(:internal_enabled, enabled)
+    |> update(:toggle_nonce, &(&1 + 1))
+  end
 
   # ── Render ──────────────────────────────────────────────────────────────────
 

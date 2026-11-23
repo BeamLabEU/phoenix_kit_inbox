@@ -149,10 +149,49 @@ defmodule PhoenixKitInbox.Web.SettingsLiveTest do
       view |> element("#internal-mail-toggle") |> render_click()
       refute PhoenixKitInbox.internal_enabled?()
       refute has_element?(view, "#internal-mail-toggle[checked]")
+      # This page's own save already shows the new value. The broadcast that
+      # follows must not renew the element a second time.
+      assert has_element?(view, "#internal-mail-label-0")
 
       view |> element("#internal-mail-toggle") |> render_click()
       assert PhoenixKitInbox.internal_enabled?()
       assert has_element?(view, "#internal-mail-toggle[checked]")
+      assert has_element?(view, "#internal-mail-label-0")
+    end
+
+    test "an open page follows another manager, and a sender change leaves the editor", ctx do
+      {:ok, view, _html} = live(as(ctx.conn, ctx.admin, @manage), @path)
+
+      view
+      |> element("#shared-identities button.btn-primary[phx-click='ident_new']")
+      |> render_click()
+
+      assert has_element?(view, "#shared-identities-form")
+      assert has_element?(view, "#internal-mail-toggle[checked]")
+      assert has_element?(view, "#internal-mail-label-0")
+
+      # A shared sender changed. The switch did not, and the open form stays.
+      PhoenixKitInbox.AccessEvents.senders_changed(nil)
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#shared-identities-form")
+      assert has_element?(view, "#internal-mail-toggle[checked]")
+      assert has_element?(view, "#internal-mail-label-0")
+
+      {:ok, _} = PhoenixKitInbox.set_internal_enabled(false)
+      _ = :sys.get_state(view.pid)
+
+      refute PhoenixKitInbox.internal_enabled?()
+      refute has_element?(view, "#internal-mail-toggle[checked]")
+      assert has_element?(view, "#internal-mail-label-1")
+      assert has_element?(view, "#shared-identities-form")
+
+      {:ok, _} = PhoenixKitInbox.set_internal_enabled(true)
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#internal-mail-toggle[checked]")
+      assert has_element?(view, "#internal-mail-label-2")
+      assert has_element?(view, "#shared-identities-form")
     end
 
     test "a toggle that cannot be saved puts the checkbox back and says so", ctx do

@@ -215,6 +215,16 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
   defp tick(view, role, label),
     do: view |> element("#compose-demo-#{role}-menu button[role=option]", label) |> render_click()
 
+  defp option_id(view, selector, label) do
+    [id] =
+      view
+      |> q(selector)
+      |> Enum.filter(&(LazyHTML.text(&1) =~ label))
+      |> Enum.flat_map(&LazyHTML.attribute(&1, "phx-value-id"))
+
+    id
+  end
+
   defp done(view, role), do: view |> element("#compose-demo-#{role}-menu-done") |> render_click()
 
   defp type_add(view, role, text),
@@ -456,6 +466,37 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
       assert attr(view, "#compose-demo-to-input", "phx-debounce") == ["300"]
       assert attr(view, "#compose-demo-to-menu-q", "phx-debounce") == ["300"]
       refute has_element?(view, "[phx-window-keydown][phx-debounce]")
+
+      # Blur the line first, so a change still waiting on its 300 ms timer is
+      # sent and applied, and the close that follows it is the last word. A
+      # timer that fired after the close would open the list again.
+      [ops] = attr(view, "#compose-demo-to [phx-window-keydown]", "phx-window-keydown")
+      [blur, push, focus] = Jason.decode!(ops)
+
+      assert blur == ["dispatch", %{"event" => "blur", "to" => "#compose-demo-to-input"}]
+      assert ["push", %{"event" => "close_picker"}] = push
+      assert focus == ["focus", %{"to" => "#compose-demo-to-input"}]
+    end
+
+    test "a row keeps the pointer on the field, so the click is not a new search",
+         %{conn: conn} = ctx do
+      # A press on a row would otherwise blur the search field, and LiveView
+      # flushes its debounce before the click: the list is rebuilt, the row's
+      # id is void, and the person is not ticked. preventDefault on mousedown
+      # leaves the focus where it is, so the click names a row of the list
+      # still open. An id from a list that has already changed still does nothing.
+      view = mount_form(ctx, conn, draft(ctx))
+      open_menu(view, "to")
+
+      assert attr(view, "#compose-demo-to-menu button[role=option]", "onmousedown")
+             |> Enum.uniq() == ["event.preventDefault()"]
+
+      carol_id = option_id(view, "#compose-demo-to-menu button[role=option]", "Carol")
+      view |> form("#compose-demo-to-menu-search", %{"q" => "bob"}) |> render_change()
+      forge(view, "tick", %{"id" => carol_id})
+
+      assert chips(view, "to") == []
+      assert menu?(view, "to")
     end
 
     test "Escape closes the menu and what was ticked stays", %{conn: conn} = ctx do
@@ -617,6 +658,14 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
 
       refute has_element?(view, "#compose-demo-to-suggestions")
       assert attr(view, "#compose-demo-to-input", "value") == ["dav"]
+    end
+
+    test "a suggestion keeps the pointer on the field", %{conn: conn} = ctx do
+      view = mount_form(ctx, conn, draft(ctx))
+      render_change(view |> form("#compose-demo-to-form"), %{"query" => "car"})
+
+      assert attr(view, "#compose-demo-to-suggestions button", "onmousedown")
+             |> Enum.uniq() == ["event.preventDefault()"]
     end
   end
 
