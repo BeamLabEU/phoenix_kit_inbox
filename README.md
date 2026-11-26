@@ -439,6 +439,12 @@ Never filled from a form: `links:`, `html_body:` (the host's HTML for the outsid
 
 `config :phoenix_kit_inbox, :outbound_filter` is called for every email that leaves, and also with `preview: true` in its context when the compose form only shows where the mail would go (`Outbound.preview/2`). A filter must have no side effects: a look is not a send.
 
+### JavaScript and Content-Security-Policy
+
+The module ships one small script, `priv/static/assets/phoenix_kit_inbox.js`, declared by `js_sources/0`: PhoenixKit's `:phoenix_kit_js_sources` compiler folds it into `phoenix_kit_modules.js`, which the installer already loads from your root layout. A page of yours that carries the compose form has to load that file too: it keeps the focus in a recipient field while a suggestion under it is clicked (`data-pki-keep-focus`), and without it such a click can miss.
+
+The module renders no inline event handlers and no inline `<script>` or `<style>`, so it works under a nonce-based Content-Security-Policy (`script-src 'self' 'nonce-…'`). Inline `style="…"` attributes are still used, so keep `style-src-attr 'unsafe-inline'`.
+
 ## Settings
 
 | Key | Default | What it does |

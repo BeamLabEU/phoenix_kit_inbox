@@ -483,13 +483,21 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
       # A press on a row would otherwise blur the search field, and LiveView
       # flushes its debounce before the click: the list is rebuilt, the row's
       # id is void, and the person is not ticked. preventDefault on mousedown
+      # (the module's JS, for `data-pki-keep-focus`)
       # leaves the focus where it is, so the click names a row of the list
       # still open. An id from a list that has already changed still does nothing.
       view = mount_form(ctx, conn, draft(ctx))
       open_menu(view, "to")
 
-      assert attr(view, "#compose-demo-to-menu button[role=option]", "onmousedown")
-             |> Enum.uniq() == ["event.preventDefault()"]
+      # `data-pki-keep-focus` is acted on by priv/static/assets/phoenix_kit_inbox.js.
+      assert has_element?(view, "#compose-demo-to-menu button[role=option]")
+
+      refute has_element?(
+               view,
+               "#compose-demo-to-menu button[role=option]:not([data-pki-keep-focus])"
+             )
+
+      refute render(view) =~ "onmousedown"
 
       carol_id = option_id(view, "#compose-demo-to-menu button[role=option]", "Carol")
       view |> form("#compose-demo-to-menu-search", %{"q" => "bob"}) |> render_change()
@@ -664,8 +672,9 @@ defmodule PhoenixKitInbox.Web.ComposeFormCompactTest do
       view = mount_form(ctx, conn, draft(ctx))
       render_change(view |> form("#compose-demo-to-form"), %{"query" => "car"})
 
-      assert attr(view, "#compose-demo-to-suggestions button", "onmousedown")
-             |> Enum.uniq() == ["event.preventDefault()"]
+      assert has_element?(view, "#compose-demo-to-suggestions button")
+      refute has_element?(view, "#compose-demo-to-suggestions button:not([data-pki-keep-focus])")
+      refute render(view) =~ "onmousedown"
     end
   end
 

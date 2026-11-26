@@ -337,6 +337,24 @@ defmodule PhoenixKitInbox do
 
   @impl PhoenixKit.Module
   @doc """
+  The module's JavaScript: one delegated listener for `data-pki-keep-focus`
+  (a recipient suggestion that must not take the focus from its field), which
+  an inline `onmousedown` used to do and a nonce-based Content-Security-Policy
+  blocks. Core's `:phoenix_kit_js_sources` compiler folds the file into the
+  host's `phoenix_kit_modules.js`. It exports no hooks.
+  """
+  def js_sources do
+    [
+      %{
+        app: :phoenix_kit_inbox,
+        file: "static/assets/phoenix_kit_inbox.js",
+        global: "PhoenixKitInboxHooks"
+      }
+    ]
+  end
+
+  @impl PhoenixKit.Module
+  @doc """
   Notification types this module contributes.
 
   One toggle: a user who mutes "Inbox" stops getting in-app notifications for

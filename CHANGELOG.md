@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+The module works under a nonce-based Content-Security-Policy
+(`script-src 'self' 'nonce-…'`), issue #23.
+
+### Upgrade notes
+
+- No migration. Core pin unchanged (`>= 3.5.0 and < 4.0.0`).
+- **The module now ships JavaScript** (`priv/static/assets/phoenix_kit_inbox.js`,
+  declared by `js_sources/0`). It reaches the page in `phoenix_kit_modules.js`,
+  which core's `:phoenix_kit_js_sources` compiler builds and the installer adds
+  to the root layout. A host that never set that up has to
+  (`mix phoenix_kit.update`), on every page that carries the compose form:
+  without the file a click on a recipient suggestion can miss, because the
+  field loses the focus first.
+
+### Changed
+
+- **No inline event handler is left.** The recipient suggestions and the rows
+  of the recipient picker said `onmousedown="event.preventDefault()"`, which a
+  policy without `'unsafe-inline'` blocks. They now carry `data-pki-keep-focus`,
+  and one delegated `mousedown` listener in the module's own JavaScript does
+  the same, on the published core as well.
+
+### Added
+
+- `test/phoenix_kit_inbox/web/csp_inline_tags_test.exs` fails on an inline event
+  handler, or an inline `<script>`/`<style>` without a nonce, in `lib/` or the
+  JavaScript file. The file's own tests (`test/js/`) run under `mix test`.
+
 ## 0.7.0 - 2026-11-23
 
 PRs #19–#21 and their review fixes.

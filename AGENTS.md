@@ -173,6 +173,7 @@ Levels are ordered `read < write < admin` via `MailboxGrant.covers?/2`.
 
 ```
 lib/phoenix_kit_inbox.ex                  # PhoenixKit.Module callbacks
+priv/static/assets/phoenix_kit_inbox.js   # the module's JavaScript (js_sources/0): data-pki-keep-focus
 lib/mix/tasks/phoenix_kit_inbox.relink_attachments.ex
 lib/phoenix_kit_inbox/
 ├── paths.ex                              # ALL URL building — never hardcode a path
@@ -222,6 +223,18 @@ lib/phoenix_kit_inbox/
 - **One header, from `page_title`** — set it in `mount/3`; don't also render an in-body `<h1>`
 - **Prefer core components** — `<.input>`, `<.select>`, `<.textarea>`, `<.empty_state>`, `<.icon>` over raw markup
 - **daisyUI 5** — no `btn-group` (use `join`), no `label-text`, no `*-bordered` classes
+
+## Content-Security-Policy
+
+The package has to work on a host whose policy allows inline code by nonce only
+(`script-src 'self' 'nonce-…'`; core's `guides/content-security-policy.md`), and
+on the published core, which has no `PhoenixKitWeb.CSP` and no `data-pk-*`
+listeners. It renders no inline `<script>` or `<style>`.
+
+- **No inline event handlers** (`onclick=`, `onmousedown=` …): no nonce covers an attribute. Use a `phx-` binding or a `Phoenix.LiveView.JS` command where LiveView can do it. What needs the browser goes into `priv/static/assets/phoenix_kit_inbox.js` (`js_sources/0`, global `PhoenixKitInboxHooks`, no hooks, hand-written, no build step, safe to load twice), as a delegated listener keyed on this package's own attribute: `data-pki-keep-focus` — a mouse press on the element does not move the focus (the recipient suggestions and the picker rows of `ComposeForm`, whose field must not blur before the click). Not core's `data-pk-*`: the published core does not handle them. A new behaviour gets a new `data-pki-*` attribute there and a case in `test/js/inbox_handlers_test.cjs`.
+- **An inline `<style>`/`<script>`, should one be needed, carries the host's nonce** through a helper that feature-detects `PhoenixKitWeb.CSP.nonce/1` (`Code.ensure_loaded?/1` + `function_exported?/3` + `apply/3`; see `PhoenixKitBilling.Web.CSP`), never a direct call, which does not compile against the core floor.
+- `test/phoenix_kit_inbox/web/csp_inline_tags_test.exs` fails on an inline tag without a nonce and on an inline handler in `lib/` or the JS file; `test/js_handlers_test.exs` runs the JS tests under `mix test` (skipped without node).
+- Out of scope: inline `style="…"` attributes (a host keeps `style-src-attr 'unsafe-inline'`), and the bodies of outgoing mail, which a mail client reads.
 
 ## Common Commands
 

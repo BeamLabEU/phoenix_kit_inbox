@@ -68,7 +68,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       adds a person to the line or takes them off it, the menu stays open
       until «Done», Escape or a press outside the field and the menu («+»
       itself closes it); inside a dialog the same Escape also reaches the
-      dialog, as this module has no script to stop it. Its tabs show one of
+      dialog, as this module's script does not stop it. Its tabs show one of
       the sources' groups at a time and its own field searches the sources (the field has the focus when
       the menu opens and after a tab is chosen; the line's field after
       «Done» or Escape); every person is shown with the address the letter
@@ -2970,7 +2970,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
             phx-click="tick"
             phx-value-id={item.id}
             phx-target={@target}
-            onmousedown="event.preventDefault()"
+            data-pki-keep-focus
           >
             <span class={[
               "flex size-4 shrink-0 items-center justify-center rounded border",
@@ -3117,7 +3117,7 @@ defmodule PhoenixKitInbox.Web.Components.ComposeForm do
       phx-click="pick"
       phx-value-id={@item.id}
       phx-target={@target}
-      onmousedown="event.preventDefault()"
+      data-pki-keep-focus
     >
       <.internal_marker :if={@item.entry.route == :internal} />
       {chip_text(@item.entry)}
